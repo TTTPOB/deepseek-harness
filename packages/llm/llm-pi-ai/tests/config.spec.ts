@@ -35,6 +35,17 @@ describe('reasoning schema boundary', () => {
   it('rejects a thinking format outside the offered set', () => {
     expect(configWith({ compat: { thinkingFormat: 'quantum' } })).toThrow(/expected/)
   })
+
+  it('accepts the pi-ai 0.84.2 thinking format and compatibility fields', () => {
+    expect(configWith({
+      compat: {
+        thinkingFormat: 'baseten',
+        chatTemplateArgs: { enable_thinking: { $var: 'thinking.enabled', omitWhenOff: false } },
+        supportsFinishReason: false,
+        supportsThinkingTokenBudget: true,
+      },
+    })).not.toThrow()
+  })
 })
 
 describe('modality schema boundary', () => {

@@ -763,6 +763,16 @@ describe('mapStopReason / mapUsage', () => {
     expect(mapStopReason(assistant({ stopReason, content: [{ type: 'text', text: 'ok' }] }))).toEqual(expected)
   })
 
+  it.each([
+    ['pending', 'PI_AI_PENDING_STOP', 'pi-ai returned pending as a terminal stop reason'],
+    ['deferred', 'PI_AI_DEFERRED_STOP', 'pi-ai returned deferred, but this adapter does not request deferred responses'],
+  ] as const)('maps unsupported terminal stop reason %s to a stable error', (stopReason, code, message) => {
+    expect(mapStopReason(assistant({ stopReason, content: [{ type: 'text', text: 'ok' }] }))).toEqual({
+      kind: 'error',
+      failure: { message, code },
+    })
+  })
+
   it('classifies a completed stop with no content as an EMPTY_RESPONSE error', () => {
     expect(mapStopReason(assistant({ stopReason: 'stop' }))).toEqual({
       kind: 'error',
