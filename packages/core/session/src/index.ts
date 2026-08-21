@@ -561,6 +561,17 @@ export class Session {
     return this.eventsSnapshot
   }
 
+  /**
+   * Return one immutable event by its contiguous sequence number without
+   * materializing an event-array snapshot.
+   * @param seq - event sequence number.
+   * @returns the exact frozen log entry, or undefined for an invalid or absent sequence.
+   */
+  eventAt(seq: number): SessionEvent | undefined {
+    if (!Number.isSafeInteger(seq) || seq < 0) return undefined
+    return this.log[seq]
+  }
+
   /** The next event's sequence number — always the log length (the `seq = log.length` contiguity contract). */
   get seq(): number {
     return this.log.length

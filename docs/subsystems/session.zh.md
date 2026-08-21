@@ -438,6 +438,13 @@ declare class Session {
    * cast nor ordinary JavaScript can rewrite durable history.
    */
   get events(): readonly SessionEvent[];
+  /**
+   * Return one immutable event by its contiguous sequence number without
+   * materializing an event-array snapshot.
+   * @param seq - event sequence number.
+   * @returns the exact frozen log entry, or undefined for an invalid or absent sequence.
+   */
+  eventAt(seq: number): SessionEvent | undefined;
   /** The next event's sequence number — always the log length (the `seq = log.length` contiguity contract). */
   get seq(): number;
   /**
