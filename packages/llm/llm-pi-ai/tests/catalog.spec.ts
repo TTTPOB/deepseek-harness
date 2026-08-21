@@ -637,7 +637,7 @@ describe('per-model reasoning efforts', () => {
   it('narrows a catalog model’s levels in place', () => {
     const [catalogModel] = getBuiltinModels('deepseek')
     if (catalogModel === undefined) throw new Error('the installed catalog ships no deepseek model')
-    expect(getSupportedThinkingLevels(catalogModel as Model<Api>)).toEqual(['off', 'high', 'max'])
+    expect(getSupportedThinkingLevels(catalogModel as Model<Api>)).toEqual(['off', 'low', 'high', 'max'])
 
     const model = modelOf({
       deepseek: { models: [{ id: catalogModel.id, reasoningEfforts: { off: null, high: 'high' } }] },
@@ -920,6 +920,31 @@ describe('compat switches', () => {
     })
   })
 
+  it('carries the pi-ai 0.84.2 baseten compatibility fields', () => {
+    const models = modelsOf({
+      'acme-baseten': {
+        api: 'openai-completions',
+        baseURL: 'https://acme.test',
+        models: [{
+          id: 'baseten-local',
+          compat: {
+            thinkingFormat: 'baseten',
+            chatTemplateArgs: { enable_thinking: { $var: 'thinking.enabled' } },
+            supportsFinishReason: false,
+            supportsThinkingTokenBudget: true,
+          },
+        }],
+      },
+    }, 'acme-baseten')
+
+    expect(models.get('baseten-local')?.compat).toEqual({
+      thinkingFormat: 'baseten',
+      chatTemplateArgs: { enable_thinking: { $var: 'thinking.enabled' } },
+      supportsFinishReason: false,
+      supportsThinkingTokenBudget: true,
+    })
+  })
+
   it('rejects a model switch on an unrecognized protocol as having no configurable compat', () => {
     expect(() => resolveProfiles({
       'acme-gateway': {
@@ -1044,14 +1069,17 @@ describe('compat switches', () => {
     })).toThrow(/compat "supportsDevelperRole", which no wire protocol declares; the configurable switches are .*\bsupportsDeveloperRole\b/)
   })
 
-  it('refuses a compat key pi-ai’s catalog owns, pointing at the catalog route', () => {
+  it.each([
+    ['openRouterRouting', {}],
+    ['supportsAdditionalTools', false],
+  ] as const)('refuses the withheld compat key %s', (field, value) => {
     expect(() => resolveProfiles({
       'acme-gateway': {
         api: 'openai-completions',
         baseURL: 'https://acme.test',
-        models: [{ id: 'acme-a', compat: { openRouterRouting: {} } as never }],
+        models: [{ id: 'acme-a', compat: { [field]: value } }],
       },
-    })).toThrow(/compat "openRouterRouting", which is not configurable here/)
+    })).toThrow(new RegExp(`compat "${field}", which is not configurable here`))
   })
 })
 

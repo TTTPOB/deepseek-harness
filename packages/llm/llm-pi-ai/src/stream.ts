@@ -71,9 +71,29 @@ function classifyPiAiError(message: string): string {
  * @returns the mapped harness reason. Recognized error text, `stop` usage above
  *   `contextWindow`, and zero-output `length` usage that fills the window map
  *   to `CONTEXT_WINDOW_EXCEEDED`; a `stop` with no content blocks maps to an
- *   `EMPTY_RESPONSE` error.
+ *   `EMPTY_RESPONSE` error. A terminal `pending` or `deferred` maps to a stable
+ *   error because the adapter neither accepts an incomplete result nor requests
+ *   deferred responses.
  */
 export function mapStopReason(message: AssistantMessage, contextWindow?: number): FinishReason {
+  if (message.stopReason === 'pending') {
+    return {
+      kind: 'error',
+      failure: {
+        message: 'pi-ai returned pending as a terminal stop reason',
+        code: 'PI_AI_PENDING_STOP',
+      },
+    }
+  }
+  if (message.stopReason === 'deferred') {
+    return {
+      kind: 'error',
+      failure: {
+        message: 'pi-ai returned deferred, but this adapter does not request deferred responses',
+        code: 'PI_AI_DEFERRED_STOP',
+      },
+    }
+  }
   const piAiOverflow = isContextOverflow(message, contextWindow)
   const harnessOverflow = message.stopReason === 'error'
     && message.errorMessage !== undefined
