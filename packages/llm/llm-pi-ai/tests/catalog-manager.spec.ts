@@ -94,7 +94,7 @@ describe('CatalogManager lifecycle', () => {
     const started = Promise.withResolvers<undefined>()
     const result = Promise.withResolvers<Response>()
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
-      started.resolve()
+      started.resolve(undefined)
       return new Promise<Response>((resolve, reject) => {
         init?.signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
         void result.promise.then(resolve, reject)
@@ -130,7 +130,7 @@ describe('CatalogManager lifecycle', () => {
     const started = Promise.withResolvers<undefined>()
     let aborted = false
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => new Promise<Response>((_, reject) => {
-      started.resolve()
+      started.resolve(undefined)
       init?.signal?.addEventListener('abort', () => {
         aborted = true
         reject(new Error('aborted'))
@@ -149,7 +149,7 @@ describe('CatalogManager lifecycle', () => {
     const model = baseModel()
     const started = Promise.withResolvers<undefined>()
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => new Promise<Response>((resolve, reject) => {
-      started.resolve()
+      started.resolve(undefined)
       init?.signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
       if (fetcher.mock.calls.length > 1) resolve(response(model, 'Remote'))
     }))

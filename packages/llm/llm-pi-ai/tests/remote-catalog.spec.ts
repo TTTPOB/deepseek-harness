@@ -213,7 +213,7 @@ describe('remote builtin catalog provider', () => {
         return Promise.resolve(new Response(JSON.stringify(responseCatalog()), { status: 200 }))
       }
       if (fetcher.mock.calls.length === 2) {
-        supersededSignal = init?.signal
+        supersededSignal = init?.signal ?? undefined
         started.resolve(undefined)
         return lateResult.promise
       }

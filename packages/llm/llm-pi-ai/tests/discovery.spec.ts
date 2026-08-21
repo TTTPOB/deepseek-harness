@@ -1,6 +1,9 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { userAgent } from '@deepseek-ai/dsh-llm'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
@@ -8,8 +11,14 @@ import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { discoverModels } from '../src/discovery.ts'
 
 const servers: Server[] = []
+let dshHome: string | undefined
 /** Credential variables a test set, cleared so the next one starts unset. */
 const touchedEnv: string[] = []
+
+beforeEach(async () => {
+  dshHome = await mkdtemp(join(tmpdir(), 'dsh-pi-discovery-'))
+  vi.stubEnv('DSH_HOME', dshHome)
+})
 
 afterEach(async () => {
   // A no-op when the test never stubbed `fetch`; only 'probe key format'
@@ -17,12 +26,21 @@ afterEach(async () => {
   vi.unstubAllGlobals()
   for (const name of touchedEnv.splice(0)) Reflect.deleteProperty(process.env, name)
   await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve))))
+  if (dshHome !== undefined) await rm(dshHome, { recursive: true, force: true })
+  dshHome = undefined
+  vi.unstubAllEnvs()
 })
 
 interface ListingServer {
   url: string
   paths: string[]
   headers: IncomingMessage['headers'][]
+}
+
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.href
+  return input.url
 }
 
 /**
@@ -73,23 +91,60 @@ async function harness(): Promise<Context> {
 }
 
 describe('catalog-route model discovery', () => {
-  it('answers from the installed registry, with capacities and no network call', async () => {
-    const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'from-the-endpoint' }] }) })
+  it('forces a pi.dev refresh with complete descriptors for a dormant builtin route', async () => {
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const remote = { ...installed, name: 'Remote metadata' }
+    const addition = { ...installed, id: 'remote-only', name: 'Remote addition' }
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      [remote.id]: remote,
+      [addition.id]: addition,
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetcher)
     const ctx = await harness()
 
-    const models = await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek', baseURL: server.url })
+    const models = await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })
 
-    // pi-ai's own registry is the authority for its own providers, and it
-    // carries what a listing endpoint would not disclose.
-    expect(models.map(model => model.id).sort())
-      .toEqual(getBuiltinModels('deepseek').map(model => model.id).sort())
+    expect(models).toContainEqual(expect.objectContaining({ id: remote.id, name: 'Remote metadata' }))
+    expect(models).toContainEqual(expect.objectContaining({ id: 'remote-only', name: 'Remote addition' }))
     expect(models.every(model => (model.contextWindow ?? 0) > 0 && (model.maxTokens ?? 0) > 0)).toBe(true)
-    expect(server.paths).toEqual([])
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(requestUrl(fetcher.mock.calls[0]?.[0] ?? '')).toBe('https://pi.dev/api/models/providers/deepseek')
   })
 
-  it('needs no endpoint for a route the catalog describes', async () => {
+  it('bypasses a fresh cache for every explicit discovery', async () => {
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(
+      JSON.stringify({ [installed.id]: installed }),
+      { status: 200 },
+    )))
+    vi.stubGlobal('fetch', fetcher)
     const ctx = await harness()
-    await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })).resolves.not.toHaveLength(0)
+
+    await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })
+    await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })
+
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports a failed explicit refresh while preserving the last published catalog', async () => {
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const remote = { ...installed, id: 'remote-only', name: 'Remote addition' }
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ [remote.id]: remote }), { status: 200 }))
+      .mockRejectedValueOnce(new Error('offline'))
+    vi.stubGlobal('fetch', fetcher)
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, { providers: { deepseek: {} } })
+
+    await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' }))
+      .rejects.toMatchObject({ code: 'DISCOVERY_FAILED' })
+
+    expect(await ctx.llm.resolveModelInfo('deepseek', 'remote-only')).toMatchObject({ name: 'Remote addition' })
   })
 
   it('says where a route the catalog does not describe must get its models', async () => {
@@ -178,10 +233,13 @@ describe('draft-provider model discovery', () => {
       .toEqual(['Bearer stored-key', 'Bearer typed', undefined])
   })
 
-  it('leaves a catalog route\'s credential unresolved, having never reached the network', async () => {
-    // The catalog answers before any endpoint is asked, so a route whose
-    // profile names a credential that is not set must still answer rather than
-    // failing over a key the interrogation never needed.
+  it('refreshes a catalog route without resolving its request credential', async () => {
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      JSON.stringify({ [installed.id]: installed }),
+      { status: 200 },
+    )))
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
     Reflect.deleteProperty(process.env, 'ABSENT_FOR_DISCOVERY')
@@ -311,9 +369,10 @@ describe('draft-provider model discovery', () => {
   })
 
   it('is offered for the namespace, and refuses one it does not serve', async () => {
+    const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'm' }] }) })
     const ctx = await harness()
 
-    await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'openai' })).resolves.not.toHaveLength(0)
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url })).resolves.not.toHaveLength(0)
     await expect(ctx.llm.discoverModels('llm-deepseek', { baseURL: 'https://api.deepseek.com' }))
       .rejects.toMatchObject({ code: 'NO_DISCOVERY' })
     await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: '' }))
@@ -321,14 +380,15 @@ describe('draft-provider model discovery', () => {
   })
 
   it('withdraws the offer when the plugin unloads', async () => {
+    const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'm' }] }) })
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
     const fiber = await ctx.plugin(LlmPiAi, {})
-    await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'openai' })).resolves.not.toHaveLength(0)
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url })).resolves.not.toHaveLength(0)
 
     await fiber.dispose()
 
-    await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'openai' }))
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url }))
       .rejects.toMatchObject({ code: 'NO_DISCOVERY' })
   })
 })
