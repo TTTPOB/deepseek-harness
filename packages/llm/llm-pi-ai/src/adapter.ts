@@ -337,6 +337,19 @@ export class PiAiAdapter extends LlmAdapter {
       model,
       options.reasoningEffort ?? profile.reasoning,
     )
+    // pi-ai 0.84.2's lazy stream reports pre-dispatch setup failures as a
+    // generic error event, so preserve the adapter's aborted outcome before it
+    // can resolve credentials or enter the provider implementation.
+    if (options.signal?.aborted) {
+      yield {
+        type: 'finish',
+        reason: {
+          kind: 'aborted',
+          failure: { message: 'pi-ai request aborted by caller', code: 'ABORTED' },
+        },
+      }
+      return
+    }
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
 
     const consumer = new AbortController()
@@ -366,6 +379,7 @@ export class PiAiAdapter extends LlmAdapter {
         })
       const events = snapshot.models.streamSimple(model, context, {
         ...profileOptions(profile, reasoning, apiKey),
+        toolCallParsing: 'final',
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
