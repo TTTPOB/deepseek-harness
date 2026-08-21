@@ -5538,8 +5538,8 @@ importers:
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
       '@earendil-works/pi-ai':
-        specifier: file:../../../../pi-final-tool-arguments-package/earendil-works-pi-ai-0.84.2.tgz
-        version: file:../pi-final-tool-arguments-package/earendil-works-pi-ai-0.84.2.tgz(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
+        specifier: https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.84.2-dsh.1/earendil-works-pi-ai-0.84.2-dsh.1.tgz
+        version: https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.84.2-dsh.1/earendil-works-pi-ai-0.84.2-dsh.1.tgz(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -9665,9 +9665,9 @@ packages:
       search-insights:
         optional: true
 
-  '@earendil-works/pi-ai@file:../pi-final-tool-arguments-package/earendil-works-pi-ai-0.84.2.tgz':
-    resolution: {integrity: sha512-coH5c1bJfoT/Rxp2cwH3PstMwzzHLV9tM8O+0t86IDjKBqqoguI1+KRCf0y9CnjjXg5O62Nzvb9f77JztxUG/w==, tarball: file:../pi-final-tool-arguments-package/earendil-works-pi-ai-0.84.2.tgz}
-    version: 0.84.2
+  '@earendil-works/pi-ai@https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.84.2-dsh.1/earendil-works-pi-ai-0.84.2-dsh.1.tgz':
+    resolution: {integrity: sha512-p6j6YYDRaLtdZI1EHGSxLdDq+eDOcj81UVMxHoEyforV/ezCmZxcNruZ24P4e4rhFNjJt1TXSiLfTpkbLyhSRQ==, tarball: https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.84.2-dsh.1/earendil-works-pi-ai-0.84.2-dsh.1.tgz}
+    version: 0.84.2-dsh.1
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -15344,7 +15344,7 @@ snapshots:
     transitivePeerDependencies:
       - '@algolia/client-search'
 
-  '@earendil-works/pi-ai@file:../pi-final-tool-arguments-package/earendil-works-pi-ai-0.84.2.tgz(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)':
+  '@earendil-works/pi-ai@https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.84.2-dsh.1/earendil-works-pi-ai-0.84.2-dsh.1.tgz(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

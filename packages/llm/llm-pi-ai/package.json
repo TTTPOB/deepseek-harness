@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "workspace:^",
-    "@earendil-works/pi-ai": "file:../../../../pi-final-tool-arguments-package/earendil-works-pi-ai-0.84.2.tgz"
+    "@earendil-works/pi-ai": "https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.84.2-dsh.1/earendil-works-pi-ai-0.84.2-dsh.1.tgz"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
