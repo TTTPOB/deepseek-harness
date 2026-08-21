@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, CallId, createMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, Message, TokenUsage } from '@deepseek-ai/dsh-llm'
@@ -695,5 +695,41 @@ describe('malformed replay and listener lifecycle', () => {
     activeMeter = ctx.tokenMeter
     expect(activeMeter.measure(session).logRevision).toBe(3)
     await secondFiber.dispose()
+  })
+
+  it('catches up an unobserved cursor gap before folding the published tail', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(TokenMeter)
+    const session = ctx.sessions.create(SessionId('callback-gap'))
+    expect(ctx.tokenMeter.measure(session).logRevision).toBe(0)
+    appendUnchecked(session, {
+      type: 'turn/start',
+      seq: 0,
+      time: 1,
+      data: { turn: 1 },
+    })
+
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+
+    expect(ctx.tokenMeter.measure(session).logRevision).toBe(2)
+  })
+
+  it('does not materialize event-array snapshots while observing live appends', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(TokenMeter)
+    const session = ctx.sessions.create(SessionId('incremental-observation'))
+    ctx.tokenMeter.measure(session)
+    const snapshotGetter = vi.spyOn(session, 'events', 'get')
+
+    appendSuccessfulCall(session, header('deepseek-v4-flash'), {
+      usage: { inputTokens: 20, outputTokens: 7 },
+      providerText: 'provider answer',
+    })
+
+    expect(snapshotGetter).not.toHaveBeenCalled()
+    expect(ctx.tokenMeter.measure(session).logRevision).toBe(session.seq)
+    expect(snapshotGetter).not.toHaveBeenCalled()
   })
 })
