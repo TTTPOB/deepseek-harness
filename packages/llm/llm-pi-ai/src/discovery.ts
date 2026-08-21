@@ -26,6 +26,7 @@ import { INVALID_CREDENTIAL_CODE, LlmError, normalizeApiKey } from '@deepseek-ai
 import type { LlmDiscoveredModel, LlmModelDiscoveryRequest } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
 import { catalogModels } from './catalog.ts'
+import { MAX_RESPONSE_BYTES, readBoundedResponse, ResponseTooLargeError } from './bounded-response.ts'
 
 /**
  * Protocols whose model listing this module can read: the two that speak
@@ -47,8 +48,6 @@ const LISTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
  * uses for its own caller-supplied URLs, except that a truncated model listing
  * is not parseable, so overflow rejects instead of truncating.
  */
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-
 /** One entry of an OpenAI-compatible `GET /models` reply. */
 interface ListingEntry {
   id?: unknown
@@ -94,40 +93,14 @@ function listingUrl(baseURL: string): string {
  * a server that under-declares (or streams) tells us nothing up front.
  */
 async function readBounded(response: Response, url: string): Promise<string> {
-  const oversized = (): LlmError =>
-    new LlmError(`${url} answered with more than ${MAX_RESPONSE_BYTES} bytes`, 'DISCOVERY_FAILED')
-  const declared = Number(response.headers.get('content-length') ?? Number.NaN)
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-    await response.body?.cancel()
-    throw oversized()
-  }
-  /* v8 ignore next -- fetch always exposes a body stream on a 2xx Response; the null guard is defensive. */
-  if (response.body === null) return ''
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
   try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      total += value.byteLength
-      if (total > MAX_RESPONSE_BYTES) throw oversized()
-      chunks.push(value)
+    return await readBoundedResponse(response, MAX_RESPONSE_BYTES)
+  } catch (error: unknown) {
+    if (error instanceof ResponseTooLargeError) {
+      throw new LlmError(`${url} answered with more than ${MAX_RESPONSE_BYTES} bytes`, 'DISCOVERY_FAILED')
     }
-  } finally {
-    /* v8 ignore next 4 -- cancel() after a completed or abandoned read settles without rejecting; unobserved best-effort cleanup. */
-    await reader.cancel().catch(() => {
-      // Cancel after a drained read, or after this function walked away from
-      // an oversized one, is cleanup; the reply is already decided either way.
-    })
+    throw error
   }
-  const body = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    body.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return new TextDecoder().decode(body)
 }
 
 /**
