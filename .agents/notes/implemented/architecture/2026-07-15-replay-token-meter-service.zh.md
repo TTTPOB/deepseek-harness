@@ -20,7 +20,7 @@ Status: implemented
 
 ### 逐会话回放折叠
 
-每个会话都有一个隔离的增量折叠。活跃折叠通过 `session/event` 前进；每次读取都会追到持久日志尾部，因此监听器顺序、种子会话与服务重载不会改变答案。折叠跟踪规范的完整请求头快照、步骤边界、表层追加与替换、assistant usage，以及每条 assistant 消息引用的分片 seq。下一个畸形事件会以事务方式失败并保持未读，不会让状态只修改一半。
+每个会话都有一个隔离的增量折叠。连续的 `session/event` 回调直接折叠其携带的精确事件。冷读取、服务重载与回调缺口从 replay cursor 到 `session.seq` 逐项调用 `Session.eventAt()` 补齐，因此每个未读事件都以 O(1) 读取，不会物化公开事件数组快照。assistant 来源重建使用同一索引查找，成本为 O(引用分片数)。监听器顺序、种子会话与服务重载不会改变答案。下一个畸形事件会以事务方式失败并保持未读，因为 cursor 只在成功折叠后前进。
 
 `measure(session, requestHeader?)` 只同步一次折叠，并在返回标量压力的同时给出逐位置节点价格。`totalTokens` 仍表示请求与响应压力；`surfaceTokens` 是仅针对表层的启发式总量，并等于 `nodes[].tokens` 之和。`requestHeader` 覆盖只改变压力定价，表层字段始终描述当前会话。`estimateMessage(message)` 不依赖会话状态，直接应用固定启发式规则。每个结果都是一个分离且深度不可变的快照，只携带一个 `logRevision`。每次计量都会复制当前节点，因此成本为 O(surface)。
 
@@ -40,7 +40,7 @@ Usage 会对互不重叠的输入、缓存读取、缓存写入与输出 bucket 
 
 ## 测试
 
-单元测试覆盖固定估算、信封失效与锚点替换、回放边界、不可变快照、已路由压力、收敛、溢出 generation 证明与回滚。真实 Loader/Include fixture（测试前置数据）验证零配置 token-meter 与 compaction-basic 按依赖顺序加载的路径。
+单元测试覆盖固定估算、信封失效与锚点替换、回放边界、不可变快照、已路由压力、收敛、溢出 generation 证明与回滚。实时观测 tripwire 在追加完整 assistant 调用时监视 `session.events` 并要求零次读取；缺口用例要求在已发布尾部之前完成索引追赶。真实 Loader/Include fixture（测试前置数据）验证零配置 token-meter 与 compaction-basic 按依赖顺序加载的路径。
 
 ## 考虑过的替代方案
 

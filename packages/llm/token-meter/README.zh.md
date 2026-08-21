@@ -15,9 +15,9 @@
 - `measure(session, requestHeader?)` 在同一个已消费日志 revision 上返回请求压力与当前已计价表层。
 - `estimateMessage(message)` 使用固定启发式规则为一条消息计价。
 
-`measure()` 会同步一次，并返回一个独立且深度不可变的快照。`totalTokens` 是请求与响应压力，`surfaceTokens` 是仅表层启发式总量，等于 `nodes[].tokens` 之和。`requestHeader` 覆盖只影响压力字段；表层字段仍描述当前会话。每次调用都会克隆带位置的节点，因此测量是 O(surface)。
+`measure()` 会同步一次，并返回一个独立且深度不可变的快照。已初始化 fold 直接消费 `session/event` 携带的精确事件；冷读取、服务重载与回调缺口通过连续 `Session.eventAt()` 查找补齐，因此 replay 成本为 O(未读事件)，无需重建 `session.events`。`totalTokens` 是请求与响应压力，`surfaceTokens` 是仅表层启发式总量，等于 `nodes[].tokens` 之和。`requestHeader` 覆盖只影响压力字段；表层字段仍描述当前会话。每次调用仍会克隆带位置的节点，因此返回测量为 O(surface)。
 
-fold 跟踪完整请求标头快照、步骤边界、表层追加与替换、成功 assistant 消息、提供方用量，以及每条 assistant 消息引用的分片 seq。只有当最新成功调用的规范请求 envelope 与已测量 envelope 匹配，且其总量不低于该调用的完整启发式锚点时，才会复用提供方用量；后续成功会替换较早锚点。否则会对当前 envelope 与表层进行完整估算。表层变更保持相对于匹配锚点的带符号值，包括缩减替换后的负 delta。
+fold 跟踪完整请求标头快照、步骤边界、表层追加与替换、成功 assistant 消息、提供方用量，以及每条 assistant 消息引用的分片 seq。引用的提供方分片通过索引查找以 O(引用分片数) 重建。只有当最新成功调用的规范请求 envelope 与已测量 envelope 匹配，且其总量不低于该调用的完整启发式锚点时，才会复用提供方用量；后续成功会替换较早锚点。否则会对当前 envelope 与表层进行完整估算。表层变更保持相对于匹配锚点的带符号值，包括缩减替换后的负 delta。
 
 用量计量会求和不重叠的输入、cache-read、cache-write 与输出 bucket；不会再次添加推理（reasoning）。每次成功调用都会记录一个 assistant 锚点，包括无内容调用。显式的空 `sourceEventSeqs` 列表表示已知空提供方流；遗留记录缺少该列表时，fold 会保守地将持久 assistant 输出视为提供方输出。
 

@@ -20,7 +20,7 @@ The service has no configuration. Estimation uses a fixed four-characters-per-to
 
 ### Per-session replay folds
 
-Each session owns one isolated incremental fold. Active folds advance from `session/event`; every read catches up through the durable tail, so listener ordering, seeded sessions, and service reload do not change the answer. The fold tracks canonical full request-header snapshots, step boundaries, surface appends and replacements, assistant usage, and the chunk seqs cited by each assistant message. A malformed next event fails transactionally and remains unread rather than partially mutating state.
+Each session owns one isolated incremental fold. A contiguous `session/event` callback folds the exact event it carries. Cold reads, service reloads, and callback gaps catch up through `Session.eventAt()` from the replay cursor to `session.seq`, so each unseen event is read in O(1) without materializing the public event-array snapshot. Assistant source reconstruction uses the same indexed lookup and costs O(cited chunks). Listener ordering, seeded sessions, and service reload do not change the answer. A malformed next event fails transactionally and remains unread because the cursor advances only after a successful fold.
 
 `measure(session, requestHeader?)` synchronizes the fold once and returns scalar pressure together with positional per-node prices. `totalTokens` remains request-and-response pressure; `surfaceTokens` is the surface-only heuristic total and equals the sum of `nodes[].tokens`. A `requestHeader` override changes pressure pricing only, while the surface fields always describe the current session. `estimateMessage(message)` applies the fixed heuristic without session state. Each result is one detached, deeply immutable snapshot carrying one `logRevision`. Every measurement clones the current nodes and is therefore O(surface).
 
@@ -40,7 +40,7 @@ Automatic pressure runs at `agent/pre-step` before request derivation and measur
 
 ## Testing
 
-Unit tests cover fixed estimation, envelope invalidation and anchor replacement, replay boundaries, immutable snapshots, routed pressure, convergence, overflow generation proof, and rollback. A real Loader/Include fixture verifies the zero-config token-meter and compaction-basic load path in dependency order.
+Unit tests cover fixed estimation, envelope invalidation and anchor replacement, replay boundaries, immutable snapshots, routed pressure, convergence, overflow generation proof, and rollback. A live-observation tripwire spies on `session.events` while a complete assistant call is appended and requires zero reads; a gap case requires indexed catch-up before the published tail. A real Loader/Include fixture verifies the zero-config token-meter and compaction-basic load path in dependency order.
 
 ## Alternatives considered
 
