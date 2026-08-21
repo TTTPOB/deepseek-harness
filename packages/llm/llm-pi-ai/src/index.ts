@@ -63,8 +63,9 @@ import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deeps
 import { PiAiAdapter } from './adapter.ts'
 import { authContextFrom, credentialStoreFrom } from './auth.ts'
 import { catalogProviderIds } from './catalog.ts'
-import { assertServiceable, Config, resolveProfiles } from './config.ts'
+import { assertServiceable, Config, resolveCatalogRefreshIntervalMs, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
+import { CatalogManager } from './catalog-manager.ts'
 import { discoverModels } from './discovery.ts'
 import { registerPiAiFlows } from './login.ts'
 
@@ -137,8 +138,28 @@ function directoryEntries(
   return [...entries.values()]
 }
 
-/** Register one generic pi-ai adapter for all configured provider routes. */
-export function apply(ctx: Context, config: Config): void {
+/** Select configured builtin routes whose model list inherits the live catalog. */
+function activeBuiltinProviders(
+  providers: Readonly<Record<string, { models?: readonly unknown[] }>> | undefined,
+): ReadonlySet<string> {
+  const installed = new Set(catalogProviderIds())
+  return new Set(Object.entries(providers ?? {})
+    .filter(([provider, profile]) => installed.has(provider) && (profile.models === undefined || profile.models.length === 0))
+    .map(([provider]) => provider))
+}
+
+/**
+ * Register one generic pi-ai adapter for all configured provider routes.
+ * @param ctx - plugin fiber and required LLM service.
+ * @param config - composition-layer provider configuration.
+ * @returns completion after cached catalogs and plugin registrations are ready.
+ */
+export async function apply(ctx: Context, config: Config): Promise<void> {
+  let invalidateProfiles = (): void => {}
+  const catalogManager = new CatalogManager(ctx, {
+    intervalMs: resolveCatalogRefreshIntervalMs(config.catalogRefreshIntervalMs),
+    onPublication: () => { invalidateProfiles() },
+  })
   let current: () => Config = () => config
   let lastRaw: Config | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
@@ -155,12 +176,21 @@ export function apply(ctx: Context, config: Config): void {
    */
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
     const raw = current()
+    catalogManager.configure(
+      resolveCatalogRefreshIntervalMs(raw.catalogRefreshIntervalMs),
+      activeBuiltinProviders(raw.providers),
+    )
     if (raw === lastRaw && memoized !== undefined) return memoized
-    const next = resolveProfiles(raw.providers)
+    const next = resolveProfiles(raw.providers, provider => catalogManager.modelsFor(provider))
     lastRaw = raw
     memoized = next
     return next
   }
+  invalidateProfiles = (): void => {
+    lastRaw = undefined
+    memoized = undefined
+  }
+  await catalogManager.restoreInstalled()
   profiles()
 
   const resolveApiKey = async (
@@ -287,7 +317,9 @@ export function apply(ctx: Context, config: Config): void {
     // Refuse an unserviceable section where it is written: without this a
     // schema-valid profile the adapter cannot serve would be stored and then
     // silently disable every route in this namespace.
-    validate: assertServiceable,
+    validate: (value) => {
+      assertServiceable(value, provider => catalogManager.modelsFor(provider))
+    },
     setSource: (source) => {
       current = source
     },

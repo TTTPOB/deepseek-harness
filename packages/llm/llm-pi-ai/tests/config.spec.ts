@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertServiceable, Config } from '../src/config.ts'
+import { assertServiceable, Config, DEFAULT_CATALOG_REFRESH_INTERVAL_MS } from '../src/config.ts'
 
 /** Validate one hand-declared route, with the caller's fields layered onto it. */
 const routeWith = (profile: Record<string, unknown>): (() => unknown) =>
@@ -45,6 +45,19 @@ describe('reasoning schema boundary', () => {
         supportsThinkingTokenBudget: true,
       },
     })).not.toThrow()
+  })
+})
+
+describe('catalog refresh interval', () => {
+  it('renders the five-minute default and rejects invalid timer bounds', () => {
+    expect(Config({}).catalogRefreshIntervalMs).toBe(DEFAULT_CATALOG_REFRESH_INTERVAL_MS)
+    for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => { assertServiceable(Config({ catalogRefreshIntervalMs: value })) }).toThrow()
+    }
+  })
+
+  it('validates the direct programmatic config path', () => {
+    expect(() => { assertServiceable({ catalogRefreshIntervalMs: 0, providers: {} }) }).toThrow(/catalogRefreshIntervalMs/)
   })
 })
 

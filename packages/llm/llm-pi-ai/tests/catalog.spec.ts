@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -13,19 +13,26 @@ import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import type { Api, Model, OpenAICompletionsCompat, Provider } from '@earendil-works/pi-ai'
 import { resolveProfiles } from '../src/config.ts'
+import { FileModelsStore } from '../src/models-store.ts'
 import { buildProvider, supportedProtocols } from '../src/provider.ts'
 import { assemble } from './assemble.ts'
 import { memoryAuth } from './auth-double.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
 
 const homes: string[] = []
+let catalogHome: string
 
 // Routes name their credential by reference; the value lives in the
 // environment, which is the layer the adapter falls back to without a
 // mounted credentials seam.
 const KEY_ENV = 'PI_TEST_KEY'
 
+beforeAll(async () => {
+  catalogHome = await mkdtemp(join(tmpdir(), 'dsh-pi-catalog-cache-'))
+})
+
 beforeEach(() => {
+  vi.stubEnv('DSH_HOME', catalogHome)
   vi.stubEnv(KEY_ENV, 'test-key')
 })
 
@@ -33,6 +40,10 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   await closeMockServers()
   await Promise.all(homes.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
+})
+
+afterAll(async () => {
+  await rm(catalogHome, { recursive: true, force: true })
 })
 
 /** A throwaway $DSH_HOME with an empty settings document. */
@@ -1140,6 +1151,84 @@ describe('resolution snapshots', () => {
 
     expect(first.paths).toHaveLength(1)
     expect(second.paths).toHaveLength(1)
+  })
+
+  it('publishes live model metadata to the next list, resolve, and stream snapshot', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    let live = [{ ...installed, name: 'Remote old' }]
+    let current = resolveProfiles({ deepseek: { baseURL: server.url } }, () => live)
+    const adapter = new PiAiAdapter({
+      profiles: () => current,
+      resolveApiKey: () => Promise.resolve('k'),
+      auth: memoryAuth(),
+    })
+    const prepared = await adapter.prepareCall('deepseek', installed.id)
+    live = [{ ...installed, name: 'Remote new' }]
+    current = resolveProfiles({ deepseek: { baseURL: server.url } }, () => live)
+
+    expect((await adapter.listModels('deepseek')).find(model => model.id === installed.id)?.name).toBe('Remote new')
+    await expect(adapter.resolveModel('deepseek', installed.id)).resolves.toMatchObject({ name: 'Remote new' })
+    expect(prepared.model.name).toBe('Remote old')
+
+    const drain = async (stream: AsyncIterable<StreamChunk>): Promise<void> => {
+      for await (const _chunk of stream) { /* drain */ }
+    }
+    await drain(prepared.stream({ ...prepared.model, provider: 'deepseek', model: installed.id, messages: [] }))
+    await drain(adapter.stream({ provider: 'deepseek', model: installed.id, messages: [] }))
+    expect(server.requests).toHaveLength(2)
+  })
+
+  it('uses static catalog metadata for explicit models while live defaults include remote additions', () => {
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const live = [
+      { ...installed, name: 'Remote metadata' },
+      { ...installed, id: 'remote-only', name: 'Remote addition' },
+    ]
+    const resolved = resolveProfiles({ deepseek: { models: [{ id: installed.id }] } }, () => live)
+    const models = resolved.get('deepseek')?.piProvider.getModels() ?? []
+    expect(models.map(model => model.id)).toEqual([installed.id])
+    expect(models[0]?.name).toBe(installed.name)
+  })
+
+  it('applies modelOverrides to live models without requiring a static id', () => {
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const live = [{ ...installed, id: 'remote-only', name: 'Remote addition' }]
+    const resolved = resolveProfiles({
+      deepseek: { modelOverrides: { 'remote-only': { name: 'Configured remote', maxTokens: 123 } } },
+    }, () => live)
+    const model = resolved.get('deepseek')?.piProvider.getModels()[0]
+    expect(model).toMatchObject({ id: 'remote-only', name: 'Configured remote', maxTokens: 123 })
+  })
+
+  it('restores a remote-only override before validating persisted settings', async () => {
+    const settingsHome = await home()
+    const cacheHome = await mkdtemp(join(tmpdir(), 'dsh-pi-catalog-remote-only-'))
+    homes.push(cacheHome)
+    vi.stubEnv('DSH_HOME', cacheHome)
+    const installed = getBuiltinModels('deepseek')[0]
+    if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
+    const remote = { ...installed, id: 'remote-only', name: 'Remote addition' }
+    await new FileModelsStore(cacheHome).write('deepseek', { models: [remote], checkedAt: 1 })
+    await writeFile(join(settingsHome, 'settings.yaml'), [
+      'llm-pi-ai:',
+      '  providers:',
+      '    deepseek:',
+      '      modelOverrides:',
+      '        remote-only:',
+      '          name: Configured remote',
+      '',
+    ].join('\n'))
+
+    const ctx = await bootWithSettings(settingsHome, {})
+
+    expect(await ctx.llm.resolveModelInfo('deepseek', 'remote-only')).toMatchObject({
+      id: 'remote-only',
+      name: 'Configured remote',
+    })
   })
 })
 

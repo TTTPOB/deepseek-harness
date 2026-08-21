@@ -999,6 +999,11 @@ Requires: `llm`
 /** Plugin configuration: the provider routes this instance owns. */
 export interface Config {
   /**
+   * Remote builtin-catalog freshness TTL and periodic active-route refresh
+   * cadence in milliseconds. The default is five minutes.
+   */
+  catalogRefreshIntervalMs?: number
+  /**
    * pi-ai provider routes, keyed by provider. An empty (or omitted) dict is
    * the dormant settings-driven posture: the adapter mounts with no routes
    * and registers them the moment a settings section supplies profiles.
@@ -1021,18 +1026,19 @@ export interface PiAiProviderProfile {
   /** Endpoint for this route's models; defaults to the installed catalog's endpoint. */
   baseURL?: string
   /**
-   * This route's model catalog. Omission serves the installed catalog for the
-   * route unchanged; an explicit list replaces it, each entry defaulting its
-   * unset fields from the installed model of the same id.
+   * This route's model catalog. Omission or an empty list serves the current
+   * live catalog for an installed route; an explicit list replaces it and
+   * resolves its unset fields against the installed static model of the same
+   * id. Hand-declared routes must list their models explicitly.
    */
   models?: PiAiModelProfile[]
   /**
-   * Installed-catalog customizations by model id: each entry reshapes that
-   * one model with the same fields a {@link models} entry takes, while the
-   * rest of the catalog keeps serving untouched. Only meaningful on a catalog
-   * route with no `models` list — `models` already replaces the catalog, so
-   * an override beside it, on a route the catalog does not ship, or naming a
-   * model the catalog does not describe is refused rather than skipped.
+   * Live-catalog customizations by model id: each entry reshapes that one
+   * model with the same fields a {@link models} entry takes, while the rest
+   * of the live catalog keeps serving untouched. Only meaningful on an
+   * installed route with no non-empty `models` list — an explicit list uses
+   * the installed static catalog and rejects overrides rather than inheriting
+   * remote additions.
    */
   modelOverrides?: Record<string, PiAiModelOverride>
   /**
@@ -1247,7 +1253,7 @@ export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFo
 
 Depends on: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`)
 
-Source: [`packages/llm/llm-pi-ai/src/config.ts:213`](../packages/llm/llm-pi-ai/src/config.ts)
+Source: [`packages/llm/llm-pi-ai/src/config.ts:217`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 

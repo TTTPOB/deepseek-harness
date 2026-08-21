@@ -14,7 +14,7 @@
  * @module dsh-llm-pi-ai/config
  */
 
-import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
+import type { Api, CacheRetention, ChatTemplateKwargValue, Model, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
@@ -41,6 +41,9 @@ import { buildProvider, supportedProtocols } from './provider.ts'
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
+
+/** Default interval for refreshing active builtin model catalogs. */
+export const DEFAULT_CATALOG_REFRESH_INTERVAL_MS = 300_000
 
 /**
  * Default request-level bound on base64-encoded image payload. Every image in
@@ -99,18 +102,19 @@ export interface PiAiProviderProfile {
   /** Endpoint for this route's models; defaults to the installed catalog's endpoint. */
   baseURL?: string
   /**
-   * This route's model catalog. Omission serves the installed catalog for the
-   * route unchanged; an explicit list replaces it, each entry defaulting its
-   * unset fields from the installed model of the same id.
+   * This route's model catalog. Omission or an empty list serves the current
+   * live catalog for an installed route; an explicit list replaces it and
+   * resolves its unset fields against the installed static model of the same
+   * id. Hand-declared routes must list their models explicitly.
    */
   models?: PiAiModelProfile[]
   /**
-   * Installed-catalog customizations by model id: each entry reshapes that
-   * one model with the same fields a {@link models} entry takes, while the
-   * rest of the catalog keeps serving untouched. Only meaningful on a catalog
-   * route with no `models` list — `models` already replaces the catalog, so
-   * an override beside it, on a route the catalog does not ship, or naming a
-   * model the catalog does not describe is refused rather than skipped.
+   * Live-catalog customizations by model id: each entry reshapes that one
+   * model with the same fields a {@link models} entry takes, while the rest
+   * of the live catalog keeps serving untouched. Only meaningful on an
+   * installed route with no non-empty `models` list — an explicit list uses
+   * the installed static catalog and rejects overrides rather than inheriting
+   * remote additions.
    */
   modelOverrides?: Record<string, PiAiModelOverride>
   /**
@@ -211,6 +215,11 @@ export interface ResolvedPiAiProviderProfile
 
 /** Plugin configuration: the provider routes this instance owns. */
 export interface Config {
+  /**
+   * Remote builtin-catalog freshness TTL and periodic active-route refresh
+   * cadence in milliseconds. The default is five minutes.
+   */
+  catalogRefreshIntervalMs?: number
   /**
    * pi-ai provider routes, keyed by provider. An empty (or omitted) dict is
    * the dormant settings-driven posture: the adapter mounts with no routes
@@ -334,8 +343,25 @@ const profile = z.object({
 
 /** Runtime schema for {@link Config}. */
 export const Config: z<Config> = z.object({
+  catalogRefreshIntervalMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_CATALOG_REFRESH_INTERVAL_MS),
   providers: z.dict(profile).default({}),
 })
+
+/**
+ * Resolve and validate the remote-catalog interval for direct plugin callers.
+ * @param value - configured catalog refresh interval.
+ * @returns the configured interval or its default.
+ * @throws Error when the interval cannot be used by a Node timer.
+ */
+export function resolveCatalogRefreshIntervalMs(value: number | undefined): number {
+  const interval = value ?? DEFAULT_CATALOG_REFRESH_INTERVAL_MS
+  if (!Number.isFinite(interval) || interval <= 0 || interval > MAX_TIMER_DELAY_MS) {
+    throw new Error(
+      `llm-pi-ai: catalogRefreshIntervalMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
+    )
+  }
+  return interval
+}
 
 /**
  * Reject a section this adapter could not serve. Registered as the settings
@@ -347,10 +373,15 @@ export const Config: z<Config> = z.object({
  * renders and the value an absent section resolves to; wrapping it would break
  * both.
  * @param config - the resolved section to check.
+ * @param liveModels - optional current model view used for inherited routes.
  * @throws Error naming the route and model that cannot be served.
  */
-export function assertServiceable(config: Config): void {
-  resolveProfiles(config.providers)
+export function assertServiceable(
+  config: Config,
+  liveModels?: (provider: string) => readonly Model<Api>[],
+): void {
+  resolveCatalogRefreshIntervalMs(config.catalogRefreshIntervalMs)
+  resolveProfiles(config.providers, liveModels)
 }
 
 /** Reject removed pre-release profile fields and name their replacements. */
@@ -377,10 +408,12 @@ function rejectRemovedFields(provider: string, source: PiAiProviderProfile): voi
  * resolves to the empty (dormant) route set here rather than through a hidden
  * fallback, and each route's models and pi-ai provider are materialized once.
  * @param providers - configured provider profiles keyed by route.
+ * @param liveModels - optional current model view used for inherited routes.
  * @returns validated profiles in configuration order.
  */
 export function resolveProfiles(
   providers: Readonly<Record<string, PiAiProviderProfile>> | undefined,
+  liveModels?: (provider: string) => readonly Model<Api>[],
 ): Map<string, ResolvedPiAiProviderProfile> {
   if (Array.isArray(providers)) {
     throw new Error('llm-pi-ai: providers is now a dict keyed by provider route, not an array of profiles')
@@ -436,6 +469,7 @@ export function resolveProfiles(
       ...source.models === undefined ? {} : { models: source.models },
       ...source.modelOverrides === undefined ? {} : { modelOverrides: source.modelOverrides },
       ...source.compat === undefined ? {} : { compat: source.compat },
+      ...liveModels === undefined ? {} : { liveModels: liveModels(provider) },
       defaultInput,
       defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
       defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,

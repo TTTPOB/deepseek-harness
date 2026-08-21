@@ -597,9 +597,11 @@ export interface RouteCatalogRequest {
   api?: string
   /** Endpoint override; absent defers to the catalog model, then the catalog provider. */
   baseURL?: string
-  /** Configured catalog; absent means the whole installed catalog for this route. */
+  /** Configured catalog; absent means the live catalog supplied for this route. */
   models?: readonly PiAiModelProfile[]
-  /** Installed-catalog customizations by model id; only meaningful while `models` is absent. */
+  /** Current remote catalog used only when {@link models} is absent or empty. */
+  liveModels?: readonly Model<Api>[]
+  /** Live-catalog customizations by model id; only meaningful while `models` is absent or empty. */
   modelOverrides?: Readonly<Record<string, PiAiModelOverride>>
   /** Route-level wire-compatibility switches, landing on each model whose protocol declares them; entries override per field. */
   compat?: PiAiCompatProfile
@@ -783,21 +785,25 @@ export interface RouteCatalog {
 }
 
 /**
- * Materialize one route's catalog by merging the installed catalog defaults
- * under the configured entries. A route with no configured `models` serves the
- * installed catalog unchanged, which is what keeps an existing
- * `providers: { deepseek: { apiKeyEnv: … } }` profile working untouched.
+ * Materialize one route's catalog by merging static or live defaults under the
+ * configured entries. An installed route with no non-empty `models` list uses
+ * its live defaults; an explicit list always uses the installed static catalog.
  * @param request - the route-level catalog facts.
  * @returns the materialized models and the explicitly configured request caps.
  */
 export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
   const { provider } = request
-  const defaults = catalogModels(provider)
+  const staticDefaults = catalogModels(provider)
   const providerBaseUrl = catalogProvider(provider)?.baseUrl
   // An absent `models` key and an empty one are the same request: the config
-  // schema materializes `[]` for the absent case, and an empty catalog could
-  // serve no request anyway, so both mean "serve the installed catalog".
+  // schema materializes `[]` for the absent case, and both mean "serve live
+  // defaults" for an installed route.
   const configured = request.models ?? []
+  const defaults = configured.length > 0
+    ? staticDefaults
+    : new Map((catalogProvider(provider) === undefined
+      ? [...staticDefaults.values()]
+      : request.liveModels ?? [...staticDefaults.values()]).map(model => [model.id, model]))
   const overrides = request.modelOverrides ?? {}
   // Every miss is refused, never skipped: an override that lands nowhere is a
   // typo someone would otherwise hunt for in a silently unchanged model.

@@ -37,6 +37,8 @@ export interface RemoteCatalogOptions {
   ttlMs: number
   /** Internal test substitutions; omitted by production callers. */
   test?: RemoteCatalogTestOptions
+  /** Called after Pi accepts a publication into this provider generation. */
+  onPublish?: () => void
 }
 
 function assertClock(now: number): number {
@@ -87,6 +89,14 @@ export function createRemoteCatalogProvider(providerId: string, options: RemoteC
   const fetcher = options.test?.fetch ?? globalThis.fetch
   const url = endpoint(options.test?.baseUrl ?? MODELS_ENDPOINT, providerId)
 
+  const notifyPublished = (): void => {
+    try {
+      options.onPublish?.()
+    } catch {
+      // Publication has already committed; observer failures cannot undo it.
+    }
+  }
+
   const mergeModels = (): readonly Model<Api>[] => {
     const merged = [...baseline.values()]
     for (const model of overlay) {
@@ -102,6 +112,7 @@ export function createRemoteCatalogProvider(providerId: string, options: RemoteC
     if (context.stored !== undefined) {
       const restored = context.stored.models.map(model => parsePiModel(model, providerId, model.id))
       if (!await context.publish({ update: () => { overlay = restored } })) return
+      notifyPublished()
     }
     context.signal.throwIfAborted()
     if (!context.allowNetwork) return
@@ -131,7 +142,7 @@ export function createRemoteCatalogProvider(providerId: string, options: RemoteC
         ...etag === undefined ? {} : { etag },
         ...modified === undefined ? {} : { lastModified: modified },
       }
-      await context.publish({ persist, update: () => { overlay = [...context.stored?.models ?? []] } })
+      if (await context.publish({ persist, update: () => { overlay = [...context.stored?.models ?? []] } })) notifyPublished()
       return
     }
     if (response.status !== 200) {
@@ -166,7 +177,7 @@ export function createRemoteCatalogProvider(providerId: string, options: RemoteC
       ...etag === undefined ? {} : { etag },
       ...modified === undefined ? {} : { lastModified: modified },
     }
-    await context.publish({ persist, update: () => { overlay = models } })
+    if (await context.publish({ persist, update: () => { overlay = models } })) notifyPublished()
   }
 
   return {
