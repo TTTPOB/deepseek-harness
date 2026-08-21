@@ -974,6 +974,28 @@ describe('Session', () => {
     expect(session.events).toBe(after)
   })
 
+  it('looks up seeded and appended events without materializing a new snapshot', () => {
+    const session = Session.create(SessionId('event-at'), [{
+      type: 'turn/start',
+      seq: 0,
+      time: 1,
+      data: { turn: 1 },
+    }])
+    const snapshot = session.events
+    const seeded = session.eventAt(0)
+    expect(seeded).toBe(snapshot[0])
+    expect(Object.isFrozen(seeded)).toBe(true)
+
+    const appended = session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    expect(session.eventAt(appended.seq)).toBe(appended)
+    expect(session.events).not.toBe(snapshot)
+    expect(snapshot).toHaveLength(2)
+    expect(session.eventAt(session.seq)).toBeUndefined()
+    expect(session.eventAt(-1)).toBeUndefined()
+    expect(session.eventAt(0.5)).toBeUndefined()
+    expect(session.eventAt(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined()
+  })
+
   it('detaches and freezes an explicitly supplied session header', () => {
     const input = {
       version: SESSION_FORMAT_VERSION,
