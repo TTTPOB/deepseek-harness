@@ -275,13 +275,40 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if (profile === undefined) return undefined
     return resolveApiKey(provider, profile)
   }
+  const installedProviders = new Set(catalogProviderIds())
+  const discoverBuiltinModels = async (
+    provider: string,
+    signal: AbortSignal | undefined,
+  ): Promise<readonly { id: string; name: string; contextWindow: number; maxTokens: number }[]> => {
+    const result = await catalogManager.refresh(provider, signal, true)
+    if (result.aborted) {
+      throw new LlmError('model discovery aborted by caller', 'ABORTED')
+    }
+    const failure = result.errors.get(provider)
+    if (failure !== undefined) {
+      throw new LlmError(`could not refresh pi-ai model catalog for provider "${provider}"`, 'DISCOVERY_FAILED', {
+        cause: failure,
+      })
+    }
+    return catalogManager.modelsFor(provider).map(model => ({
+      id: model.id,
+      name: model.name,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+    }))
+  }
   // Interrogating an endpoint is a configuration-time action over a draft, so
   // it is offered for the whole namespace rather than per route: the provider
   // a surface is adding does not exist yet. The draft is the whole request
   // except the credential: a configuration surface edits a redacted descriptor
   // and never holds a stored secret, so an already-configured route supplies
   // its own here rather than being interrogated unauthenticated.
-  ctx.llm.registerModelDiscovery(NS, request => discoverModels(request, () => storedApiKey(request.provider)))
+  ctx.llm.registerModelDiscovery(NS, (request) => {
+    if (request.provider !== undefined && installedProviders.has(request.provider)) {
+      return discoverBuiltinModels(request.provider, request.signal)
+    }
+    return discoverModels(request, () => storedApiKey(request.provider))
+  })
   // Route effects bind to this apply fiber via the stable `ctx` reference,
   // even when a swap runs inside the scoped settings callback below. A bare
   // mount (zero routes) is the dormant posture: nothing registers until a
