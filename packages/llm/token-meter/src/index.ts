@@ -92,8 +92,14 @@ export class TokenMeter extends Service {
 
     // Readers catch up independently, while eager observation bounds ordinary
     // read latency without creating state for sessions no consumer has read.
-    ctx.on('session/event', (session) => {
-      if (this.states.has(session)) this._sync(session)
+    ctx.on('session/event', (session, event) => {
+      const state = this.states.get(session)
+      if (state === undefined) return
+      if (event.seq === state.consumedEvents) {
+        this._consumeEvent(session, state, event)
+      } else {
+        this._sync(session)
+      }
     })
   }
 
@@ -171,13 +177,20 @@ export class TokenMeter extends Service {
       this.states.set(session, state)
     }
 
-    while (state.consumedEvents < session.events.length) {
-      // oxlint-disable-next-line typescript/no-non-null-assertion -- contiguous session seqs index the durable log
-      const event = session.events[state.consumedEvents]!
-      this._foldEvent(session, state, event)
-      state.consumedEvents += 1
+    while (state.consumedEvents < session.seq) {
+      const event = session.eventAt(state.consumedEvents)
+      if (event === undefined) {
+        throw new Error(`token meter: session log has no event at seq ${state.consumedEvents}`)
+      }
+      this._consumeEvent(session, state, event)
     }
     return state
+  }
+
+  /** Fold one exact cursor event and advance only after every validation succeeds. */
+  private _consumeEvent(session: Session, state: ReplayState, event: SessionEvent): void {
+    this._foldEvent(session, state, event)
+    state.consumedEvents += 1
   }
 
   /**
@@ -292,11 +305,10 @@ export class TokenMeter extends Service {
         throw new Error(`token meter: assistant/message at seq ${event.seq} repeats source seq ${seq}`)
       }
       seen.add(seq)
-      // Session construction validates contiguous seqs, and the explicit
-      // earlier-than-assistant check above therefore guarantees existence.
-      const source = session.events[seq]
-      // oxlint-disable-next-line typescript/no-non-null-assertion
-      const sourceEvent = source!
+      const sourceEvent = session.eventAt(seq)
+      if (sourceEvent === undefined) {
+        throw new Error(`token meter: assistant/message at seq ${event.seq} source seq ${seq} does not exist`)
+      }
       if (sourceEvent.type !== 'assistant/chunk') {
         throw new Error(`token meter: assistant/message at seq ${event.seq} source seq ${seq} is not assistant/chunk`)
       }
