@@ -785,25 +785,28 @@ export interface RouteCatalog {
 }
 
 /**
- * Materialize one route's catalog by merging static or live defaults under the
- * configured entries. An installed route with no non-empty `models` list uses
- * its live defaults; an explicit list always uses the installed static catalog.
+ * Materialize one route's catalog by merging current builtin or declared-route
+ * defaults under the configured entries. A non-empty `models` list selects from
+ * those defaults, and each field beside `id` overrides the selected descriptor.
  * @param request - the route-level catalog facts.
  * @returns the materialized models and the explicitly configured request caps.
  */
 export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
   const { provider } = request
   const staticDefaults = catalogModels(provider)
-  const providerBaseUrl = catalogProvider(provider)?.baseUrl
+  const builtin = catalogProvider(provider)
+  const providerBaseUrl = builtin?.baseUrl
+  // Descriptor selection is independent from model selection. A builtin route
+  // always resolves against its current catalog view, so a non-empty `models`
+  // list can select remote-only models and inherit corrected wire metadata.
+  // Without a restored or published view, the installed catalog remains its
+  // offline baseline. Declared routes have no live descriptor source.
+  const defaults = new Map((builtin === undefined
+    ? [...staticDefaults.values()]
+    : request.liveModels ?? [...staticDefaults.values()]).map(model => [model.id, model]))
   // An absent `models` key and an empty one are the same request: the config
-  // schema materializes `[]` for the absent case, and both mean "serve live
-  // defaults" for an installed route.
+  // schema materializes `[]` for the absent case, and both serve every default.
   const configured = request.models ?? []
-  const defaults = configured.length > 0
-    ? staticDefaults
-    : new Map((catalogProvider(provider) === undefined
-      ? [...staticDefaults.values()]
-      : request.liveModels ?? [...staticDefaults.values()]).map(model => [model.id, model]))
   const overrides = request.modelOverrides ?? {}
   // Every miss is refused, never skipped: an override that lands nowhere is a
   // typo someone would otherwise hunt for in a silently unchanged model.
@@ -818,7 +821,7 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
         + ' catalog, so declare the fields on its entries')
     }
     if (!defaults.has(id)) {
-      invalid(provider, `modelOverrides names "${id}", which the installed catalog does not describe`)
+      invalid(provider, `modelOverrides names "${id}", which the current catalog does not describe`)
     }
     // The id lives in the dict key; a value carrying its own would quietly
     // rename the model it meant to customize. The static shape already omits
@@ -854,7 +857,7 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
     const base = defaults.get(entry.id)
     const api = request.api ?? base?.api ?? routeApi
     if (api === undefined) {
-      invalid(provider, `model "${entry.id}" needs an api; the installed catalog does not describe it, so set the`
+      invalid(provider, `model "${entry.id}" needs an api; the current catalog does not describe it, so set the`
         + ' route\'s api to the wire protocol its endpoint speaks')
     }
     const baseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl
@@ -877,8 +880,8 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
     // the model's capability and stays out of request defaults.
     if (entry.maxTokens !== undefined) configuredMaxTokens.set(entry.id, entry.maxTokens)
     return {
-      // The installed entry lays the floor, and the fields below override it.
-      // Enumerating instead would silently drop every `Model` field this
+      // The current catalog entry lays the floor, and the fields below override
+      // it. Enumerating instead would silently drop every `Model` field this
       // package does not model — reasoning-level spellings, compatibility
       // quirks, model headers, and whatever a pi-ai upgrade adds next. Spread,
       // never enumerate.

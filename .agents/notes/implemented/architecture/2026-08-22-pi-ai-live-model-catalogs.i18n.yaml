@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-22-pi-ai-live-model-catalogs.md
-2026-08-22-pi-ai-live-model-catalogs.md: 7ca599cdf91cca84d27f3678c434398afbb40dc2
-2026-08-22-pi-ai-live-model-catalogs.zh.md: a7f14b4fa966fc48af30aecf33603c9b8c527c9d
+2026-08-22-pi-ai-live-model-catalogs.md: 7b00bf60213d2bfbb45e8171d8fa3be91b1549c9
+2026-08-22-pi-ai-live-model-catalogs.zh.md: c72a39b83a7a3f6a39ab3933cba378f3a994121e

@@ -82,9 +82,9 @@
 
 ## Catalog 解析
 
-profile 的非空 `models` 列表是*替换*该路由的 catalog，而不是扩充它；省略它（或留空）则服务实时 catalog。来自 `pi.dev` 的完整描述符按 id 替换匹配的已安装条目，也可新增模型；已安装 catalog 仍是离线基线。显式条目的未设置字段只从同 `id` 的已安装静态模型继承，因此显式列表由部署拥有，不会随远端刷新变化。一旦声明非空列表，该路由要继续服务的每个模型就都必须出现在其中，条目只写一个 `id` 也足够。可配置的条目字段是 `id`、`name`、`contextWindow`、`maxTokens`、`input`、`reasoningEfforts` 与 `compat`。定价没有 harness 消费方，因此沿用所选 catalog 条目或直接缺席。
+profile 的非空 `models` 列表从当前实时 catalog 中选择内置路由要服务的模型；省略它（或留空）则服务完整 catalog。来自 `pi.dev` 的完整描述符按 id 替换匹配的已安装条目，也可新增模型；已安装 catalog 仍是离线基线。每个选中条目继承其当前描述符，包括 wire protocol 与 endpoint，`id` 之外的字段覆盖该描述符。一旦声明非空列表，该路由要继续服务的每个模型就都必须出现在其中，条目只写一个 `id` 也足够。手工声明路由仍通过 `models`、路由级 `api` 与 `baseURL` 以及配置的容量回退值定义自己的 catalog。可配置的条目字段是 `id`、`name`、`contextWindow`、`maxTokens`、`input`、`reasoningEfforts` 与 `compat`。定价没有 harness 消费方，因此沿用所选 catalog 条目或直接缺席。
 
-`modelOverrides` 无需这份代价就能就地重塑单个实时 catalog 模型：每个键是一个 catalog 模型 id，每个值可写 `models` 条目接受的同一批字段，只是 id 落在键上，而 catalog 的其余部分原样继续服务。发现操作缓存描述符后，覆盖也可点名仅远端存在的 id。一条覆盖会成为该 catalog 条目的配置，因此容量、档位与 compat 沿与 `models` 条目相同的路径解析，携带相同诊断与请求默认值语义。覆盖只在服务实时 catalog 的已安装路由上有意义；与非空 `models` 列表并存或落在手工声明路由上的覆盖会被拒绝而非跳过。
+`modelOverrides` 无需选择子集就能就地重塑单个实时 catalog 模型：每个键是一个 catalog 模型 id，每个值可写 `models` 条目接受的同一批字段，只是 id 落在键上，而 catalog 的其余部分原样继续服务。发现操作缓存描述符后，覆盖也可点名仅远端存在的 id。一条覆盖会成为该 catalog 条目的配置，因此容量、档位与 compat 沿与 `models` 条目相同的路径解析，携带相同诊断与请求默认值语义。覆盖只在服务实时 catalog 的已安装路由上有意义；与非空 `models` 列表并存或落在手工声明路由上的覆盖会被拒绝而非跳过。
 
 ### 按模型的推理（reasoning）档位
 
@@ -207,7 +207,7 @@ pi-ai 事件会变为 harness 推理、文本、工具调用、usage 与 finish 
 - **settings 能新增或覆盖路由，但不能移除组合路由**：用户层合并在组合 `base` 之上，因此删除 `cordis.yml` 提供的提供方属于组合变更；对该 namespace 执行 `replace` 只会重置用户层。
 - **分层合并对字典键没有删除语义**：settings seam 把组合 `base` 与用户层按键递归合并，因此 base 声明的某个 `reasoningEfforts` 档位、`modelOverrides` 条目或 `compat` 字段，用户层只能覆盖、无法移除——而 `reasoningEfforts` 里缺席本身*就是*语义（「不提供」），于是 base 声明过的档位会一直被提供。只有 `cordis.yml` entry config 为用户层正在编辑的同一模型声明了按模型推理字段才会触发；受支持的姿态是把这些字段留给 settings 文档（shipped 组合以 dormant 方式挂载该适配器），且 `models` 列表是数组、整体替换，这是带内的解决办法。
 - **`headers` 可能承载一条脱敏器看不见的凭据**：profile 的 `headers` 是纯字符串字典，因此设在其中的 `Authorization` 或 `api-key` 会被脱敏后的 `describe()` 原样返回，并被任何配置 UI 渲染出来。请把凭据存为 `apiKeyEnv` 引用；把该字典整体改为只写与其余[协议边界工作](../llm/README.zh.md#known-limitations-and-deferred-work)一并暂缓。
-- **内置实时 catalog 信任 `pi.dev` 描述符**：响应在发布前受大小限制并经过校验，但其模型元数据会成为下一次请求快照。必须拒绝远端新增或元数据变化的路由，应使用由部署拥有的显式非空 `models` 列表。
+- **内置实时 catalog 信任 `pi.dev` 描述符**：响应在发布前受大小限制并经过校验，但其模型元数据会成为下一次请求快照。非空 `models` 列表只收窄路由服务哪些当前描述符，并不冻结元数据。必须由部署拥有每份描述符时，应使用显式声明路由并给出路由协议与 endpoint。
 - **每条路由只有一种协议格式**：`api` 作用于整条路由，因此混合协议的 catalog 路由（跨 Responses 与 Chat Completions 的 OpenAI 式 catalog）无法承载另一种协议的模型，向这类路由添加它未描述的模型必须点名 `api` 并把全部模型一起迁过去。把该提供方拆成两个路由键是变通办法。
 - **模态声明不经验证**：没有任何环节会去询问端点接受什么，因此声明了网关并不提供的 `image` 的模型会在 prompt 准入后被提供方拒绝。持久图片会留在历史中，同一个错误声明的模型可能再次失败。系统仍允许切换到纯文本模型，因为共享 LLM 运行时会在该次请求中把图片引用投影为稳定文本。
 - **未认证路由取决于其协议**：不点名凭据会让路由解析为「已配置但无密钥」，但 pi-ai 的 OpenAI 兼容实现仍要求 API key 或 `Authorization` 标头，因此无鉴权的本地服务需要一个由 `apiKeyEnv` 引用的占位凭据，或在 `headers` 中给出 `Authorization` 条目。

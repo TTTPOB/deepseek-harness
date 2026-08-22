@@ -1027,18 +1027,18 @@ export interface PiAiProviderProfile {
   baseURL?: string
   /**
    * This route's model catalog. Omission or an empty list serves the current
-   * live catalog for an installed route; an explicit list replaces it and
-   * resolves its unset fields against the installed static model of the same
-   * id. Hand-declared routes must list their models explicitly.
+   * live catalog for an installed route; an explicit list selects models from
+   * that catalog, and fields beside `id` override the selected descriptors.
+   * Hand-declared routes must list their models explicitly.
    */
   models?: PiAiModelProfile[]
   /**
    * Live-catalog customizations by model id: each entry reshapes that one
    * model with the same fields a {@link models} entry takes, while the rest
    * of the live catalog keeps serving untouched. Only meaningful on an
-   * installed route with no non-empty `models` list — an explicit list uses
-   * the installed static catalog and rejects overrides rather than inheriting
-   * remote additions.
+   * installed route with no non-empty `models` list — an explicit list already
+   * carries the same overrides on its selected entries and rejects this
+   * parallel dict rather than merging two configuration sources.
    */
   modelOverrides?: Record<string, PiAiModelOverride>
   /**

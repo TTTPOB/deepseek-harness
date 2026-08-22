@@ -14,7 +14,7 @@ Status: implemented
 
 `llm-pi-ai` 拥有一个隔离的 pi-ai `Models` 集合，用于管理内置 catalog。每个已安装提供方都由一个刷新实现包装，访问 `https://pi.dev/api/models/providers/<provider>`；经过校验的完整描述符按 id 替换匹配静态条目，并追加仅远端存在的条目。请求提供方绝不进入这个可变集合。每次列举、解析和流操作仍捕获一份不可变适配器快照，成功发布只会使下一次操作使用的已记忆 profiles 失效。
 
-提供方缓存通过 `FileModelsStore` 存放在 `$DSH_HOME` 下。它使用按提供方加锁的原子写入和仅所有者权限，持久化 models、`checkedAt`、ETag 与 Last-Modified。插件启动时在注册 settings namespace 之前恢复每个已安装提供方的缓存，全程不联网；原因是 settings 会同步校验持久化分节，而 `modelOverrides` 可能点名仅远端存在的模型。未设置非空 `models` 列表的已配置内置路由会定期刷新；`catalogRefreshIntervalMs` 同时作为新鲜度 TTL 与刷新周期，默认五分钟。非空显式列表只针对已安装静态 catalog 解析，绝不接收远端新增或元数据变化。
+提供方缓存通过 `FileModelsStore` 存放在 `$DSH_HOME` 下。它使用按提供方加锁的原子写入和仅所有者权限，持久化 models、`checkedAt`、ETag 与 Last-Modified。插件启动时在注册 settings namespace 之前恢复每个已安装提供方的缓存，全程不联网；原因是 settings 会同步校验持久化分节，而配置选择或 `modelOverrides` 可能点名仅远端存在的模型。每条已配置内置路由都会定期刷新；`catalogRefreshIntervalMs` 同时作为新鲜度 TTL 与刷新周期，默认五分钟。非空显式列表从当前 catalog 中选择模型，并按[模型选择决定](../bug-fix/2026-08-22-live-catalog-model-selection.zh.md)继承描述符变化。
 
 刷新工作按提供方共享，并按强度排序：缓存恢复、普通 TTL 刷新、强制刷新。较强请求若在较弱工作期间抵达，会在其后执行，而不是沿用较弱结果。调用方取消只停止自身等待；配置替换与插件释放会中止共享操作。替换提供方包装器会创建新的 pi-ai 发布代际，因此迟到响应无法发布到替代项中。
 
@@ -29,6 +29,6 @@ Status: implemented
 
 ## Consequences
 
-未显式设置模型的内置路由会跟随远端新增与更正描述符，同时保留静态离线基线。显式列表仍是确定且由部署拥有的替代项。启动在 settings 注册前为每个已安装提供方执行有界本地读取，不发起 catalog 网络请求。固定公开端点无需提供方凭据；无法信任远端元数据的部署可通过非空 `models` 列表逐路由退出。
+内置路由会跟随远端新增与更正描述符，同时保留静态离线基线；非空 `models` 列表会收窄所服务的描述符，但不会冻结其元数据。启动在 settings 注册前为每个已安装提供方执行有界本地读取，不发起 catalog 网络请求。固定公开端点无需提供方凭据；无法信任远端元数据的部署应使用由部署拥有协议、endpoint 与模型条目的手工声明路由。
 
 `tests/models-store.spec.ts` 与 `tests/remote-catalog.spec.ts` 钉住持久化、条件 HTTP、校验、有界响应和陈旧代际发布。`tests/catalog-manager.spec.ts` 钉住恢复、刷新排序、取消、活跃路由周期、配置替换与释放。`tests/catalog.spec.ts` 钉住不可变请求快照、显式列表优先级、实时覆盖与持久化仅远端覆盖的启动。`tests/discovery.spec.ts` 钉住休眠提供方强制刷新、失败保留与未改变的手工声明端点路径。

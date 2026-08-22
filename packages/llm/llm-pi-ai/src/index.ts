@@ -138,14 +138,12 @@ function directoryEntries(
   return [...entries.values()]
 }
 
-/** Select configured builtin routes whose model list inherits the live catalog. */
+/** Select configured builtin routes that resolve descriptors from the live catalog. */
 function activeBuiltinProviders(
-  providers: Readonly<Record<string, { models?: readonly unknown[] }>> | undefined,
+  providers: Readonly<Record<string, unknown>> | undefined,
 ): ReadonlySet<string> {
   const installed = new Set(catalogProviderIds())
-  return new Set(Object.entries(providers ?? {})
-    .filter(([provider, profile]) => installed.has(provider) && (profile.models === undefined || profile.models.length === 0))
-    .map(([provider]) => provider))
+  return new Set(Object.keys(providers ?? {}).filter(provider => installed.has(provider)))
 }
 
 /**

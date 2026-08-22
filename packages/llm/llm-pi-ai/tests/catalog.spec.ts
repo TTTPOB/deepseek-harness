@@ -737,7 +737,7 @@ describe('modelOverrides', () => {
   it('refuses every override that lands nowhere instead of skipping it', () => {
     expect(() => resolveProfiles({
       deepseek: { modelOverrides: { 'no-such-model': { name: 'ghost' } } },
-    })).toThrow(/which the installed catalog does not describe/)
+    })).toThrow(/which the current catalog does not describe/)
     expect(() => resolveProfiles({
       'acme-gateway': {
         api: 'openai-completions',
@@ -1180,17 +1180,29 @@ describe('resolution snapshots', () => {
     expect(server.requests).toHaveLength(2)
   })
 
-  it('uses static catalog metadata for explicit models while live defaults include remote additions', () => {
+  it('selects explicit models from live catalog metadata', () => {
     const installed = getBuiltinModels('deepseek')[0]
     if (installed === undefined) throw new Error('the installed catalog ships no deepseek model')
     const live = [
       { ...installed, name: 'Remote metadata' },
-      { ...installed, id: 'remote-only', name: 'Remote addition' },
+      {
+        ...installed,
+        id: 'remote-only',
+        name: 'Remote addition',
+        api: 'openai-responses' as const,
+        baseUrl: 'https://remote.test/v1',
+      },
     ]
-    const resolved = resolveProfiles({ deepseek: { models: [{ id: installed.id }] } }, () => live)
+    const resolved = resolveProfiles({
+      deepseek: { models: [{ id: 'remote-only', name: 'Selected remote' }] },
+    }, () => live)
     const models = resolved.get('deepseek')?.piProvider.getModels() ?? []
-    expect(models.map(model => model.id)).toEqual([installed.id])
-    expect(models[0]?.name).toBe(installed.name)
+    expect(models).toEqual([expect.objectContaining({
+      id: 'remote-only',
+      name: 'Selected remote',
+      api: 'openai-responses',
+      baseUrl: 'https://remote.test/v1',
+    })])
   })
 
   it('applies modelOverrides to live models without requiring a static id', () => {
