@@ -2,7 +2,7 @@
 
 [English](installing-and-maintaining-daily-driver.md) | 中文
 
-本教程从源码 checkout 安装 `daily-driver` 分支，并维护其补丁版 `@earendil-works/pi-ai` Release。它不会生成可移植的 deploy 目录：monorepo 当前的 `pnpm deploy` 输出会遗漏传递性的 workspace peer，因此在 packed-install 路径能够包含完整运行时依赖图之前，应从已 checkout 的 workspace 运行本分支。
+本教程通过三个 profile-local package override 或源码 checkout 安装 `daily-driver`，并维护其补丁版 `@earendil-works/pi-ai` Release。package Release 不生成可移植 deploy 目录：已有的兼容 DSH 安装负责提供未修改的运行时包与共享 peer。
 
 ## 前置条件
 
@@ -10,6 +10,45 @@
 - 通过 Corepack 启用的 pnpm；仓库固定使用 `pnpm@11.7.0`。
 - Git，以及访问 GitHub Releases 和 npm registry 的网络连接。
 - 仅在调用真实提供方时才需要提供方 API key。凭据应放在环境变量或根目录 `.env` 中，绝不能写入受版本控制的配置。
+
+## 安装 profile package Release
+
+[`TTTPOB/deepseek-harness`](https://github.com/TTTPOB/deepseek-harness) 的 daily-driver Release 携带三个改动过的包。每个需要该分支行为的 profile 都应安装全部三个包：`session` 与 `token-meter` 是一组兼容组合，`llm-pi-ai` 则提供实时模型目录和补丁版 Pi AI 集成。
+
+1. 下载最新 Release asset 并验证校验和：
+
+```sh
+release_dir="$(mktemp -d)"
+tag=$(gh release list --repo TTTPOB/deepseek-harness --limit 100 --json tagName \
+  --jq 'map(select(.tagName | startswith("daily-driver-v")))[0].tagName // empty')
+test -n "$tag"
+gh release download "$tag" --repo TTTPOB/deepseek-harness \
+  --pattern 'deepseek-ai-dsh-*.tgz' \
+  --pattern SHA256SUMS \
+  --dir "$release_dir"
+(cd "$release_dir" && sha256sum -c SHA256SUMS)
+```
+
+2. 通过官方 profile reconciliation 安装三个同名包：
+
+```sh
+dsh plugin --profile web add \
+  "$release_dir"/deepseek-ai-dsh-session-*.tgz \
+  "$release_dir"/deepseek-ai-dsh-token-meter-*.tgz \
+  "$release_dir"/deepseek-ai-dsh-llm-pi-ai-*.tgz
+```
+
+命令输出的三条 `declares no dsh.bundle` warning 属于预期行为：这些包替换已有 base-bundle row，不会新增 patch layer。命令必须使用目标 profile 记录的 pnpm 版本；本工作区的 `web` profile 使用 `pnpm@10.13.1`。
+
+3. 重启 DSH Host，然后确认这些依赖仍已安装：
+
+```sh
+dsh plugin --profile web why @deepseek-ai/dsh-session
+dsh plugin --profile web why @deepseek-ai/dsh-token-meter
+dsh plugin --profile web why @deepseek-ai/dsh-llm-pi-ai
+```
+
+其它 profile 也需要 override 时，应使用相应 profile 名重复安装。回退时，通过 `dsh plugin --profile <name> remove` 同时移除三个包名；现有 row 随后会重新解析到该 DSH 安装自带的包。安装完成后删除临时下载目录。
 
 ## 从 checkout 安装
 

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/cookbook/installing-and-maintaining-daily-driver.md
-installing-and-maintaining-daily-driver.md: 24eee815dbc8732be24588fd3c51d723575c4c3d
-installing-and-maintaining-daily-driver.zh.md: 22ee4a0c7e70ac82907bce540ee23458480fbc67
+installing-and-maintaining-daily-driver.md: c1bcac40bfc4eb8519c31dbb35162572c343fddf
+installing-and-maintaining-daily-driver.zh.md: 01daaca009b6f2fe844d7fb4063dd7e15bcb548a

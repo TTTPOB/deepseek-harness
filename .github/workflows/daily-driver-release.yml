@@ -1,0 +1,413 @@
+# Merge upstream into daily-driver and publish the three profile-local package
+# overrides. The package tarballs keep their official names so the profile's
+# node_modules takes precedence over the installation fallback without changing
+# the base bundle patch.
+name: Daily-driver sync and package release
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-driver-sync-and-release
+  cancel-in-progress: false
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    name: Merge, pack, and verify candidate
+    runs-on: ubuntu-24.04
+    outputs:
+      before: ${{ steps.plan.outputs.before }}
+      commit: ${{ steps.plan.outputs.commit }}
+      llm_asset: ${{ steps.plan.outputs.llm_asset }}
+      merged: ${{ steps.plan.outputs.merged }}
+      release_exists: ${{ steps.plan.outputs.release_exists }}
+      session_asset: ${{ steps.plan.outputs.session_asset }}
+      tag: ${{ steps.plan.outputs.tag }}
+      token_meter_asset: ${{ steps.plan.outputs.token_meter_asset }}
+      upstream: ${{ steps.plan.outputs.upstream }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: daily-driver
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Merge upstream into candidate
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch --no-tags upstream master
+
+          before=$(git rev-parse HEAD)
+          upstream=$(git rev-parse upstream/master)
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            merged=false
+          else
+            git merge --no-edit upstream/master
+            merged=true
+          fi
+
+          commit=$(git rev-parse HEAD)
+          short=${commit:0:10}
+          version=$(node -p 'require("./apps/cli/package.json").version')
+          tag="daily-driver-v${version}-g${short}"
+          session_asset="deepseek-ai-dsh-session-${version}.tgz"
+          token_meter_asset="deepseek-ai-dsh-token-meter-${version}.tgz"
+          llm_asset="deepseek-ai-dsh-llm-pi-ai-${version}.tgz"
+
+          tag_error="$RUNNER_TEMP/tag-error"
+          if tag_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>"$tag_error"); then
+            tag_type=$(jq -r '.object.type' <<<"$tag_ref")
+            tag_commit=$(jq -r '.object.sha' <<<"$tag_ref")
+            if [ "$tag_type" != commit ] || [ "$tag_commit" != "$commit" ]; then
+              echo "::error::Tag $tag exists but does not directly reference $commit"
+              exit 1
+            fi
+          elif ! grep -q '(HTTP 404)' "$tag_error"; then
+            cat "$tag_error" >&2
+            exit 1
+          fi
+
+          release_error="$RUNNER_TEMP/release-error"
+          if release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" 2>"$release_error"); then
+            if [ "$(jq -r '.tag_name' <<<"$release")" != "$tag" ] \
+              || [ "$(jq -r '.draft' <<<"$release")" != false ] \
+              || [ "$(jq '.assets | length' <<<"$release")" -ne 4 ]; then
+              echo "::error::Release $tag has an inconsistent tag, state, or asset count"
+              exit 1
+            fi
+            for asset in "$session_asset" "$token_meter_asset" "$llm_asset" SHA256SUMS; do
+              if [ "$(jq --arg name "$asset" '[.assets[] | select(.name == $name)] | length' <<<"$release")" -ne 1 ]; then
+                echo "::error::Release $tag does not contain exactly one $asset"
+                exit 1
+              fi
+            done
+            release_exists=true
+          elif grep -q '(HTTP 404)' "$release_error"; then
+            release_exists=false
+          else
+            cat "$release_error" >&2
+            exit 1
+          fi
+
+          echo "before=$before" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "llm_asset=$llm_asset" >> "$GITHUB_OUTPUT"
+          echo "merged=$merged" >> "$GITHUB_OUTPUT"
+          echo "release_exists=$release_exists" >> "$GITHUB_OUTPUT"
+          echo "session_asset=$session_asset" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "token_meter_asset=$token_meter_asset" >> "$GITHUB_OUTPUT"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+
+      - name: Configure global pnpm store
+        id: pnpm-store
+        run: |
+          store_root="$HOME/.local/share/pnpm/store"
+          echo "PNPM_CONFIG_STORE_DIR=$store_root" >> "$GITHUB_ENV"
+          store_path=$(PNPM_CONFIG_STORE_DIR="$store_root" pnpm store path --silent)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify source and documentation
+        run: |
+          pnpm exec vitest run \
+            packages/core/session/tests/session.spec.ts \
+            packages/llm/token-meter/tests/token-meter.spec.ts \
+            packages/llm/llm-pi-ai/tests
+          pnpm run typecheck
+          pnpm run doc-sync
+          pnpm run verify-runtime-closure
+
+      - name: Build and inspect publishable packages
+        run: |
+          pnpm run build
+          pnpm run publint
+
+      - name: Pack daily-driver overrides
+        env:
+          LLM_ASSET: ${{ steps.plan.outputs.llm_asset }}
+          SESSION_ASSET: ${{ steps.plan.outputs.session_asset }}
+          TOKEN_METER_ASSET: ${{ steps.plan.outputs.token_meter_asset }}
+        run: |
+          set -euo pipefail
+          destination="$PWD/dist/daily-driver"
+          mkdir -p "$destination"
+          pnpm --dir packages/core/session pack --pack-destination "$destination"
+          pnpm --dir packages/llm/token-meter pack --pack-destination "$destination"
+          pnpm --dir packages/llm/llm-pi-ai pack --pack-destination "$destination"
+          for asset in "$SESSION_ASSET" "$TOKEN_METER_ASSET" "$LLM_ASSET"; do
+            test -f "$destination/$asset"
+          done
+          (cd "$destination" && sha256sum "$SESSION_ASSET" "$TOKEN_METER_ASSET" "$LLM_ASSET" > SHA256SUMS)
+
+      - name: Verify profile-local package overrides
+        env:
+          LLM_ASSET: ${{ steps.plan.outputs.llm_asset }}
+          SESSION_ASSET: ${{ steps.plan.outputs.session_asset }}
+          TOKEN_METER_ASSET: ${{ steps.plan.outputs.token_meter_asset }}
+        run: |
+          set -euo pipefail
+          test_home="$RUNNER_TEMP/dsh-home"
+          shim="$RUNNER_TEMP/pnpm10-shim"
+          mkdir -p "$shim"
+          cat > "$shim/pnpm" <<'SH'
+          #!/bin/sh
+          exec corepack pnpm@10.13.1 "$@"
+          SH
+          chmod +x "$shim/pnpm"
+
+          DSH_HOME="$test_home" PATH="$shim:$PATH" \
+            node --import tsx/esm apps/cli/src/bin.ts plugin --profile web add \
+              "$PWD/dist/daily-driver/$SESSION_ASSET" \
+              "$PWD/dist/daily-driver/$TOKEN_METER_ASSET" \
+              "$PWD/dist/daily-driver/$LLM_ASSET"
+          DSH_HOME="$test_home" node --import tsx/esm apps/cli/src/bin.ts web --help
+
+          DSH_PROFILE_DIR="$test_home/profiles/web" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          import { createRequire } from 'node:module'
+          import { join, sep } from 'node:path'
+          import { pathToFileURL } from 'node:url'
+
+          const profile = process.env.DSH_PROFILE_DIR
+          if (profile === undefined) throw new Error('DSH_PROFILE_DIR is required')
+          const require = createRequire(join(profile, 'cordis.yml'))
+          const modulesRoot = join(profile, 'node_modules') + sep
+          const load = async (name) => {
+            const entry = require.resolve(name)
+            if (!entry.startsWith(modulesRoot)) throw new Error(`${name} resolved outside the profile: ${entry}`)
+            return { entry, module: await import(pathToFileURL(entry).href) }
+          }
+
+          const session = await load('@deepseek-ai/dsh-session')
+          if (typeof session.module.Session?.prototype?.eventAt !== 'function') {
+            throw new Error('profile session package does not expose Session.eventAt()')
+          }
+          const meter = await load('@deepseek-ai/dsh-token-meter')
+          if (typeof meter.module.TokenMeter?.prototype?._consumeEvent !== 'function') {
+            throw new Error('profile token-meter package lacks incremental consumption')
+          }
+          const pi = await load('@deepseek-ai/dsh-llm-pi-ai')
+          if (!readFileSync(pi.entry, 'utf8').includes('llm-pi-ai/models-v1')) {
+            throw new Error('profile llm-pi-ai package lacks live catalog persistence')
+          }
+          NODE
+
+      - name: Bundle verified merge commit
+        if: steps.plan.outputs.merged == 'true'
+        env:
+          BEFORE: ${{ steps.plan.outputs.before }}
+        run: |
+          mkdir -p dist/publish-candidate
+          git bundle create dist/publish-candidate/candidate.bundle HEAD "^$BEFORE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-driver-packages-${{ steps.plan.outputs.commit }}
+          path: dist/daily-driver/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.merged == 'true'
+        with:
+          name: candidate-${{ steps.plan.outputs.commit }}
+          path: dist/publish-candidate/candidate.bundle
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish verified candidate
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: daily-driver
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: daily-driver-packages-${{ needs.build.outputs.commit }}
+          path: dist/daily-driver
+
+      - uses: actions/download-artifact@v4
+        if: needs.build.outputs.merged == 'true'
+        with:
+          name: candidate-${{ needs.build.outputs.commit }}
+          path: dist/publish-candidate
+
+      - name: Import verified candidate
+        env:
+          BEFORE: ${{ needs.build.outputs.before }}
+          COMMIT: ${{ needs.build.outputs.commit }}
+          MERGED: ${{ needs.build.outputs.merged }}
+        run: |
+          set -euo pipefail
+          current=$(git rev-parse HEAD)
+          if [ "$current" != "$BEFORE" ]; then
+            echo "::error::daily-driver moved from $BEFORE to $current while the candidate built"
+            exit 1
+          fi
+          if [ "$MERGED" = true ]; then
+            git fetch dist/publish-candidate/candidate.bundle HEAD:refs/heads/verified-candidate
+          else
+            git branch verified-candidate HEAD
+          fi
+          actual=$(git rev-parse verified-candidate)
+          if [ "$actual" != "$COMMIT" ]; then
+            echo "::error::Verified candidate is $actual, expected $COMMIT"
+            exit 1
+          fi
+
+      - name: Push merged daily-driver
+        if: needs.build.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git
+          git push origin verified-candidate:daily-driver
+
+      - name: Verify published branch tip
+        env:
+          COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          remote=$(git ls-remote origin refs/heads/daily-driver | cut -f1)
+          if [ "$remote" != "$COMMIT" ]; then
+            echo "::error::daily-driver is $remote before release publication, expected $COMMIT"
+            exit 1
+          fi
+
+      - name: Verify existing immutable release
+        if: needs.build.outputs.release_exists == 'true'
+        env:
+          COMMIT: ${{ needs.build.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          LLM_ASSET: ${{ needs.build.outputs.llm_asset }}
+          SESSION_ASSET: ${{ needs.build.outputs.session_asset }}
+          TAG: ${{ needs.build.outputs.tag }}
+          TOKEN_METER_ASSET: ${{ needs.build.outputs.token_meter_asset }}
+        run: |
+          set -euo pipefail
+          tag_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")
+          if [ "$(jq -r '.object.type' <<<"$tag_ref")" != commit ] \
+            || [ "$(jq -r '.object.sha' <<<"$tag_ref")" != "$COMMIT" ]; then
+            echo "::error::Tag $TAG no longer directly references $COMMIT"
+            exit 1
+          fi
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")
+          if [ "$(jq -r '.tag_name' <<<"$release")" != "$TAG" ] \
+            || [ "$(jq -r '.draft' <<<"$release")" != false ] \
+            || [ "$(jq '.assets | length' <<<"$release")" -ne 4 ]; then
+            echo "::error::Release $TAG changed while the candidate built"
+            exit 1
+          fi
+          for asset in "$SESSION_ASSET" "$TOKEN_METER_ASSET" "$LLM_ASSET" SHA256SUMS; do
+            if [ "$(jq --arg name "$asset" '[.assets[] | select(.name == $name)] | length' <<<"$release")" -ne 1 ]; then
+              echo "::error::Release $TAG does not contain exactly one $asset"
+              exit 1
+            fi
+          done
+          existing="$RUNNER_TEMP/existing-release"
+          mkdir -p "$existing"
+          gh release download "$TAG" --dir "$existing" --pattern '*.tgz' --pattern SHA256SUMS
+          (cd "$existing" && sha256sum -c SHA256SUMS)
+          for artifact in dist/daily-driver/*; do
+            cmp "$artifact" "$existing/$(basename "$artifact")"
+          done
+
+      - name: Create immutable GitHub Release
+        if: needs.build.outputs.release_exists == 'false'
+        env:
+          COMMIT: ${{ needs.build.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          UPSTREAM: ${{ needs.build.outputs.upstream }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag_error="$RUNNER_TEMP/tag-error"
+          if tag_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" 2>"$tag_error"); then
+            tag_type=$(jq -r '.object.type' <<<"$tag_ref")
+            tag_commit=$(jq -r '.object.sha' <<<"$tag_ref")
+            if [ "$tag_type" != commit ] || [ "$tag_commit" != "$COMMIT" ]; then
+              echo "::error::Tag $TAG exists but does not directly reference $COMMIT"
+              exit 1
+            fi
+          elif grep -q '(HTTP 404)' "$tag_error"; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$COMMIT" >/dev/null
+          else
+            cat "$tag_error" >&2
+            exit 1
+          fi
+          tag_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")
+          if [ "$(jq -r '.object.type' <<<"$tag_ref")" != commit ] \
+            || [ "$(jq -r '.object.sha' <<<"$tag_ref")" != "$COMMIT" ]; then
+            echo "::error::Tag $TAG does not directly reference $COMMIT before publication"
+            exit 1
+          fi
+
+          release_error="$RUNNER_TEMP/release-error"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > /dev/null 2>"$release_error"; then
+            echo "::error::Release $TAG appeared while the candidate built; rerun to verify its bytes"
+            exit 1
+          elif ! grep -q '(HTTP 404)' "$release_error"; then
+            cat "$release_error" >&2
+            exit 1
+          fi
+
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Profile-local daily-driver overrides for the three modified DSH packages.
+
+          - DSH version: \`$VERSION\`
+          - daily-driver commit: \`$COMMIT\`
+          - upstream/master commit: \`$UPSTREAM\`
+
+          Verify \`SHA256SUMS\`, then install all three tarballs into each target profile with \`dsh plugin --profile <name> add <tarballs...>\`. The plain-dependency warnings are expected; restart the Host after installation.
+          EOF
+          gh release create "$TAG" \
+            dist/daily-driver/*.tgz \
+            dist/daily-driver/SHA256SUMS \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --latest

@@ -2,7 +2,7 @@
 
 English | [中文](installing-and-maintaining-daily-driver.zh.md)
 
-This tutorial installs the `daily-driver` branch from a source checkout and maintains its patched `@earendil-works/pi-ai` release. It does not produce a portable deployed directory: the monorepo's current `pnpm deploy` output omits transitive workspace peers, so run this branch from its checked-out workspace until the packed-install path supports the complete runtime dependency graph.
+This tutorial installs `daily-driver` either as three profile-local package overrides or from a source checkout, and maintains its patched `@earendil-works/pi-ai` release. The package release avoids a portable deployed directory: an existing compatible DSH installation supplies the unchanged runtime packages and shared peers.
 
 ## Prerequisites
 
@@ -10,6 +10,45 @@ This tutorial installs the `daily-driver` branch from a source checkout and main
 - Corepack-enabled pnpm; the repository pins `pnpm@11.7.0`.
 - Git and network access to GitHub Releases and the npm registry.
 - A provider API key only when exercising a real provider. Keep credentials in the environment or the root `.env`, never in tracked configuration.
+
+## Install the profile package release
+
+The [`TTTPOB/deepseek-harness`](https://github.com/TTTPOB/deepseek-harness) daily-driver Release carries the three changed packages. Install all three into every profile that needs the branch behavior: `session` and `token-meter` are one compatible pair, while `llm-pi-ai` supplies the live model catalogs and patched Pi AI integration.
+
+1. Download the latest Release assets and verify their checksums:
+
+```sh
+release_dir="$(mktemp -d)"
+tag=$(gh release list --repo TTTPOB/deepseek-harness --limit 100 --json tagName \
+  --jq 'map(select(.tagName | startswith("daily-driver-v")))[0].tagName // empty')
+test -n "$tag"
+gh release download "$tag" --repo TTTPOB/deepseek-harness \
+  --pattern 'deepseek-ai-dsh-*.tgz' \
+  --pattern SHA256SUMS \
+  --dir "$release_dir"
+(cd "$release_dir" && sha256sum -c SHA256SUMS)
+```
+
+2. Install the three same-name packages through official profile reconciliation:
+
+```sh
+dsh plugin --profile web add \
+  "$release_dir"/deepseek-ai-dsh-session-*.tgz \
+  "$release_dir"/deepseek-ai-dsh-token-meter-*.tgz \
+  "$release_dir"/deepseek-ai-dsh-llm-pi-ai-*.tgz
+```
+
+The three `declares no dsh.bundle` warnings are expected: these packages replace existing base-bundle rows and do not add patch layers. The command must run with the pnpm version recorded by the target profile; this workspace's `web` profile uses `pnpm@10.13.1`.
+
+3. Restart the DSH Host, then confirm the dependencies remain installed:
+
+```sh
+dsh plugin --profile web why @deepseek-ai/dsh-session
+dsh plugin --profile web why @deepseek-ai/dsh-token-meter
+dsh plugin --profile web why @deepseek-ai/dsh-llm-pi-ai
+```
+
+Repeat the installation for another profile name when that profile also needs the overrides. To roll back, remove all three package names through `dsh plugin --profile <name> remove`; the existing rows then resolve to that DSH installation's packages again. Remove the temporary download directory after installation.
 
 ## Install from the checkout
 
