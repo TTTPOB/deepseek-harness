@@ -32,13 +32,20 @@ gh release download "$tag" --repo TTTPOB/deepseek-harness \
 2. Install the three same-name packages through official profile reconciliation:
 
 ```sh
+session_url=$(gh release view "$tag" --repo TTTPOB/deepseek-harness --json assets \
+  --jq '.assets[] | select(.name | startswith("deepseek-ai-dsh-session-")) | .url')
+token_meter_url=$(gh release view "$tag" --repo TTTPOB/deepseek-harness --json assets \
+  --jq '.assets[] | select(.name | startswith("deepseek-ai-dsh-token-meter-")) | .url')
+llm_url=$(gh release view "$tag" --repo TTTPOB/deepseek-harness --json assets \
+  --jq '.assets[] | select(.name | startswith("deepseek-ai-dsh-llm-pi-ai-")) | .url')
+test -n "$session_url" && test -n "$token_meter_url" && test -n "$llm_url"
 dsh plugin --profile web add \
-  "$release_dir"/deepseek-ai-dsh-session-*.tgz \
-  "$release_dir"/deepseek-ai-dsh-token-meter-*.tgz \
-  "$release_dir"/deepseek-ai-dsh-llm-pi-ai-*.tgz
+  "$session_url" \
+  "$token_meter_url" \
+  "$llm_url"
 ```
 
-The three `declares no dsh.bundle` warnings are expected: these packages replace existing base-bundle rows and do not add patch layers. The command must run with the pnpm version recorded by the target profile; this workspace's `web` profile uses `pnpm@10.13.1`.
+The three `declares no dsh.bundle` warnings are expected: these packages replace existing base-bundle rows and do not add patch layers. The Release URLs remain in the profile manifest so later reconciliation can reinstall the packages after the checksum download directory is removed. The command must run with the pnpm version recorded by the target profile; this workspace's `web` profile uses `pnpm@10.13.1`.
 
 3. Restart the DSH Host, then confirm the dependencies remain installed:
 

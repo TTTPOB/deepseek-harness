@@ -32,13 +32,20 @@ gh release download "$tag" --repo TTTPOB/deepseek-harness \
 2. 通过官方 profile reconciliation 安装三个同名包：
 
 ```sh
+session_url=$(gh release view "$tag" --repo TTTPOB/deepseek-harness --json assets \
+  --jq '.assets[] | select(.name | startswith("deepseek-ai-dsh-session-")) | .url')
+token_meter_url=$(gh release view "$tag" --repo TTTPOB/deepseek-harness --json assets \
+  --jq '.assets[] | select(.name | startswith("deepseek-ai-dsh-token-meter-")) | .url')
+llm_url=$(gh release view "$tag" --repo TTTPOB/deepseek-harness --json assets \
+  --jq '.assets[] | select(.name | startswith("deepseek-ai-dsh-llm-pi-ai-")) | .url')
+test -n "$session_url" && test -n "$token_meter_url" && test -n "$llm_url"
 dsh plugin --profile web add \
-  "$release_dir"/deepseek-ai-dsh-session-*.tgz \
-  "$release_dir"/deepseek-ai-dsh-token-meter-*.tgz \
-  "$release_dir"/deepseek-ai-dsh-llm-pi-ai-*.tgz
+  "$session_url" \
+  "$token_meter_url" \
+  "$llm_url"
 ```
 
-命令输出的三条 `declares no dsh.bundle` warning 属于预期行为：这些包替换已有 base-bundle row，不会新增 patch layer。命令必须使用目标 profile 记录的 pnpm 版本；本工作区的 `web` profile 使用 `pnpm@10.13.1`。
+命令输出的三条 `declares no dsh.bundle` warning 属于预期行为：这些包替换已有 base-bundle row，不会新增 patch layer。Release URL 会保留在 profile manifest 中，因此删除校验和下载目录后，后续 reconciliation 仍可重新安装这些包。命令必须使用目标 profile 记录的 pnpm 版本；本工作区的 `web` profile 使用 `pnpm@10.13.1`。
 
 3. 重启 DSH Host，然后确认这些依赖仍已安装：
 
