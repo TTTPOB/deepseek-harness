@@ -349,8 +349,23 @@ jobs:
           mkdir -p "$existing"
           gh release download "$TAG" --dir "$existing" --pattern '*.tgz' --pattern SHA256SUMS
           (cd "$existing" && sha256sum -c SHA256SUMS)
-          for artifact in dist/daily-driver/*; do
-            cmp "$artifact" "$existing/$(basename "$artifact")"
+          (cd dist/daily-driver && sha256sum -c SHA256SUMS)
+
+          comparison="$RUNNER_TEMP/package-comparison"
+          for asset in "$SESSION_ASSET" "$TOKEN_METER_ASSET" "$LLM_ASSET"; do
+            candidate="$comparison/$asset/candidate"
+            published="$comparison/$asset/published"
+            mkdir -p "$candidate" "$published"
+            tar -xzf "dist/daily-driver/$asset" -C "$candidate"
+            tar -xzf "$existing/$asset" -C "$published"
+
+            # pnpm may reorder object keys while resolving workspace protocols.
+            jq -S . "$candidate/package/package.json" > "$candidate/package/package.json.canonical"
+            jq -S . "$published/package/package.json" > "$published/package/package.json.canonical"
+            rm "$candidate/package/package.json" "$published/package/package.json"
+            mv "$candidate/package/package.json.canonical" "$candidate/package/package.json"
+            mv "$published/package/package.json.canonical" "$published/package/package.json"
+            diff --recursive --no-dereference "$candidate" "$published"
           done
 
       - name: Create immutable GitHub Release
