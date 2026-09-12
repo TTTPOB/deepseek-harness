@@ -38,10 +38,12 @@
     "@deepseek-ai/dsh-timeout": "workspace:^"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-brand": "workspace:^",
-    "@deepseek-ai/dsh-util-values": "workspace:^",
+    "@deepseek-ai/dsh-atomic-write": "workspace:*",
+    "@deepseek-ai/dsh-brand": "workspace:*",
+    "@deepseek-ai/dsh-home-paths": "workspace:*",
+    "@deepseek-ai/dsh-util-values": "workspace:*",
     "@deepseek-ai/schemastery": "workspace:^",
-    "@earendil-works/pi-ai": "^0.85.1"
+    "@earendil-works/pi-ai": "https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.85.1-dsh.1/earendil-works-pi-ai-0.85.1-dsh.1.tgz"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",

@@ -65,7 +65,8 @@ import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
 import { authContextFrom, credentialStoreFrom } from './auth.ts'
 import { catalogProviderIds } from './catalog.ts'
-import { assertServiceable, Config, resolveProfiles } from './config.ts'
+import { assertServiceable, Config, resolveCatalogRefreshIntervalMs, resolveProfiles } from './config.ts'
+import { CatalogManager } from './catalog-manager.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { discoverModels } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
@@ -141,8 +142,20 @@ function directoryEntries(
   return [...entries.values()]
 }
 
-/** Register one generic pi-ai adapter for all configured provider routes. */
-export function apply(ctx: Context, config: Config): void {
+/**
+ * Restore cached catalogs and register the configured provider routes.
+ * @param ctx - plugin context owning registrations and refresh work.
+ * @param config - composition-layer defaults.
+ * @returns completion after local catalog restoration and registration.
+ */
+export async function apply(ctx: Context, config: Config): Promise<void> {
+  let onCatalogPublication = (): void => {}
+  const catalogManager = new CatalogManager(ctx, {
+    intervalMs: resolveCatalogRefreshIntervalMs(config.catalogRefreshIntervalMs),
+    onPublication: () => { onCatalogPublication() },
+  })
+  const installedProviders = new Set(catalogProviderIds())
+  const liveModels = (provider: string) => catalogManager.modelsFor(provider)
   let current: () => Config = () => config
   let lastRaw: Config | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
@@ -157,12 +170,17 @@ export function apply(ctx: Context, config: Config): void {
    */
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
     const raw = current()
+    catalogManager.configure(
+      resolveCatalogRefreshIntervalMs(raw.catalogRefreshIntervalMs),
+      new Set(Object.keys(raw.providers ?? {}).filter(provider => installedProviders.has(provider))),
+    )
     if (raw === lastRaw && memoized !== undefined) return memoized
-    const next = resolveProfiles(raw.providers, 'deferred')
+    const next = resolveProfiles(raw.providers, 'deferred', liveModels)
     lastRaw = raw
     memoized = next
     return next
   }
+  await catalogManager.restoreInstalled()
   profiles()
 
   const resolveApiKey = async (
@@ -257,10 +275,21 @@ export function apply(ctx: Context, config: Config): void {
   // except the stored credential and deployment-owned headers: the curated UI
   // accepts neither, so an already-configured route supplies both inside the
   // Host rather than widening the discovery request.
-  ctx.llm.registerModelDiscovery(NS, (request, signal) => discoverModels(
-    { ...request, ...signal === undefined ? {} : { signal } },
-    () => storedDiscoveryProfile(request.provider),
-  ))
+  ctx.llm.registerModelDiscovery(NS, async (request, signal) => {
+    if (request.provider !== undefined && installedProviders.has(request.provider)) {
+      const result = await catalogManager.refresh(request.provider, signal, true)
+      if (result.aborted) throw new LlmError('model discovery aborted by caller', 'ABORTED')
+      const failure = result.errors.get(request.provider)
+      if (failure !== undefined) {
+        throw new LlmError(`could not refresh pi-ai model catalog for provider "${request.provider}"`, 'DISCOVERY_FAILED', { cause: failure })
+      }
+      return liveModels(request.provider).map(({ id, name, contextWindow, maxTokens }) => ({ id, name, contextWindow, maxTokens }))
+    }
+    return discoverModels(
+      { ...request, ...signal === undefined ? {} : { signal } },
+      () => storedDiscoveryProfile(request.provider),
+    )
+  })
   // Route effects bind to this apply fiber via the stable `ctx` reference,
   // even when a swap runs inside the scoped settings callback below. A bare
   // mount (zero routes) is the dormant posture: nothing registers until a
@@ -292,15 +321,21 @@ export function apply(ctx: Context, config: Config): void {
   }
   ensureRegistrationFacts()
 
+  onCatalogPublication = (): void => {
+    lastRaw = undefined
+    memoized = undefined
+    ensureDirectory()
+  }
+
   ctx.inject(['settings'], (settingsCtx) => {
     let registering = true
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       validate: (value) => {
         // Stored catalog drift must not prevent registration of the repair UI.
         if (registering) {
-          resolveProfiles(value.providers, 'deferred')
+          resolveProfiles(value.providers, 'deferred', liveModels)
         } else {
-          assertServiceable(value, current())
+          assertServiceable(value, current(), liveModels)
         }
       },
       setSource: (source) => {

@@ -13,7 +13,7 @@
  * @module dsh-llm-pi-ai/config
  */
 
-import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
+import type { Api, CacheRetention, ChatTemplateKwargValue, Model, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
@@ -44,6 +44,9 @@ import { buildProvider, supportedProtocols } from './provider.ts'
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
+
+/** Default freshness TTL and refresh cadence for active builtin catalogs. */
+export const DEFAULT_CATALOG_REFRESH_INTERVAL_MS = 300_000
 
 /**
  * Default request-level bound on base64-encoded image payload. Every image in
@@ -219,6 +222,8 @@ export interface ResolvedPiAiProviderProfile
 
 /** Plugin configuration: the provider routes this instance owns. */
 export interface Config {
+  /** Builtin catalog freshness TTL and periodic refresh interval in milliseconds. */
+  catalogRefreshIntervalMs?: number
   /**
    * pi-ai provider routes, keyed by provider. An empty (or omitted) dict is
    * the dormant settings-driven posture: the adapter mounts with no routes
@@ -346,8 +351,22 @@ const profile = z.object({
 
 /** Runtime schema for {@link Config}. */
 export const Config: z<Config> = z.object({
+  catalogRefreshIntervalMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_CATALOG_REFRESH_INTERVAL_MS),
   providers: z.dict(profile).default({}),
 })
+
+/**
+ * Resolve the catalog timer interval for schema and direct callers.
+ * @param value - configured interval in milliseconds.
+ * @returns a valid interval or the default.
+ */
+export function resolveCatalogRefreshIntervalMs(value: number | undefined): number {
+  const interval = value ?? DEFAULT_CATALOG_REFRESH_INTERVAL_MS
+  if (!Number.isFinite(interval) || interval < 1 || interval > MAX_TIMER_DELAY_MS) {
+    throw new Error(`llm-pi-ai: catalogRefreshIntervalMs must be between 1 and ${MAX_TIMER_DELAY_MS}`)
+  }
+  return interval
+}
 
 /**
  * Reject new or changed provider profiles that cannot be served. Unchanged
@@ -355,12 +374,18 @@ export const Config: z<Config> = z.object({
  * edits to another provider. Removed profiles require no catalog validation.
  * @param config - the resolved section to check.
  * @param previous - current resolved section; omission checks every provider.
+ * @param liveModels - current builtin descriptors, including restored remote models.
  * @throws Error naming the route and configuration entry that cannot be served.
  */
-export function assertServiceable(config: Config, previous?: Config): void {
+export function assertServiceable(
+  config: Config,
+  previous?: Config,
+  liveModels?: (provider: string) => readonly Model<Api>[],
+): void {
+  resolveCatalogRefreshIntervalMs(config.catalogRefreshIntervalMs)
   const changed = Object.fromEntries(Object.entries(config.providers ?? {}).filter(([provider, profile]) =>
     !deepEqualJson(profile, previous?.providers?.[provider])))
-  resolveProfiles(changed)
+  resolveProfiles(changed, 'strict', liveModels)
 }
 
 /** Reject removed pre-release profile fields and name their replacements. */
@@ -401,11 +426,13 @@ function assertValidHeaders(provider: string, headers: Readonly<Record<string, s
  * routes. An omitted dict resolves to the empty, dormant route set.
  * @param providers - configured provider profiles keyed by route.
  * @param validation - writes require a complete catalog; stored reads retain catalog diagnostics.
+ * @param liveModels - current builtin descriptors, including restored remote models.
  * @returns validated profiles in configuration order.
  */
 export function resolveProfiles(
   providers: Readonly<Record<string, PiAiProviderProfile>> | undefined,
   validation: 'strict' | 'deferred' = 'strict',
+  liveModels?: (provider: string) => readonly Model<Api>[],
 ): Map<string, ResolvedPiAiProviderProfile> {
   if (Array.isArray(providers)) {
     throw new Error('llm-pi-ai: providers is now a dict keyed by provider route, not an array of profiles')
@@ -461,6 +488,7 @@ export function resolveProfiles(
     try {
       catalog = resolveRouteModels({
         provider,
+        ...liveModels === undefined ? {} : { liveModels: liveModels(provider) },
         ...source.api === undefined ? {} : { api: source.api },
         ...source.baseURL === undefined ? {} : { baseURL: source.baseURL },
         ...source.models === undefined ? {} : { models: source.models },

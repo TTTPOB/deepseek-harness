@@ -20,6 +20,9 @@ import LlmRuntime, { createMessage, createUserMessage, userAgent } from '@deepse
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import FileSettingsProvider from '@deepseek-ai/dsh-settings-file'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
+import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
+import type { Api, Model } from '@earendil-works/pi-ai'
+import { FileModelsStore } from '../src/models-store.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
 
@@ -41,14 +44,22 @@ afterEach(async () => {
   if (root !== undefined) await rm(root, { recursive: true, force: true })
   root = undefined
   await closeMockServers()
+  vi.unstubAllGlobals()
   vi.unstubAllEnvs()
 })
 
 /** Boot the dormant composition: a bare `llm-pi-ai` row with no config at all. */
-async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }> {
+async function loadComposition(
+  settings = '# personal settings\n',
+  cachedModels?: readonly Model<Api>[],
+): Promise<{ ctx: Context; settingsPath: string }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-pi-composition-'))
+  vi.stubEnv('DSH_HOME', root)
+  if (cachedModels !== undefined) {
+    await new FileModelsStore(root).write('deepseek', { models: cachedModels, checkedAt: 1 })
+  }
   const settingsPath = join(root, 'settings.yaml')
-  await writeFile(settingsPath, '# personal settings\n')
+  await writeFile(settingsPath, settings)
   await writeFile(join(root, '.credentials.yaml'), 'version: 1\nrefs:\n  PI_COMPOSITION_KEY: key-from-store\n', { mode: 0o600 })
 
   const configPath = join(root, 'cordis.yml')
@@ -97,6 +108,39 @@ async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }
 }
 
 describe('llm-pi-ai real dormant composition', () => {
+  it('restores remote-only selections before settings registration and refreshes their descriptors', async () => {
+    const baseline = getBuiltinModels('deepseek')[0]!
+    const remote = { ...baseline, id: 'remote-only', name: 'Cached remote', contextWindow: 65536 }
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      [remote.id]: { ...remote, name: 'Live remote', contextWindow: 131072 },
+    }))))
+    vi.stubGlobal('fetch', fetcher)
+    const { ctx } = await loadComposition([
+      'llm-pi-ai:',
+      '  providers:',
+      '    deepseek:',
+      '      models:',
+      '        - id: remote-only',
+      '',
+    ].join('\n'), [remote])
+
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(await ctx.llm.listModels('deepseek')).toMatchObject([{ id: remote.id, name: 'Cached remote' }])
+    await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })
+    expect(await ctx.llm.listModels('deepseek')).toMatchObject([{ id: remote.id, name: 'Live remote' }])
+    expect(await new FileModelsStore(root).read('deepseek')).toMatchObject({
+      models: [{ id: remote.id, contextWindow: 131072 }],
+    })
+
+    fetcher.mockRejectedValue(new Error('offline'))
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })).rejects.toMatchObject({ code: 'DISCOVERY_FAILED' })
+    expect(await ctx.llm.listModels('deepseek')).toMatchObject([{ id: remote.id, name: 'Live remote' }])
+    const llm = ctx.llm
+    await ctx.fiber.dispose()
+    context = undefined
+    expect(llm.listProviders()).toEqual([])
+  })
+
   it('boots with zero routes and registers one the moment settings supply a profile', async () => {
     vi.stubEnv('PI_COMPOSITION_KEY', '')
     const server = await mockServer([{ events: textEvents }])

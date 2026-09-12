@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { assertServiceable, Config, resolveProfiles } from '../src/config.ts'
+import { assertServiceable, Config, resolveCatalogRefreshIntervalMs, resolveProfiles } from '../src/config.ts'
+
+describe('live catalog interval', () => {
+  it('defaults to five minutes and rejects unsupported timer intervals', () => {
+    expect(Config({}).catalogRefreshIntervalMs).toBe(300_000)
+    expect(resolveCatalogRefreshIntervalMs(undefined)).toBe(300_000)
+    for (const interval of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
+      expect(() => resolveCatalogRefreshIntervalMs(interval)).toThrow(/catalogRefreshIntervalMs/)
+    }
+    expect(() => Config({ catalogRefreshIntervalMs: 0 })).toThrow()
+  })
+})
 
 /** Validate one hand-declared route, with the caller's fields layered onto it. */
 const routeWith = (profile: Record<string, unknown>): (() => unknown) =>

@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-当组合需要通过 pi-ai 的提供方目录、或通过 pi-ai 已安装目录未描述的网关路由模型请求时挂载本插件。`providers` 字典就是整个配置面：每个键都是请求用 `GenerateOptions.provider` 选择的提供方路由名。
+当组合需要通过 pi-ai 提供方目录或手工声明的网关路由模型请求时挂载本插件。`providers` 的每个键都是请求用 `GenerateOptions.provider` 选择的路由名。顶层 `catalogRefreshIntervalMs` 设置内置目录的新鲜度与周期刷新间隔，默认 300,000 毫秒。
 
 ### 何时选择
 
@@ -76,8 +76,8 @@ kind: "package-reference"
 | `displayName` | 提供方名 | 选择器界面显示的标签 |
 | `api` | 目录协议 | 协议格式；仅目录不提供的路由需要 |
 | `baseURL` | 目录端点 | 路由上所有模型的端点 |
-| `models` | 已安装目录 | 整体替换路由目录；每个条目从已安装模型取默认值 |
-| `modelOverrides` | 无 | 重塑个别已安装目录模型，而不替换其余模型 |
+| `models` | 当前目录 | 选择模型；省略的字段继承当前内置描述符 |
+| `modelOverrides` | 无 | 修改当前目录中的个别模型，保留其余模型 |
 | `compat` | 目录检测 | 无法识别端点的协议兼容开关 |
 | `defaultContextWindow` | `262,144` | 未描述模型的容量回退 |
 | `defaultMaxTokens` | `32,768` | 未描述模型的输出上限回退 |
@@ -94,7 +94,9 @@ pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程�
 
 ### 解析模型目录
 
-profile 的 `models` 列表会替换而非扩展路由的已安装目录；每个条目从同 id 已安装模型取未设置字段的默认值，因此把路由收窄到两个模型、修正一个容量或添加比已安装目录更新的模型都是一行编辑。`modelOverrides` 无需该代价即可重塑个别已安装目录模型——修正一个模型，保留其余三十七个——当它与 `models` 列表并存、位于手工声明路由上、或点名目录未描述的模型时会被拒绝，因为静默不变的模型会成为别人日后寻找的拼写错误。
+内置路由将 `https://pi.dev/api/models/providers/<provider>` 返回且通过校验的描述符合并到已安装目录之上。`$DSH_HOME/llm-pi-ai/models-v1` 中的缓存会在 settings 注册前恢复，启动时不联网；已配置的内置路由周期刷新，刷新失败保留最后有效目录。非空 `models` 列表从当前目录选择模型，只覆盖显式设置的字段，因此选中的模型继续继承后续元数据更新。`modelOverrides` 作用于完整目录，不能与非空选择列表并存。手工声明的路由保留显式模型列表，不应用内置远端覆盖。
+
+适配器向固定的补丁版 Pi 包请求 `toolCallParsing: 'final'`。原始参数 delta 保留顺序和内容；工具调用结束时才取得权威解析结果，避免反复解析持续增长的 JSON 前缀。
 
 ### 带推理与协议兼容运行
 
@@ -108,7 +110,7 @@ profile 通过可选 settings seam 每次操作重新读取：base 与用户的 
 
 ### 从端点发现模型
 
-插件会回答"该提供方可以提供哪些模型？"，供配置界面正在编辑或起草的路由使用。已安装目录提供的路由直接由目录回答，不发网络请求；只有目录未描述的路由才会经网络询问。`openai-completions` 与 `openai-responses` 使用带 bearer 鉴权的 `GET {baseURL}/models`，`anthropic-messages` 则以 `x-api-key` 和 `anthropic-version` 使用原生 `GET /v1/models?limit=1000` 语义；其列表 URL 接受带或不带末尾 `/v1` 的 API 根地址，因为网关文档两种写法都会发布，且只有该列表 URL 会归一化这一段，模型请求收到的仍是配置原样的 `baseURL`。已配置且具名的路由会在 Host 内部提供已存凭据与 profile `headers`，因此通过 `settings.yaml` 或 Cordis 配置设置的部署标头可以到达模型发现请求，但不会成为发现请求或 Models 页面的字段；表单中新键入的密钥仍优先于已存凭据。解析器接受标准 `data` 数组或富信息 `models` 对象，并归一化每个候选的 id、显示名、上下文窗口与最大输出 token 数；Anthropic 的 `max_input_tokens` 与 `max_tokens` 会进入相同容量字段，即使对象条目点名了另一个规范 id，对象键仍是请求 id，原始类型的对象属性会被忽略，缺失的显示名则回退到该请求 id。回答是界面可以提供给用户采纳的候选元数据——不存储任何内容，`settings.yaml` 仍然是决定路由服务内容的唯一事实。
+内置模型发现会强制刷新公开目录并等待完成，也适用于未配置的提供方。失败报告 `DISCOVERY_FAILED` 并保留最后有效目录；取消只停止调用方等待。手工声明的 `openai-completions` 与 `openai-responses` 路由通过 bearer 鉴权查询 `GET {baseURL}/models`；`anthropic-messages` 通过 `x-api-key` 与 `anthropic-version` 查询 `/v1/models?limit=1000`，接受带或不带 `/v1` 的 API 根地址。已存路由凭据和标头由 Host 提供，草稿密钥优先。网关回复可以是 `data` 数组或富信息 `models` 对象；对象键作为请求 id，缺失名称使用 id，可用容量字段被归一化。网关发现只返回候选，不持久化它们。
 
 ### 失败与恢复
 

@@ -1,7 +1,9 @@
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { userAgent } from '@deepseek-ai/dsh-llm'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
@@ -9,10 +11,20 @@ import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { discoverModels } from '../src/discovery.ts'
 
 const servers: Server[] = []
+const contexts: Context[] = []
+let home: string
+
+beforeEach(async () => {
+  home = await mkdtemp(join(tmpdir(), 'dsh-live-discovery-'))
+  vi.stubEnv('DSH_HOME', home)
+})
 /** Credential variables a test set, cleared so the next one starts unset. */
 const touchedEnv: string[] = []
 
 afterEach(async () => {
+  await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
+  await rm(home, { recursive: true, force: true })
+  vi.unstubAllEnvs()
   // A no-op when the test never stubbed `fetch`; only 'probe key format'
   // below installs one.
   vi.unstubAllGlobals()
@@ -68,27 +80,34 @@ async function listingServer(behavior: {
 /** A bare dormant mount: discovery is offered whether or not a route exists. */
 async function harness(): Promise<Context> {
   const ctx = new Context()
+  contexts.push(ctx)
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(LlmPiAi, {})
   return ctx
 }
 
 describe('catalog-route model discovery', () => {
-  it('answers from the installed registry, with capacities and no network call', async () => {
+  it('refreshes builtin descriptors without probing the draft gateway', async () => {
     const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'from-the-endpoint' }] }) })
+    const baseline = getBuiltinModels('deepseek')[0]!
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      [baseline.id]: { ...baseline, name: 'Refreshed descriptor' },
+    })))
+    vi.stubGlobal('fetch', fetcher)
     const ctx = await harness()
 
     const models = await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek', baseURL: server.url })
 
-    // pi-ai's own registry is the authority for its own providers, and it
-    // carries what a listing endpoint would not disclose.
     expect(models.map(model => model.id).sort())
       .toEqual(getBuiltinModels('deepseek').map(model => model.id).sort())
     expect(models.every(model => (model.contextWindow ?? 0) > 0 && (model.maxTokens ?? 0) > 0)).toBe(true)
     expect(server.paths).toEqual([])
+    expect(models.find(model => model.id === baseline.id)?.name).toBe('Refreshed descriptor')
+    expect(fetcher).toHaveBeenCalledOnce()
   })
 
   it('needs no endpoint for a route the catalog describes', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response('{}')))
     const ctx = await harness()
     await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })).resolves.not.toHaveLength(0)
   })

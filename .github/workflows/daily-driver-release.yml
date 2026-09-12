@@ -1,0 +1,93 @@
+name: Daily-driver pinned package release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-driver-release
+  cancel-in-progress: false
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.identity.outputs.commit }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify fixed baseline and release identity
+        id: identity
+        run: |
+          test "$GITHUB_REF" = refs/heads/daily-driver
+          node scripts/daily-driver.mjs verify
+          commit=$(git rev-parse HEAD)
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "tag=daily-driver-v0.1.5-rc.1-g${commit:0:10}" >> "$GITHUB_OUTPUT"
+      - run: pnpm install --frozen-lockfile
+      - name: Verify adapter
+        run: pnpm exec vitest run packages/llm/llm-pi-ai/tests
+      - name: Build official packages
+        run: pnpm run build:official
+      - name: Verify documentation and package
+        run: |
+          pnpm run doc-sync
+          pnpm exec publint packages/llm/llm-pi-ai
+      - name: Pack the sole DSH override
+        run: |
+          mkdir -p dist/daily-driver
+          pnpm --dir packages/llm/llm-pi-ai pack --pack-destination "$PWD/dist/daily-driver"
+      - name: Verify against the installed official Host
+        run: node scripts/daily-driver.mjs smoke dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.1.tgz
+      - name: Checksum tested runtime and adapter
+        working-directory: dist/daily-driver
+        run: sha256sum ./*.tgz runtime-package.json runtime-pnpm-lock.yaml > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-driver-package
+          path: dist/daily-driver/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: daily-driver-package
+          path: release
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.build.outputs.commit }}
+          TAG: ${{ needs.build.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$GH_REPO/git/ref/heads/daily-driver" --jq '.object.sha')
+          test "$current" = "$COMMIT"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; immutable releases are never overwritten." >&2
+            exit 1
+          fi
+          cd release
+          sha256sum -c SHA256SUMS
+          gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-lock.yaml SHA256SUMS \
+            --target "$COMMIT" --title "$TAG" --latest \
+            --notes 'Fixed official DSH 0.1.5-rc.1 baseline. One profile-local llm-pi-ai override retains live model catalogs and final-only tool argument parsing through Pi AI 0.85.1-dsh.1. Session and token-meter use the official packages. Install the adapter through dsh plugin; see docs/cookbook/installing-and-maintaining-daily-driver.zh.md.'

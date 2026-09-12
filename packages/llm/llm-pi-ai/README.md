@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this plugin when a composition routes model requests through pi-ai's provider catalogs or through gateways that pi-ai's installed catalog does not describe. The `providers` dictionary is the whole configuration surface: each key is the provider route name a request selects with `GenerateOptions.provider`.
+Mount this plugin when a composition routes model requests through pi-ai's provider catalogs or through hand-declared gateways. Each `providers` key is the route name selected with `GenerateOptions.provider`. The top-level `catalogRefreshIntervalMs` sets builtin-catalog freshness and periodic refresh cadence; its default is 300,000 milliseconds.
 
 ### When to choose it
 
@@ -76,8 +76,8 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 | `displayName` | provider name | Label shown by selector surfaces |
 | `api` | catalog protocol | Wire protocol; only needed for routes the catalog does not supply |
 | `baseURL` | catalog endpoint | Endpoint of every model on the route |
-| `models` | installed catalog | Replaces the route's catalog wholesale; each entry defaults from the installed model |
-| `modelOverrides` | none | Reshapes individual installed-catalog models without replacing the rest |
+| `models` | current catalog | Selects models; omitted fields inherit the current builtin descriptor |
+| `modelOverrides` | none | Reshapes individual current-catalog models without replacing the rest |
 | `compat` | catalog detection | Wire-compatibility switches for unrecognized endpoints |
 | `defaultContextWindow` | `262,144` | Capacity fallback for undescribed models |
 | `defaultMaxTokens` | `32,768` | Output-cap fallback for undescribed models |
@@ -94,7 +94,9 @@ A provider pi-ai ships a login for can be signed into through the harness author
 
 ### Resolve the model catalog
 
-A profile's `models` list replaces the route's installed catalog rather than extending it; each entry defaults its unset fields from the installed model of the same id, so narrowing a route to two models, correcting one capacity, or adding a model newer than the installed catalog are one-line edits. `modelOverrides` reshapes individual installed-catalog models without that cost — correct one model, keep the other thirty-seven — and is refused when set beside a `models` list, on a hand-declared route, or naming a model the catalog does not describe, because a silently unchanged model would be a typo someone hunts for later.
+Builtin routes merge validated descriptors from `https://pi.dev/api/models/providers/<provider>` over the installed catalog. Cached descriptors in `$DSH_HOME/llm-pi-ai/models-v1` restore before settings registration without a network request; active builtin routes refresh periodically. Failed refreshes retain the last valid catalog. A non-empty `models` list selects from that catalog and overrides only explicitly configured fields, so selected models inherit later metadata updates. `modelOverrides` applies to the full catalog and cannot accompany a non-empty selection. Hand-declared routes keep explicit models and have no builtin remote overlay.
+
+The adapter requests `toolCallParsing: 'final'` from the pinned patched Pi package. Raw argument deltas retain their order and content; parsed arguments become authoritative at tool-call completion, avoiding repeated parsing of a growing JSON prefix.
 
 ### Run with reasoning and wire compatibility
 
@@ -108,7 +110,7 @@ Profiles are re-read once per operation through the optional settings seam: the 
 
 ### Discover models from endpoints
 
-The plugin answers "which models can this provider serve?" for a route a configuration surface is editing or drafting. A route the installed catalog ships is answered from that catalog with no network call; only a route the catalog does not describe is interrogated over the wire. `openai-completions` and `openai-responses` use `GET {baseURL}/models` with bearer auth, while `anthropic-messages` uses native `GET /v1/models?limit=1000` semantics with `x-api-key` and `anthropic-version`; its listing URL accepts the API root with or without a trailing `/v1` because gateway documentation publishes both spellings, and only that listing URL normalizes the segment, so model requests receive the configured `baseURL` unchanged. A named configured route supplies its stored credential and profile `headers` inside the Host, so deployment headers configured through `settings.yaml` or Cordis config reach model discovery without becoming discovery-request or Models-page fields; a key typed into the form still wins over the stored credential. The parser accepts either the standard `data` array or an enriched `models` map, normalizing each candidate's id, display name, context window, and output-token cap; Anthropic's `max_input_tokens` and `max_tokens` feed the same capacity fields, a map key remains the request id even when its entry names a different canonical id, primitive-valued map properties are ignored, and a missing display name falls back to that request id. The reply is candidate metadata a surface may offer for adoption — nothing is stored, and `settings.yaml` remains the only thing that decides what a route serves.
+Builtin model discovery forces and awaits a public-catalog refresh, including dormant providers. Failure reports `DISCOVERY_FAILED` while retaining the last catalog; cancellation stops the caller's wait. Hand-declared `openai-completions` and `openai-responses` routes query `GET {baseURL}/models` with bearer auth; `anthropic-messages` queries `/v1/models?limit=1000` with `x-api-key` and `anthropic-version`, accepting API roots with or without `/v1`. Stored route credentials and headers remain Host-owned, and a draft key wins. Gateway replies accept a `data` array or enriched `models` map; map keys remain request ids, missing names use the id, and available capacities are normalized. Gateway discovery returns candidates without persisting them.
 
 ### Failures and recovery
 
