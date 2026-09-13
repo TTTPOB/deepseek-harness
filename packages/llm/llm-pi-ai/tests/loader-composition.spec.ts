@@ -108,6 +108,44 @@ async function loadComposition(
 }
 
 describe('llm-pi-ai real dormant composition', () => {
+  it('loads all deferred-tool compat declarations through settings and keeps ordinary tools usable', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const { ctx } = await loadComposition([
+      'llm-pi-ai:',
+      '  providers:',
+      '    kimi-gateway:',
+      '      apiKeyEnv: PI_COMPOSITION_KEY',
+      '      api: openai-completions',
+      `      baseURL: ${server.url}`,
+      '      compat: { deferredToolsMode: kimi }',
+      '      models: [{ id: model }]',
+      '    responses-gateway:',
+      '      api: openai-responses',
+      '      baseURL: https://gateway.test/v1',
+      '      compat: { supportsToolSearch: true, supportsAdditionalTools: false }',
+      '      models: [{ id: model }]',
+      '    anthropic-gateway:',
+      '      api: anthropic-messages',
+      '      baseURL: https://gateway.test/v1',
+      '      compat: { supportsToolReferences: true }',
+      '      models: [{ id: model }]',
+      '',
+    ].join('\n'))
+    expect(ctx.llm.listProviders().map(provider => provider.id).sort()).toEqual([
+      'anthropic-gateway', 'kimi-gateway', 'responses-gateway',
+    ])
+    const result = await assemble(ctx, {
+      provider: 'kimi-gateway', model: 'model', messages: [],
+      tools: [{ name: 'echo', description: 'Echo text.', parameters: { type: 'object', properties: {} } }],
+    })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+    expect(server.requests[0]).toMatchObject({ tools: [{ function: { name: 'echo' } }] })
+    const llm = ctx.llm
+    await ctx.fiber.dispose()
+    context = undefined
+    expect(llm.listProviders()).toEqual([])
+  })
+
   it('restores remote-only selections before settings registration and refreshes their descriptors', async () => {
     const baseline = getBuiltinModels('deepseek')[0]!
     const remote = { ...baseline, id: 'remote-only', name: 'Cached remote', contextWindow: 65536 }

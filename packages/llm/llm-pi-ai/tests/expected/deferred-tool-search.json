@@ -1,0 +1,67 @@
+{
+  "model": "model",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Find echo."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_discover",
+      "name": "discover",
+      "arguments": "{}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_discover",
+      "output": "Echo is available."
+    },
+    {
+      "type": "tool_search_call",
+      "call_id": "pi_tool_load_14vjjki8myqfg",
+      "execution": "client",
+      "status": "completed",
+      "arguments": {
+        "query": "echo",
+        "limit": 1
+      }
+    },
+    {
+      "type": "tool_search_output",
+      "call_id": "pi_tool_load_14vjjki8myqfg",
+      "execution": "client",
+      "status": "completed",
+      "tools": [
+        {
+          "type": "function",
+          "name": "echo",
+          "description": "Use echo.",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          },
+          "defer_loading": true
+        }
+      ]
+    }
+  ],
+  "stream": true,
+  "store": false,
+  "max_output_tokens": 32768,
+  "tools": [
+    {
+      "type": "function",
+      "name": "discover",
+      "description": "Use discover.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}

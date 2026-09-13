@@ -24,6 +24,7 @@ import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import {
   CACHE_CONTROL_FORMATS,
   CHAT_TEMPLATE_VARS,
+  DEFERRED_TOOLS_MODES,
   MAX_TOKENS_FIELDS,
   MODALITIES,
   PiAiCatalogError,
@@ -283,6 +284,10 @@ const compatProfile: z<PiAiCompatProfile> = z.object({
   forceAdaptiveThinking: z.boolean(),
   allowEmptySignature: z.boolean(),
   supportsStrictTools: z.boolean(),
+  deferredToolsMode: z.union(DEFERRED_TOOLS_MODES),
+  supportsToolSearch: z.boolean(),
+  supportsAdditionalTools: z.boolean(),
+  supportsToolReferences: z.boolean(),
 })
 
 /**

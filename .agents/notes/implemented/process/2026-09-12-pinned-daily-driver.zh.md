@@ -16,9 +16,11 @@ daily-driver fork 需要在线内置模型目录和仅在结束时解析工具�
 
 手动发布工作流不会合并上游或修改分支。它检查基线和明确的改动路径白名单，构建适配器，再通过 registry 安装的官方 Host，在独立 home 中走官方 reconciliation 安装 tarball。冒烟测试将全部传递 DSH 包固定到基线，因为仅固定 CLI 无法限制其 caret 依赖范围。测试生成的运行时 manifest 与 lockfile 随唯一适配器 tarball 和 SHA256SUMS 一起发布。tag 包含 DSH 版本与提交，既有 Release 不可覆盖。
 
+即使已安装目录为具名厂商设置延迟工具兼容性，这些声明仍由部署拥有。私有网关是否支持这些格式可以独立于目录模型。适配器开放采用上游类型的 `deferredToolsMode`、`supportsToolSearch`、`supportsAdditionalTools` 与 `supportsToolReferences` 字段，保留逐协议校验及模型高于路由、路由高于目录的现有优先级。它不会生成 pi-ai `addedToolNames`，该输入由独立安装的上下文集成拥有。两个 Responses 开关保留 pi-ai 的 `additional_tools` 优先级，因此需要工具搜索输出的集成须禁用或省略 `supportsAdditionalTools`。
+
 ## Alternatives considered
 
-保留三个覆盖包会重复上游核心行为，并让发布与 Session 内部实现耦合。重建完整运行时归档会重复包管理器的依赖解析。只声明精确 CLI 依赖仍会通过 caret 范围接受更新的内部包。经过验证的运行时 manifest 与 lockfile 保留普通包管理器安装方式，同时固定选定的包族。
+保留三个覆盖包会重复上游核心行为，并让发布与 Session 内部实现耦合。重建完整运行时归档会重复包管理器的依赖解析。只声明精确 CLI 依赖仍会通过 caret 范围接受更新的内部包。拒绝开放延迟工具字段会迫使网关冒充目录提供方；全局启用则假定端点支持并改变无关路由。经过验证的运行时 manifest 与 lockfile 保留普通包管理器安装方式，同时固定选定的包族。
 
 ## Consequences
 
@@ -26,4 +28,4 @@ daily-driver fork 需要在线内置模型目录和仅在结束时解析工具�
 
 ## Testing
 
-Pi 提供方回归覆盖原始 delta 顺序、最终参数和默认 partial 解析。适配器测试覆盖持久化、选择、强制刷新、失败保留、调用方取消与卸载。Loader 组合测试在 settings 注册前恢复仅远端存在的选中模型，并观察描述符更新。发布冒烟测试验证真实发布的 Pi 依赖、官方核心版本、完整 Web 组合启动，以及构建后覆盖包的在线目录行为。
+Pi 提供方回归覆盖原始 delta 顺序、最终参数和默认 partial 解析。适配器测试覆盖持久化、选择、强制刷新、失败保留、调用方取消与卸载。Loader 组合测试在 settings 注册前恢复仅远端存在的选中模型，并观察描述符更新。发布冒烟测试验证真实发布的 Pi 依赖、官方核心版本、完整 Web 组合启动，以及构建后覆盖包的在线目录行为。延迟工具兼容性测试接受合法值，拒绝非法值、空值、拼写错误及不适用协议的字段。无密钥 payload 快照运行配置解析和真实 pi-ai 序列化器，包括禁用路径与 Responses 优先级。Loader 测试接受全部四项声明，并验证普通工具仍抵达协议请求。已录制 Session transcript 无变化：适配器不添加延迟上下文或模型可见文本，序列化器期望值留在其拥有者测试旁。

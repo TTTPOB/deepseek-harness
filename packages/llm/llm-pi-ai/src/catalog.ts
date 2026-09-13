@@ -125,6 +125,15 @@ const MAX_TOKENS_FIELD_GATE: Record<PiAiMaxTokensField, true> = {
 /** The output-cap field spellings a profile may name. */
 export const MAX_TOKENS_FIELDS = Object.keys(MAX_TOKENS_FIELD_GATE) as readonly PiAiMaxTokensField[]
 
+/** Provider-specific Chat Completions deferred-tool serialization modes. */
+export type PiAiDeferredToolsMode = NonNullable<OpenAICompletionsCompat['deferredToolsMode']>
+
+/** Drift gate over the deferred-tool modes accepted by the installed pi-ai. */
+const DEFERRED_TOOLS_MODE_GATE: Record<PiAiDeferredToolsMode, true> = { kimi: true }
+
+/** Deferred-tool serialization modes a profile may name. */
+export const DEFERRED_TOOLS_MODES = Object.keys(DEFERRED_TOOLS_MODE_GATE) as readonly PiAiDeferredToolsMode[]
+
 /** The reasoning-budget field spellings pi-ai accepts. */
 export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['thinkingTokenBudgetField']>
 
@@ -253,7 +262,7 @@ const COMPLETIONS_COMPAT_GATE = {
   zaiToolStream: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
   sendSessionAffinityHeaders: 'withhold',
-  deferredToolsMode: 'withhold',
+  deferredToolsMode: 'offer',
   sessionAffinityFormat: 'withhold',
 } as const satisfies Record<keyof OpenAICompletionsCompat, CompatDisposition>
 
@@ -265,8 +274,8 @@ const RESPONSES_COMPAT_GATE = {
   supportsLongCacheRetention: 'offer',
   sessionAffinityFormat: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
-  supportsAdditionalTools: 'withhold',
-  supportsToolSearch: 'withhold',
+  supportsAdditionalTools: 'offer',
+  supportsToolSearch: 'offer',
   supportsExplicitPromptCacheMode: 'withhold',
 } as const satisfies Record<keyof OpenAIResponsesCompat, CompatDisposition>
 
@@ -280,7 +289,7 @@ const ANTHROPIC_COMPAT_GATE = {
   allowEmptySignature: 'offer',
   supportsStrictTools: 'offer',
   sendSessionAffinityHeaders: 'withhold',
-  supportsToolReferences: 'withhold',
+  supportsToolReferences: 'offer',
   supportsMidConvoEffort: 'withhold',
   allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
@@ -347,7 +356,8 @@ type OfferedCompatField =
  * not recognize the detection answers as though it were OpenAI itself, which
  * is wrong for most OpenAI-compatible gateways. So every field here is one a
  * deployment must be able to state because nothing can infer it, while the
- * fields pi-ai's catalog sets for a named vendor stay withheld.
+ * vendor-routing fields stay withheld. Deferred-tool capabilities are also
+ * configurable because a gateway can differ from its upstream model's catalog.
  *
  * A field belongs to the protocols whose upstream compat type declares it: a
  * model-level switch its protocol does not take fails resolution, and a
@@ -428,6 +438,17 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Serialize deferred tools after tool results using Kimi format; `openai-completions`. Requires pi-ai deferred-tool context. */
+  deferredToolsMode?: PiAiDeferredToolsMode
+  /** Whether to serialize client-executed tool search; the three Responses protocols. Requires pi-ai deferred-tool context. */
+  supportsToolSearch?: boolean
+  /**
+   * Whether to serialize message-anchored `additional_tools`; the three Responses
+   * protocols. Wins over `supportsToolSearch` when both are true.
+   */
+  supportsAdditionalTools?: boolean
+  /** Whether to serialize `tool_reference` blocks in tool results; `anthropic-messages`. Requires pi-ai deferred-tool context. */
+  supportsToolReferences?: boolean
 }
 
 /** Compile-time constraint that `T` is `never`. */

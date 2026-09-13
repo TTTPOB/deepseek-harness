@@ -104,6 +104,8 @@ pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程�
 
 对于自托管 Chat Completions 端点，`thinkingTokenBudgetField` 选择推理预算参数，`vllmPriority` 在服务端启用优先级调度时设置整数调度优先级。模板参数接受 `$var: thinking.budget`。`openai-responses` 网关可设置 `supportsMaxOutputTokens: false` 来省略 `max_output_tokens`；Azure 与 Codex 传输会忽略这个共享兼容字段。这些控制均需显式启用；目录拥有的 Anthropic effort 和回退能力不是可配置开关。
 
+延迟工具兼容性可逐路由或模型配置：`deferredToolsMode: kimi` 选择 Chat Completions 序列化；`supportsToolSearch` 与 `supportsAdditionalTools` 选择 Responses 序列化；`supportsToolReferences` 选择 Anthropic 工具引用。Responses 字段也适用于 Azure 和 Codex 目录路由。模型值覆盖路由值，路由值覆盖目录值；省略字段时保留 pi-ai 默认行为。布尔字段接受 `false`；Kimi 模式没有禁用值。两个 Responses 开关同时为真时，`additional_tools` 优先。端点必须支持选定格式，且上下文集成必须提供 pi-ai `addedToolNames`；这些开关本身不会延迟 Harness 工具或添加搜索工具。只有存在该上下文时，请求中的放置位置和缓存前缀复用才会变化。
+
 ### 运行时更改配置
 
 profile 通过可选 settings seam 每次操作重新读取：base 与用户的 `llm-pi-ai:` 设置分节按提供方合并，因此用户可以新增路由、覆盖组合路由的一个字段或把路由指向另一个代理，全部在下一个请求生效、无需重启。适配器无法服务的分节会在写入处被拒绝——`settings.mutate` 回答 `settings-rejected`——之后失效的已存储分节会保留 namespace 最后有效值。当路由集合或某路由的重试策略变化时，插件会原子地重新注册：冲突路由会让此前路由继续服务。
