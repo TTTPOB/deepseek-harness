@@ -6,9 +6,8 @@
  * @module
  */
 
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { StreamableHTTPClientTransport, type Transport } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type { Config } from './index.ts'
 
@@ -45,6 +44,6 @@ export function createTransport(config: Config): Transport {
       return new StreamableHTTPClientTransport(
         new URL(config.url),
         { requestInit: { headers: config.headers } },
-      ) as Transport
+      )
   }
 }

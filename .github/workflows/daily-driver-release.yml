@@ -39,21 +39,25 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "tag=daily-driver-v0.1.5-rc.1-g${commit:0:10}" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile
-      - name: Verify adapter
-        run: pnpm exec vitest run packages/llm/llm-pi-ai/tests
+      - name: Verify Pi and MCP packages
+        run: |
+          pnpm exec vitest run packages/llm/llm-pi-ai/tests packages/mcp/mcp-client/tests/mcp-client.spec.ts packages/mcp/mcp-client/tests/apply.spec.ts packages/mcp/mcp-client/tests/reconnect.spec.ts packages/mcp/mcp-client/tests/egress.spec.ts
+          pnpm exec vitest run --config vitest.e2e.config.ts packages/mcp/mcp-client/tests/mcp-client.e2e.ts
       - name: Build official packages
         run: pnpm run build:official
-      - name: Verify documentation and package
+      - name: Verify documentation and packages
         run: |
           pnpm run doc-sync
           pnpm exec publint packages/llm/llm-pi-ai
-      - name: Pack the sole DSH override
+          pnpm exec publint packages/mcp/mcp-client
+      - name: Pack DSH overrides
         run: |
           mkdir -p dist/daily-driver
           pnpm --dir packages/llm/llm-pi-ai pack --pack-destination "$PWD/dist/daily-driver"
+          pnpm --dir packages/mcp/mcp-client pack --pack-destination "$PWD/dist/daily-driver"
       - name: Verify against the installed official Host
-        run: node scripts/daily-driver.mjs smoke dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.1.tgz
-      - name: Checksum tested runtime and adapter
+        run: node scripts/daily-driver.mjs smoke dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.1.tgz dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.5-rc.1.tgz
+      - name: Checksum tested runtime and overrides
         working-directory: dist/daily-driver
         run: sha256sum ./*.tgz runtime-package.json runtime-pnpm-lock.yaml > SHA256SUMS
       - uses: actions/upload-artifact@v4
@@ -90,4 +94,4 @@ jobs:
           sha256sum -c SHA256SUMS
           gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-lock.yaml SHA256SUMS \
             --target "$COMMIT" --title "$TAG" --latest \
-            --notes 'Fixed official DSH 0.1.5-rc.1 baseline. One profile-local llm-pi-ai override retains live model catalogs and final-only tool argument parsing through Pi AI 0.85.1-dsh.1. Session and token-meter use the official packages. Install the adapter through dsh plugin; see docs/cookbook/installing-and-maintaining-daily-driver.zh.md.'
+            --notes 'Fixed official DSH 0.1.5-rc.1 baseline. Two profile-local overrides are released: llm-pi-ai retains live model catalogs and final-only tool argument parsing through Pi AI 0.85.1-dsh.1, and mcp-client uses MCP SDK v2 with modern 2026-07-28 negotiation plus legacy fallback. Session and token-meter use the official packages. Install both packages through dsh plugin; see docs/cookbook/installing-and-maintaining-daily-driver.zh.md.'

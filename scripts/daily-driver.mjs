@@ -11,6 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const version = '0.1.5-rc.1'
 const base = '183f08e9c6dde7e36cd2318eaee70b0da08fb35e'
 const packageName = '@deepseek-ai/dsh-llm-pi-ai'
+const mcpPackageName = '@deepseek-ai/dsh-mcp-client'
 const piUrl = 'https://github.com/TTTPOB/pi/releases/download/pi-ai-v0.85.1-dsh.1/earendil-works-pi-ai-0.85.1-dsh.1.tgz'
 
 function run(command, args, options = {}) {
@@ -24,23 +25,27 @@ async function manifest(path) {
 async function verify() {
   assert.equal((await manifest(join(root, 'apps/cli/package.json'))).version, version)
   assert.equal((await manifest(join(root, 'packages/llm/llm-pi-ai/package.json'))).dependencies['@earendil-works/pi-ai'], piUrl)
+  const mcp = await manifest(join(root, 'packages/mcp/mcp-client/package.json'))
+  assert.equal(mcp.version, version)
+  assert.equal(mcp.dependencies['@modelcontextprotocol/client'], '^2.0.0')
+  assert.equal(mcp.dependencies['@modelcontextprotocol/core'], '^2.0.0')
   run('git', ['merge-base', '--is-ancestor', base, 'HEAD'])
   const paths = [
     ...run('git', ['diff', '--name-only', base], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n'),
     ...run('git', ['ls-files', '--others', '--exclude-standard', '--exclude=website/.vitepress/.temp/**'], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n'),
   ].filter(Boolean)
   const allowed = [
-    'packages/llm/llm-pi-ai/', 'pnpm-lock.yaml', 'docs/config-catalog.', 'docs/module-graph.',
+    'packages/llm/llm-pi-ai/', 'packages/mcp/mcp-client/', 'pnpm-lock.yaml', 'docs/config-catalog.', 'docs/module-graph.',
     'docs/cookbook/installing-and-maintaining-daily-driver.',
-    '.agents/notes/implemented/process/2026-09-12-pinned-daily-driver.',
-    '.github/workflows/daily-driver-release.yml', 'scripts/daily-driver.mjs',
+    '.agents/notes/implemented/process/2026-09-12-pinned-daily-driver.', '.agents/notes/implemented/feature/2026-07-07-mcp-client-plugin.',
+    '.github/workflows/daily-driver-release.yml', 'scripts/daily-driver.mjs', 'THIRD_PARTY_NOTICES.md',
   ]
   for (const path of paths) assert(allowed.some(prefix => path.startsWith(prefix)), `Unexpected fork change: ${path}`)
   console.log(`daily-driver: fixed ${version}; ${paths.length} allowed changed paths`)
 }
 
-async function smoke(tarball) {
-  assert(tarball, 'Pass the packed adapter tarball')
+async function smoke(piTarball, mcpTarball) {
+  assert(piTarball && mcpTarball, 'Pass the packed Pi and MCP tarballs')
   const temporary = await mkdtemp(join(tmpdir(), 'dsh-daily-driver-'))
   const home = join(temporary, 'home')
   const runtime = join(temporary, 'runtime')
@@ -85,7 +90,7 @@ async function smoke(tarball) {
     assert.equal(cliManifest.version, version)
     const cli = resolve(dirname(cliManifestPath), cliManifest.bin.dsh)
     const launch = args => run(process.execPath, [cli, ...args], { cwd: runtime, env })
-    launch(['plugin', '--profile', 'web', 'add', resolve(tarball)])
+    launch(['plugin', '--profile', 'web', 'add', resolve(piTarball), resolve(mcpTarball)])
     launch(['web', '--help'])
     const config = run(process.execPath, [cli, '--profile', 'web', '--dump-config'], {
       cwd: runtime, env, encoding: 'utf8', stdio: 'pipe',
@@ -93,21 +98,32 @@ async function smoke(tarball) {
     assert(config.includes(packageName))
     const profile = join(home, 'profiles/web')
     const profileManifest = await manifest(join(profile, 'package.json'))
+    assert(profileManifest.dependencies[packageName])
+    assert(profileManifest.dependencies[mcpPackageName])
     assert(!profileManifest.dependencies['@deepseek-ai/dsh-session'])
     assert(!profileManifest.dependencies['@deepseek-ai/dsh-token-meter'])
     const profileRequire = createRequire(join(profile, 'cordis.yml'))
     const adapterEntry = profileRequire.resolve(packageName)
+    const mcpEntry = profileRequire.resolve(mcpPackageName)
     assert(adapterEntry.startsWith(join(profile, 'node_modules')))
+    assert(mcpEntry.startsWith(join(profile, 'node_modules')))
+    assert.equal((await manifest(profileRequire.resolve(`${mcpPackageName}/package.json`))).version, version)
     for (const name of ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-token-meter']) {
       assert.equal((await manifest(profileRequire.resolve(`${name}/package.json`))).version, version)
     }
-    // Pi exposes import-only conditions, so CommonJS require.resolve cannot resolve it.
+    // Import-only conditions require the ESM resolver rather than CommonJS require.resolve.
     const resolverPath = join(profile, 'smoke-resolve.mjs')
     await writeFile(resolverPath, 'export const resolveModule = name => import.meta.resolve(name)\n')
     const { resolveModule } = await import(pathToFileURL(resolverPath).href)
     const piEntry = fileURLToPath(resolveModule('@earendil-works/pi-ai'))
     const piManifest = await manifest(resolve(dirname(piEntry), '../package.json'))
     assert.equal(piManifest.version, '0.85.1-dsh.1')
+    const mcp = await import(pathToFileURL(mcpEntry).href)
+    assert.equal(mcp.name, 'mcp-client')
+    const { Client } = await import(resolveModule('@modelcontextprotocol/client'))
+    assert(Client)
+    const core = await import(resolveModule('@modelcontextprotocol/core'))
+    assert(core.ListToolsResultSchema)
     assert((await readFile(adapterEntry, 'utf8')).includes('toolCallParsing: "final"'))
 
     process.env.DSH_HOME = home
@@ -129,9 +145,9 @@ async function smoke(tarball) {
     await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })
     assert.equal((await ctx.llm.listModels('deepseek'))[0].name, 'Daily-driver smoke model')
     // These files reproduce the tested official runtime outside a source checkout.
-    await writeFile(join(dirname(resolve(tarball)), 'runtime-package.json'), await readFile(join(runtime, 'package.json')))
-    await writeFile(join(dirname(resolve(tarball)), 'runtime-pnpm-lock.yaml'), await readFile(join(runtime, 'pnpm-lock.yaml')))
-    console.log(`daily-driver: official ${version} Host + one adapter override passed`)
+    await writeFile(join(dirname(resolve(piTarball)), 'runtime-package.json'), await readFile(join(runtime, 'package.json')))
+    await writeFile(join(dirname(resolve(piTarball)), 'runtime-pnpm-lock.yaml'), await readFile(join(runtime, 'pnpm-lock.yaml')))
+    console.log(`daily-driver: official ${version} Host + Pi and MCP overrides passed`)
   } finally {
     await ctx?.fiber.dispose()
     globalThis.fetch = originalFetch
@@ -142,5 +158,5 @@ async function smoke(tarball) {
 }
 
 if (process.argv[2] === 'verify') await verify()
-else if (process.argv[2] === 'smoke') await smoke(process.argv[3])
-else throw new Error('Usage: node scripts/daily-driver.mjs verify | smoke <adapter.tgz>')
+else if (process.argv[2] === 'smoke') await smoke(process.argv[3], process.argv[4])
+else throw new Error('Usage: node scripts/daily-driver.mjs verify | smoke <pi.tgz> <mcp.tgz>')

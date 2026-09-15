@@ -5,8 +5,8 @@
  * Run: node fixture-server.ts
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { McpServer } from '@modelcontextprotocol/server'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { z } from 'zod'
 
 const server = new McpServer(
@@ -17,7 +17,7 @@ const server = new McpServer(
 server.registerTool('add', {
   title: 'Add Tool',
   description: 'Adds two numbers.',
-  inputSchema: { a: z.number().describe('First number'), b: z.number().describe('Second number') },
+  inputSchema: z.object({ a: z.number().describe('First number'), b: z.number().describe('Second number') }),
 }, async args => ({
   content: [{ type: 'text', text: String(args.a + args.b) }],
 }))
@@ -25,7 +25,7 @@ server.registerTool('add', {
 server.registerTool('greet', {
   title: 'Greet Tool',
   description: 'Greets a person by name.',
-  inputSchema: { name: z.string().describe('Name to greet') },
+  inputSchema: z.object({ name: z.string().describe('Name to greet') }),
 }, async args => ({
   content: [{ type: 'text', text: `Hello, ${args.name}!` }],
 }))
@@ -33,7 +33,6 @@ server.registerTool('greet', {
 server.registerTool('fail', {
   title: 'Fail Tool',
   description: 'Always returns an error.',
-  inputSchema: {},
 }, async () => ({
   content: [{ type: 'text', text: 'Something went wrong' }],
   isError: true,
@@ -42,7 +41,6 @@ server.registerTool('fail', {
 server.registerTool('image', {
   title: 'Image Tool',
   description: 'Returns an image content block.',
-  inputSchema: {},
 }, async () => ({
   content: [
     { type: 'text', text: 'Here is an image:' },
@@ -54,7 +52,6 @@ server.registerTool('image', {
 server.registerTool('crash', {
   title: 'Crash Tool',
   description: 'Replies, then exits the server process (crash-recovery test).',
-  inputSchema: {},
 }, async () => {
   // Exit AFTER the response flushes so the caller observes a clean result
   // followed by a transport close, like a real post-reply crash.
@@ -67,10 +64,8 @@ server.registerTool('crash', {
 server.registerTool('admin.reset', {
   title: 'Admin Reset Tool',
   description: 'Tool with a dotted name (normalization test).',
-  inputSchema: {},
 }, async () => ({
   content: [{ type: 'text', text: 'reset done' }],
 }))
 
-const transport = new StdioServerTransport()
-await server.connect(transport)
+serveStdio(() => server)

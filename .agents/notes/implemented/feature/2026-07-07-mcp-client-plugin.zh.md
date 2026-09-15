@@ -18,7 +18,7 @@ harness 此前无法消费 MCP（Model Context Protocol）生态中的工具。M
 
 ### SDK
 
-使用官方 [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)（`Client`、`StdioClientTransport`、`StreamableHTTPClientTransport`）。harness 不自行实现 JSON-RPC，与 ACP 委托给 `@agentclientprotocol/sdk` 的做法一致。
+使用官方 MCP SDK v2 包 [`@modelcontextprotocol/client`](https://www.npmjs.com/package/@modelcontextprotocol/client)、[`@modelcontextprotocol/core`](https://www.npmjs.com/package/@modelcontextprotocol/core) 及 `@modelcontextprotocol/client/stdio` 子路径（`Client`、`StdioClientTransport`、`StreamableHTTPClientTransport`）。每个客户端世代设置 `versionNegotiation: { mode: 'auto' }`，由 SDK 探测 modern `server/discover`，在不支持时回退到 legacy `initialize`，不硬编码协议标头。harness 不自行实现 JSON-RPC，与 ACP 委托给 `@agentclientprotocol/sdk` 的做法一致。
 
 ### 范围
 
@@ -97,7 +97,7 @@ type Config = StdioConfig | StreamableHttpConfig
 这种按服务器限定的形式是多服务器 agent 客户端事实上的标准——所有被调研的终端用户产品都按服务器限定 MCP 工具名（[Claude Code](https://code.claude.com/docs/en/agent-sdk/mcp#tool-naming-convention) `mcp__github__list_issues`、[Codex](https://openai.com/index/unrolling-the-codex-agent-loop/) `mcp__weather__get-forecast`、[Gemini CLI](https://geminicli.com/docs/tools/mcp-server/#3-tool-naming-and-namespaces)、[VS Code](https://github.com/microsoft/vscode/blob/ab9ec62c6a61e429a9abd612ff220c3f4834c9ea/src/vs/workbench/contrib/mcp/common/mcpServer.ts#L217-L260)、[Cline](https://github.com/cline/cline/blob/52fdbb1d72f7324a28142a7ba7678d4b53c902f4/sdk/packages/core/src/extensions/mcp/name-transform.ts#L20-L35)、[Roo Code](https://github.com/RooCodeInc/Roo-Code/blob/b867ec9145750d0ae1ff7f02d35406e9bf2a0b16/src/utils/mcp-name.ts#L117-L140)、[Goose](https://github.com/block/goose/blob/b3a012cbdde854b0fe14f95b1c48543bf6517c0a/crates/goose/src/agents/extension_manager.rs#L1391-L1441)、[OpenCode](https://github.com/anomalyco/opencode/blob/d199b1bff90282a4f9cd6251b5fc7b16875a52f6/packages/opencode/src/mcp/catalog.ts#L117-L120)）；`mcp__<server>__<tool>` 的拼写方式与 Claude Code 和 Codex 一致。`mcp__` 前缀将 MCP 注册与原生工具的命名空间隔离，并为权限/遥测规则提供稳定的匹配模式（`mcp__*`、`mcp__github__*`）。
 
 1. 连接时：遍历未缓存的 `tools/list` 分页结果，推导每个工具的 `publicName`，然后通过 `ctx.tools.register()` 将其注册为原始 `ToolDefinition`。MCP 的 JSON Schema 和描述原样透传（不做 `defineTool` DSL 转换）；仅替换模型可见的 `name`。
-2. 监听 `notifications/tools/list_changed` → 重新执行同步（dispose 上一代、注册新一代）。确定性命名意味着未变化的工具在重新同步后保持原名。
+2. 配置 v2 client 的工具列表变更处理器：legacy `notifications/tools/list_changed` 与 modern `subscriptions/listen` 事件都会重新执行同步（dispose 上一代、注册新一代）。确定性命名意味着未变化的工具在重新同步后保持原名。
 3. 执行器闭包持有 `rawName`；公开名称永远不发送给服务器，也永远不被解析以还原原始名称。
 4. 无 `presentCall`/`presentResult`——UI 消费方使用提供方无关的通用卡片兜底。
 5. 工具在系统提示词中是透明的——除名称本身外不附加「[via MCP]」标注。
@@ -208,7 +208,7 @@ MCP 仅保证工具名在[单个服务器内](https://modelcontextprotocol.io/sp
 覆盖范围按层级列出；每项行为都放在能够表达它的最低成本层级。
 
 - **单元测试**（`tests/mcp-client.spec.ts`、`tests/apply.spec.ts`，mock MCP SDK）：`publicToolName` 算法（干净名称、规范化、截断加 hash、确定性、不同标识的分离）、raw 与 public 的协议纪律、跨服务器与原生工具共存、重复 `serverName` 加载失败与预留释放、无效工具列表拒绝、注册代切换/回滚、重新同步失败时保留上一代注册、无损规范结果、丰富内容混合顺序、格式错误批次原子性、确切能力／存储拒绝、明确的非图片诊断、post-execute 策略优先级、取消，以及配置 schema 校验。100% 逐文件覆盖率门禁约束该包。
-- **E2E**（`tests/mcp-client.e2e.ts`，无需密钥）：使用真实 MCP 协议对接仓库内的 fixture（测试前置数据）服务器、`@modelcontextprotocol/server-everything` 和 `@modelcontextprotocol/server-filesystem`（stdio 传输），以及进程内 `StreamableHTTPServerTransport` 服务器（Streamable HTTP 传输）——命名空间下的发现、带点号名称的端到端规范化、执行往返、持久图片保存／读取且 base64 只保留在规范值中、缺少图片路由时明确拒绝、重复 `serverName` 拒绝，以及 dispose。
+- **E2E**（`tests/mcp-client.e2e.ts`，无需密钥）：使用真实 MCP v2 协议对接仓库内 `serveStdio` fixture、用于 legacy 回退的 `@modelcontextprotocol/server-everything` 和 stdio 上的 `@modelcontextprotocol/server-filesystem`，以及通过无状态 Streamable HTTP 提供服务的 strict modern `createMcpHandler` fixture——命名空间下的发现、modern era 协商、legacy 回退、`subscriptions/listen` 刷新、带点号名称的端到端规范化、执行往返、持久图片保存／读取且 base64 只保留在规范值中、缺少图片路由时明确拒绝、重复 `serverName` 拒绝，以及 dispose。
 - **快照**：组装后的 ACP 示例负责传输可见的内联图片 transcript 与 PTC mode 图片转发 transcript；包 E2E 负责真实 MCP 协议，因为可运行快照必须保持无密钥且确定，而不是 spawn 第三方服务器包。MCP 工具卡片仍使用通用卡片兜底，无需包专属 UI 快照。
 
 ## 后果
@@ -216,7 +216,7 @@ MCP 仅保证工具名在[单个服务器内](https://modelcontextprotocol.io/sp
 - 每个 MCP 服务器只需 `cordis.yml` 中的一条配置即完成集成：`serverName: filesystem` 加一条 stdio 命令（或一个 Streamable HTTP URL），就能将 `mcp__filesystem__read_file` 放入模型的工具列表，可调用，协议上使用原始的 `read_file`。
 - 公开名称是会话历史和权限／配置 API 的一部分；测试固定了命名算法，发布后变更即为破坏性变更。
 - `mcp__<serverName>__` 限定符在每个名称上消耗 token。已接受：描述和 JSON Schema 在工具定义 token 中占主导，而限定符换来了稳定标识、冲突隔离和 MCP 全局策略匹配模式（`mcp__*`、`mcp__github__*`）。
-- **MCP SDK 稳定性**：`@modelcontextprotocol/sdk` 仍在演进中；破坏性变更需要更新桥接。版本已固定，且该 SDK 被广泛采用（Claude Desktop、Cursor、VS Code），因此破坏性变更不太可能悄然发生。
+- **MCP SDK 稳定性**：v2 将 client runtime 与原始 wire schema 分开，API 或协议 era 的破坏性变化需要更新桥接。锁文件固定经过测试的 2.0.0 包图；发布验证还会通过官方 Host 执行构建后的入口。
 - **工具 schema 质量**：MCP 服务器可能暴露描述不佳的工具（模糊的描述、不完整的 JSON Schema）。harness 原样透传——垃圾进垃圾出；这是服务器作者的责任，不是桥接的。
 - **Stdio 进程管理**：行为异常的 MCP 服务器如果忽略信号，可能卡住 dispose。Cordis fiber 的 dispose 具有有界的完全停稳过程；卡住的传输层最终会在框架层面超时。
 - 崩溃恢复在[重连预算](../../archived/feature/2026-08-06-mcp-client-auto-reconnect.md)内自动进行；耗尽后或配置 `reconnect.enabled: false` 时回退为手动重新加载。

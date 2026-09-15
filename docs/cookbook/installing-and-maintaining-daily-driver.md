@@ -2,7 +2,7 @@
 
 English | [中文](installing-and-maintaining-daily-driver.zh.md)
 
-This tutorial installs a standalone official DSH 0.1.5-rc.1 runtime and the daily-driver Pi adapter. Node.js 24, Corepack, GitHub CLI, and access to npm and GitHub Releases are required. The [release decision](../../.agents/notes/implemented/process/2026-09-12-pinned-daily-driver.md) explains the fixed baseline and single-package override.
+This tutorial installs a standalone official DSH 0.1.5-rc.1 runtime and the daily-driver Pi and MCP client overrides. Node.js 24, Corepack, GitHub CLI, and access to npm and GitHub Releases are required. The [release decision](../../.agents/notes/implemented/process/2026-09-12-pinned-daily-driver.md) explains the fixed baseline and two-package override.
 
 ## 1. Download a verified release
 
@@ -17,7 +17,7 @@ gh release download "$tag" --repo TTTPOB/deepseek-harness --dir "$release_dir"
 (cd "$release_dir" && sha256sum -c SHA256SUMS)
 ```
 
-The release contains one adapter tarball, `runtime-package.json`, `runtime-pnpm-lock.yaml`, and `SHA256SUMS`. The runtime manifest fixes the entire DSH package family to 0.1.5-rc.1; the lockfile fixes the tested dependency graph. Installing only `@deepseek-ai/dsh@0.1.5-rc.1` would still permit newer internal packages through its caret ranges.
+The release contains Pi and MCP override tarballs, `runtime-package.json`, `runtime-pnpm-lock.yaml`, and `SHA256SUMS`. The runtime manifest fixes the entire DSH package family to 0.1.5-rc.1; the lockfile fixes the tested dependency graph. Installing only `@deepseek-ai/dsh@0.1.5-rc.1` would still permit newer internal packages through its caret ranges.
 
 ## 2. Install outside the development checkout
 
@@ -39,11 +39,12 @@ The version command reports `0.1.5-rc.1`. pnpm uses its normal user-level store 
 After preparing the target profile, install the immutable Release URL through official reconciliation:
 
 ```sh
-adapter_url="https://github.com/TTTPOB/deepseek-harness/releases/download/$tag/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.1.tgz"
-corepack pnpm@10.13.1 --dir "$runtime_dir" exec dsh plugin --profile web add "$adapter_url"
+pi_url="https://github.com/TTTPOB/deepseek-harness/releases/download/$tag/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.1.tgz"
+mcp_url="https://github.com/TTTPOB/deepseek-harness/releases/download/$tag/deepseek-ai-dsh-mcp-client-0.1.5-rc.1.tgz"
+corepack pnpm@10.13.1 --dir "$runtime_dir" exec dsh plugin --profile web add "$pi_url" "$mcp_url"
 ```
 
-The adapter is a plain dependency replacing an existing row, so `declares no dsh.bundle` is expected. It brings Pi AI 0.85.1-dsh.1 through its own immutable dependency URL. Other profiles need their own adapter installation. Existing profile migration is a separate operator task; this release installs no Session or token-meter override.
+Both overrides are plain profile dependencies; `declares no dsh.bundle` is expected. The Pi package brings Pi AI 0.85.1-dsh.1 through its immutable dependency URL, while the MCP package brings MCP SDK v2.0.0 and supports modern 2026-07-28 negotiation with legacy fallback. Other profiles need their own package installation. Existing profile migration is a separate operator task; this release installs no Session or token-meter override.
 
 ## 4. Start the Web application
 
@@ -53,22 +54,24 @@ corepack pnpm@10.13.1 --dir "$HOME/.local/share/dsh-runtime" run web
 
 The standard Web address is `http://127.0.0.1:3080`. The command uses the configured DSH home and profiles. Stop the previous Host before replacing a running installation, and restart after changing a Host plugin. No build or development checkout is needed for this command.
 
-## 5. Develop and publish another adapter revision
+## 5. Develop and publish another override revision
 
-Implement changes in a persistent feature worktree based on daily-driver. Keep the baseline fixed and run the adapter tests, official build, documentation checks, and installed smoke:
+Implement changes in a persistent feature worktree based on daily-driver. Keep the baseline fixed and run the Pi and MCP tests, official build, documentation checks, and installed smoke:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm exec vitest run packages/llm/llm-pi-ai/tests
+pnpm exec vitest run packages/llm/llm-pi-ai/tests packages/mcp/mcp-client/tests/mcp-client.spec.ts packages/mcp/mcp-client/tests/apply.spec.ts packages/mcp/mcp-client/tests/reconnect.spec.ts packages/mcp/mcp-client/tests/egress.spec.ts
+pnpm exec vitest run --config vitest.e2e.config.ts packages/mcp/mcp-client/tests/mcp-client.e2e.ts
 pnpm run build:official
 pnpm run doc-sync
 node scripts/daily-driver.mjs verify
 mkdir -p dist/daily-driver
 pnpm --dir packages/llm/llm-pi-ai pack --pack-destination "$PWD/dist/daily-driver"
-node scripts/daily-driver.mjs smoke dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.1.tgz
+pnpm --dir packages/mcp/mcp-client pack --pack-destination "$PWD/dist/daily-driver"
+node scripts/daily-driver.mjs smoke dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.1.tgz dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.5-rc.1.tgz
 ```
 
-The smoke uses a temporary home and official registry installation, tests Web composition and the built adapter, and writes the verified runtime manifest and lockfile beside the tarball. It does not change normal profiles. After committing and integrating the validated change into daily-driver, invoke the manual workflow:
+The smoke uses a temporary home and official registry installation, tests Web composition and both built overrides, and writes the verified runtime manifest and lockfile beside the tarballs. It does not change normal profiles. After committing and integrating the validated change into daily-driver, invoke the manual workflow:
 
 ```sh
 gh workflow run daily-driver-release.yml --repo TTTPOB/deepseek-harness --ref daily-driver

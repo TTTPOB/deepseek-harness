@@ -15,8 +15,7 @@
  * @module
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
+import { Client } from '@modelcontextprotocol/client'
 import type { Context } from '@deepseek-ai/cordis'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { createTransport } from './transport.ts'
@@ -235,14 +234,39 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
    * @param startup - Whether this is the plugin's activation attempt.
    */
   async function connectGeneration(startup: boolean): Promise<void> {
+    let closeObserved = false
+    const hasClosed = (): boolean => closeObserved
     const generation = new Client(
       { name: 'dsh-mcp-client', version: '0.0.1' },
-      { capabilities: {} },
+      {
+        capabilities: {},
+        // Probe for the modern 2026-07-28 protocol and fall back to the
+        // legacy initialize handshake for servers that do not support it.
+        versionNegotiation: { mode: 'auto' },
+        // The bridge owns the atomic tool-registry swap. Ask the SDK to
+        // subscribe on modern connections while returning no auto-refreshed
+        // definitions, then run the same uncached sync for both eras.
+        listChanged: {
+          tools: {
+            autoRefresh: false,
+            onChanged: (error) => {
+              if (!isCurrent(generation)) return
+              if (error !== null) {
+                ctx.logger.error(`${label}: tool list change notification failed: ${String(error)}`)
+                return
+              }
+              ctx.logger.info(`${label}: tool list changed, re-syncing`)
+              void enqueueSync(generation).catch((syncError: unknown) => {
+                // Fetch-phase failure leaves the previous generation live.
+                if (!disposed) ctx.logger.error(`${label}: tool re-sync failed: ${String(syncError)}`)
+              })
+            },
+          },
+        },
+      },
     )
     const closed: PromiseWithResolvers<void> = Promise.withResolvers()
     let attemptSettled = false
-    let closeObserved = false
-    const hasClosed = (): boolean => closeObserved
     client = generation
     clientClosed = closed.promise
     generation.onclose = () => {
@@ -252,22 +276,6 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
       // established generation can transition down directly from this signal.
       if (attemptSettled) generationDown(generation)
     }
-    // Registered before connect so a list change during the initial sync is
-    // queued behind it rather than dropped.
-    generation.setNotificationHandler(
-      ToolListChangedNotificationSchema,
-      async () => {
-        if (!isCurrent(generation)) return
-        ctx.logger.info(`${label}: tool list changed, re-syncing`)
-        try {
-          await enqueueSync(generation)
-        } catch (error) {
-          // Fetch-phase failure: the previous generation is still registered
-          // and `disposers` still owns it — keep serving the last good list.
-          if (!disposed) ctx.logger.error(`${label}: tool re-sync failed: ${String(error)}`)
-        }
-      },
-    )
     try {
       await generation.connect(createTransport(config))
       if (hasClosed()) {

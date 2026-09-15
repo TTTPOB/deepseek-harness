@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-mcp-client` lets the model call tools from external Model Context Protocol (MCP) servers as native harness tools. Configure one server per entry, and its tools appear under stable names such as `mcp__github__create_issue`. Use it for filesystem, GitHub, database, memory, or other MCP tool servers; no server is enabled by default. Tool definitions add tokens to every model request, while a slow or crashed server can delay startup or make its tools fail until recovery. The package bridges tools only; MCP resources and prompts are unsupported.
+`dsh-mcp-client` lets the model call tools from external Model Context Protocol (MCP) servers as native harness tools. It uses MCP SDK v2 with automatic modern/legacy negotiation and stateless HTTP support. Configure one server per entry, and its tools appear under stable names such as `mcp__github__create_issue`. Use it for filesystem, GitHub, database, memory, or other MCP tool servers; no server is enabled by default. Tool definitions add tokens to every model request, while a slow or crashed server can delay startup or make its tools fail until recovery. The package bridges tools only; MCP resources and prompts are unsupported.
 
 ## Table of Contents
 
@@ -67,6 +67,8 @@ Add one entry per server; nothing else is required. After the harness starts, th
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-mcp-client) is the exhaustive source for every accepted field.
 
+The bridge uses the official MCP SDK v2.0.0 packages. `versionNegotiation: { mode: 'auto' }` selects the modern 2026-07-28 era when available and falls back to the legacy `initialize` handshake; it never injects an `MCP-Protocol-Version` header. Modern Streamable HTTP is stateless, while stdio keeps the SDK's sibling-process probe and direct child lifecycle.
+
 After startup, the server's tools appear as `mcp__<serverName>__<tool>` — try a prompt that uses one. If the initial connection fails, the harness still starts but no tools from that server appear, and an error is logged; set `failOnStartupError: true` to make a startup failure abort the harness instead.
 
 ### Tool naming and coexistence
@@ -87,7 +89,7 @@ Images are supported when the current model accepts image input and the harness 
 
 ### Startup, updates, and reconnection
 
-The server's tools appear before the harness starts its first turn. When the server changes its tool list, the model's tool set updates automatically; if the update fails, the previous tool set keeps working.
+The server's tools appear before the harness starts its first turn. When the server changes its tool list, the model's tool set updates automatically; the v2 client maps legacy `notifications/tools/list_changed` and modern `subscriptions/listen` events to the same atomic re-sync. If the update fails, the previous tool set keeps working.
 
 When a server connection drops — for example a local server process crashes — the plugin reconnects automatically with delays that double from 500 ms up to 30 s and then refreshes the tool set; reconnect progress is visible in the logs. During an outage the last known tools stay listed but calls to them fail until the server recovers. After ten consecutive failed attempts the server's tools are removed and reconnection stops until you reload the configuration or restart the harness; a server that stays connected for a while resets that counter. Set `reconnect.enabled: false` to disable automatic reconnection — tools then stay listed but fail until you reload. Editing the configuration entry reloads the server connection in place, and unchanged names stay unchanged.
 
@@ -108,6 +110,7 @@ This section explains the design decisions behind the bridge and points at the c
 - **The raw name is the only wire name.** `tools/call` always receives the raw name; the public name is never sent to the server and never parsed to recover the raw name.
 - **Full generation or none.** Syncs swap generations atomically: a fetch failure keeps the previous generation, and a registration conflict rolls back the entire attempted generation.
 - **One canonical value, one projection.** The executor returns the protocol-complete canonical `McpResult`; a separate ordered projection prepares Native content, and `finalizeContent` installs it only when the registry's post-execute result is unchanged, so policy blocks and value replacements stay authoritative.
+- **Protocol-era negotiation belongs to the SDK.** Each generation uses MCP SDK v2 `versionNegotiation: { mode: 'auto' }`; the client probes `server/discover` for modern 2026-07-28, falls back to legacy `initialize`, and owns modern `subscriptions/listen` alongside legacy list-change notifications.
 
 ### Source map
 
@@ -116,14 +119,14 @@ This section explains the design decisions behind the bridge and points at the c
 | [`src/index.ts`](src/index.ts) | Plugin entry: `Config` schema, `serverName` reservation, activation await |
 | [`src/connection.ts`](src/connection.ts) | Connection supervisor: client generations, reconnect policy, attempt budget, disposal |
 | [`src/tools.ts`](src/tools.ts) | Tool bridge: discovery, naming, registration swap, execution, image projection |
-| [`src/transport.ts`](src/transport.ts) | Transport factory: stdio spawn with scrubbed env, Streamable HTTP |
+| [`src/transport.ts`](src/transport.ts) | Transport factory: v2 stdio spawn with scrubbed env, Streamable HTTP |
 | — | No runtime invariant companion is published; MCP generations contribute through the tool registry, but the bridge exposes no independent server-to-tool snapshot after an asynchronous resync. |
 
 ### Lifecycle and sync
 
 `apply` resolves the reconnect policy, reserves the `serverName` inside the current registration scope, starts the supervisor, and awaits the initial connection plus discovery. Independent Agent scopes may reuse the same namespace because their tools and transports are isolated; a duplicate inside one scope fails at load. The supervisor serializes every sync — initial, notification, and reconnect — through one queue so two syncs can never interleave their dispose-previous/register-next swap. Disposal cancels pending reconnects, closes the live client, waits for the in-flight attempt and queued syncs to quiesce, and unregisters the current generation.
 
-The supervisor listens for `notifications/tools/list_changed` and queues a re-sync; a fetch-phase failure keeps the previous generation registered, while a registration conflict rolls back the attempted generation. Each outage shares one attempt budget: after `maxAttempts` consecutive failures the tools are unregistered and reconnection stops, and a connection that stays up past `maxDelayMs` resets the budget.
+The v2 client subscribes to modern `subscriptions/listen` when the server advertises tool changes and handles legacy `notifications/tools/list_changed` through the same callback. The supervisor queues one re-sync for either event; a fetch-phase failure keeps the previous generation registered, while a registration conflict rolls back the attempted generation. Each outage shares one attempt budget: after `maxAttempts` consecutive failures the tools are unregistered and reconnection stops, and a connection that stays up past `maxDelayMs` resets the budget.
 
 ### Tool execution internals
 
@@ -190,7 +193,7 @@ These limits describe what you cannot do with this plugin and when it needs oper
 
 - **Tools are the only bridged MCP capability** — Resources and Prompts have no harness consumer mechanism and are deferred.
 - **Startup and discovery timeouts are inherited from the MCP SDK** — the plugin exposes no connection or discovery timeout; each `initialize` and paginated `tools/list` request uses the SDK's 60-second request default, so an unresponsive server or cursor chain can delay both activation and teardown while the initial synchronization settles.
-- **Reconnect triggers on transport close** — a crashed stdio child fires it; Streamable HTTP failures surface per request through the SDK transport's own recovery, so an unreachable HTTP server is retried per call rather than respawned by the supervisor.
+- **Reconnect triggers on transport close** — a crashed stdio child fires it; Streamable HTTP failures surface per request through the v2 SDK transport's own recovery, so an unreachable HTTP server is retried per call rather than respawned by the supervisor.
 - **Image is the only durable rich-result bridge** — PNG, JPEG, WebP, and GIF enter Native context after exact capability proof. Audio and embedded-resource payloads remain execution-local with explicit diagnostics, while resource links preserve only their name and URI as text.
 - **Unsupported MCP output schemas are not enforced** — `structuredContent` falls back to `JsonValue` when the advertised schema uses vocabulary outside the harness subset.
 - **Task-required MCP tools are rejected at call time** — a tool that requires the task-based execution extension throws instead of bridging; the extension is not implemented.
@@ -207,6 +210,6 @@ This Dev Note is working context for maintainers: open design questions and dire
 - An explicit DSH-owned connection and discovery timeout is an open direction; the SDK's 60-second default bounds startup and teardown.
 - Reconnect ownership for Streamable HTTP is open: per-request retry is SDK behavior, and the supervisor could also own the HTTP generation.
 - Bridging MCP Resources needs a harness-side injection decision (system prompt, on demand, or model-triggered); bridging Prompts needs a prompt-template concept the harness lacks.
-- The pinned MCP SDK is still evolving; a breaking upstream change requires updating the bridge.
+- MCP SDK v2 is split into `@modelcontextprotocol/client` and `@modelcontextprotocol/core`; a breaking upstream change or protocol-era addition requires updating this bridge and its fixtures.
 
 </details>

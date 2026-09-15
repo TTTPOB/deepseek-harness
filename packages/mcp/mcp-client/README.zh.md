@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-mcp-client` 让模型把外部 MCP（Model Context Protocol）服务器的工具当作 harness 原生工具调用。每台服务器配置一条记录，其工具便会以稳定名称出现，例如 `mcp__github__create_issue`。可将它用于文件系统、GitHub、数据库、记忆或其他 MCP 工具服务器；默认不启用任何服务器。工具定义会为每次模型请求增加 token；缓慢或崩溃的服务器可能延迟启动，或让工具调用失败直至恢复。本包只桥接工具；MCP resources 与 prompts 不受支持。
+`dsh-mcp-client` 让模型把外部 MCP（Model Context Protocol）服务器的工具当作 harness 原生工具调用。它使用 MCP SDK v2 自动协商 modern/legacy，并支持无状态 HTTP。每台服务器配置一条记录，其工具便会以稳定名称出现，例如 `mcp__github__create_issue`。可将它用于文件系统、GitHub、数据库、记忆或其他 MCP 工具服务器；默认不启用任何服务器。工具定义会为每次模型请求增加 token；缓慢或崩溃的服务器可能延迟启动，或让工具调用失败直至恢复。本包只桥接工具；MCP resources 与 prompts 不受支持。
 
 ## 目录
 
@@ -67,6 +67,8 @@ kind: "package-reference"
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-mcp-client)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
+桥接使用官方 MCP SDK v2.0.0 包。`versionNegotiation: { mode: 'auto' }` 会在可用时选择 modern 2026-07-28 era，不支持时回退到 legacy `initialize` 握手；它不会注入 `MCP-Protocol-Version` 标头。Modern Streamable HTTP 无状态，stdio 则保留 SDK 的 sibling-process probe 与直接子进程生命周期。
+
 启动后，服务器的工具会以 `mcp__<serverName>__<tool>` 形式出现——试着用一条提示词调用其中一个。如果初始连接失败，harness 仍会启动，但该服务器的工具不会出现，并会记录一条错误；设置 `failOnStartupError: true` 可让启动失败改为中止 harness。
 
 ### 工具命名与共存
@@ -87,7 +89,7 @@ kind: "package-reference"
 
 ### 启动、工具更新与重连
 
-服务器的工具会在 harness 开始首个轮次之前出现。服务器更改工具列表时，模型的工具集会自动更新；更新失败时，上一组工具继续可用。
+服务器的工具会在 harness 开始首个轮次之前出现。服务器更改工具列表时，模型的工具集会自动更新；v2 client 会把 legacy `notifications/tools/list_changed` 与 modern `subscriptions/listen` 事件映射到同一个原子重新同步。更新失败时，上一组工具继续可用。
 
 服务器连接断开时——例如本地服务器进程崩溃——插件会以从 500 ms 起逐次翻倍、上限 30 s 的延迟自动重连，并刷新工具集；重连进度在日志中可见。中断期间最后已知的工具仍会列出，但对它们的调用会失败，直到服务器恢复。连续失败十次后，该服务器的工具会被移除，重连停止，直到你重载配置或重启 harness；服务器持续连接一段时间后，该计数会重置。设置 `reconnect.enabled: false` 可禁用自动重连——此时工具在断开后仍会列出，但调用失败，直到你重载。编辑配置项会在原地重载服务器连接，未变的名称保持不变。
 
@@ -108,6 +110,7 @@ kind: "package-reference"
 - **原始名称是唯一的协议名称。** `tools/call` 始终收到原始名称；公开名称绝不会发给服务器，也绝不会被解析来还原原始名称。
 - **要么完整世代，要么没有。** 同步会原子地交换世代：获取失败保留上一世代，注册冲突则回滚整个尝试中的世代。
 - **一个规范值，一个投影。** 执行器返回协议完整的规范 `McpResult`；另一个有序投影准备 Native 内容，`finalizeContent` 只在注册表的执行后结果未变时安装它，因此策略块与值替换保持权威。
+- **协议 era 协商由 SDK 负责。** 每个世代使用 MCP SDK v2 的 `versionNegotiation: { mode: 'auto' }`；client 先用 `server/discover` 探测 modern 2026-07-28，再回退到 legacy `initialize`，并由 SDK 统一处理 modern `subscriptions/listen` 与 legacy 工具列表通知。
 
 ### 源码地图
 
@@ -116,14 +119,14 @@ kind: "package-reference"
 | [`src/index.ts`](src/index.ts) | 插件入口：`Config` schema、`serverName` 预留、激活等待 |
 | [`src/connection.ts`](src/connection.ts) | 连接监督器：客户端世代、重连策略、尝试预算、dispose |
 | [`src/tools.ts`](src/tools.ts) | 工具桥接：发现、命名、注册交换、执行、图片投影 |
-| [`src/transport.ts`](src/transport.ts) | 传输工厂：带清洗环境的 stdio spawn、Streamable HTTP |
+| [`src/transport.ts`](src/transport.ts) | 传输工厂：带清洗环境的 v2 stdio spawn、Streamable HTTP |
 | — | 不发布运行时不变式伴生入口；世代只能通过工具注册表观察。 |
 
 ### 生命周期与同步
 
 `apply` 解析重连策略、在当前注册作用域内预留 `serverName`、启动监督器，并等待初始连接加发现完成。独立 Agent 作用域可以复用相同 namespace，因为其工具与传输彼此隔离；同一作用域内重复会在加载时失败。监督器把所有同步——初始、通知与重连——串行到同一条队列，因此两次同步绝不会交错执行各自的先 dispose 后注册交换。dispose 会取消待执行的重连、关闭活动客户端、等待进行中的尝试与排队同步完全停稳，然后注销当前世代。
 
-监督器监听 `notifications/tools/list_changed` 并排队一次重新同步；获取阶段失败时保留上一世代注册，注册冲突则回滚本次尝试的世代。每次中断共享一个尝试预算：连续失败达到 `maxAttempts` 次后工具被注销、重连停止；连接存活超过 `maxDelayMs` 会重置预算。
+v2 client 会在服务器声明工具变更时订阅 modern `subscriptions/listen`，并通过同一个回调处理 legacy `notifications/tools/list_changed`。监督器会为任一事件排队一次重新同步；获取阶段失败时保留上一世代注册，注册冲突则回滚本次尝试的世代。每次中断共享一个尝试预算：连续失败达到 `maxAttempts` 次后工具被注销、重连停止；连接存活超过 `maxDelayMs` 会重置预算。
 
 ### 工具执行内部细节
 
@@ -190,7 +193,7 @@ kind: "package-reference"
 
 - **只桥接 MCP 的工具能力**——Resources 与 Prompts 没有 harness 消费机制，暂缓实现。
 - **启动与发现超时继承自 MCP SDK**——插件不暴露连接或发现超时；每次 `initialize` 与分页 `tools/list` 请求都使用 SDK 默认的 60 秒请求超时，因此无响应的服务器或 cursor chain 在初始同步完成期间可能同时延迟激活与 teardown。
-- **重连在传输关闭时触发**——崩溃的 stdio 子进程会触发重连；Streamable HTTP 失败按请求经 SDK 传输自身的恢复机制暴露，因此不可达的 HTTP 服务器会按调用重试，而非由 supervisor 重新 spawn。
+- **重连在传输关闭时触发**——崩溃的 stdio 子进程会触发重连；Streamable HTTP 失败按请求经 v2 SDK 传输自身的恢复机制暴露，因此不可达的 HTTP 服务器会按调用重试，而非由 supervisor 重新 spawn。
 - **图片是唯一的持久丰富结果桥接**——PNG、JPEG、WebP 与 GIF 在确切能力得到证明后进入 Native 上下文。音频与嵌入资源载荷仍只存在于执行局部并带明确诊断，资源链接只以文本保留名称与 URI。
 - **不强制执行不受支持的 MCP 输出 schema**——已声明 schema 使用 harness 子集之外的词汇时，`structuredContent` 回退为 `JsonValue`。
 - **要求基于任务的 MCP 工具在调用时被拒绝**——要求使用基于任务的执行（task-based execution）扩展的工具会抛出异常而非被桥接；该扩展未实现。
@@ -207,6 +210,6 @@ kind: "package-reference"
 - 由 DSH 显式拥有的连接与发现超时是开放的探索方向；SDK 的 60 秒默认值约束着启动与 teardown。
 - Streamable HTTP 的重连归属仍未决定：按请求重试是 SDK 行为，supervisor 也可以拥有 HTTP 世代。
 - 桥接 MCP Resources 需要 harness 侧的注入决策（系统提示词、按需或模型触发）；桥接 Prompts 需要 harness 缺少的提示词模板概念。
-- 固定的 MCP SDK 仍在演化；上游破坏性变更需要更新桥接。
+- MCP SDK v2 拆分为 `@modelcontextprotocol/client` 与 `@modelcontextprotocol/core`；上游破坏性变更或协议 era 增加时，需要同步更新本桥接与 fixture。
 
 </details>
