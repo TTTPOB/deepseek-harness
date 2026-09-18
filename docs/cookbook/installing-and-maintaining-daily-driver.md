@@ -9,13 +9,13 @@ This tutorial installs an official DSH 0.1.5-rc.2 runtime with four installation
 Use the exact fork revision selected for the installation:
 
 ```sh
-tag=daily-driver-v0.1.5-rc.2-fork1
+tag=daily-driver-v0.1.5-rc.2-fork2
 release_dir=$(mktemp -d)
 gh release download "$tag" --repo TTTPOB/deepseek-harness --dir "$release_dir"
 (cd "$release_dir" && sha256sum -c SHA256SUMS)
 ```
 
-The release contains three DSH tarballs at version `0.1.5-rc.2-fork1`, Pi AI `0.85.1-fork1`, the tested runtime manifest, pnpm workspace configuration and lockfile, and `SHA256SUMS`. Install all four tarballs together. The llm-pi-ai tarball requires the exact Pi fork version and does not silently resolve the official Pi package.
+The release contains MCP client `0.1.5-rc.2-fork2`, subagent and llm-pi-ai `0.1.5-rc.2-fork1`, Pi AI `0.85.1-fork1`, the tested runtime manifest, pnpm workspace configuration and lockfile, and `SHA256SUMS`. Install all four tarballs together. The llm-pi-ai tarball requires the exact Pi fork version and does not silently resolve the official Pi package.
 
 ## 2. Install outside the development checkout
 
@@ -43,17 +43,15 @@ corepack pnpm@11.7.0 --dir "$runtime_dir" list \
   @earendil-works/pi-ai
 ```
 
-The three DSH packages must report `0.1.5-rc.2-fork1`, and Pi AI must report `0.85.1-fork1`. Existing profile-local copies of the same packages take precedence over installation fallback; remove them through `dsh plugin --profile <name> remove ...` before claiming that the installation-wide overrides are active.
+MCP client must report `0.1.5-rc.2-fork2`, subagent and llm-pi-ai must report `0.1.5-rc.2-fork1`, and Pi AI must report `0.85.1-fork1`. Existing profile-local copies of the same packages take precedence over installation fallback; remove them through `dsh plugin --profile <name> remove ...` before claiming that the installation-wide overrides are active.
 
 ## 4. Publish another fork revision
 
-Keep the upstream versions fixed and increment only `forkN`. Build and smoke all four tarballs, commit the changes, integrate them into `daily-driver` without rewriting history, and push the Pi tag before the DSH tag:
+Keep each upstream version fixed and increment `forkN` only for a package whose contents change. Build that package, assemble unchanged support tarballs from the preceding immutable daily-driver Release, smoke the complete four-package set, commit the changes, and integrate them into `daily-driver` without rewriting history:
 
 ```sh
-git tag pi-ai-v0.85.1-fork2 <verified-pi-commit>
-git push fork pi-ai-v0.85.1-fork2
-git tag daily-driver-v0.1.5-rc.2-fork2 <verified-dsh-commit>
-git push fork daily-driver-v0.1.5-rc.2-fork2
+git tag daily-driver-v0.1.5-rc.2-fork3 <verified-dsh-commit>
+git push fork daily-driver-v0.1.5-rc.2-fork3
 ```
 
-Each tag automatically runs its release workflow. The DSH workflow downloads the already-published Pi asset, runs focused tests and the official build, packs the three DSH overrides, performs an isolated installation smoke, and creates the immutable Release. `workflow_dispatch` is a recovery option; do not dispatch it concurrently with the matching tag run. Never reuse a tag or overwrite release assets.
+The tag automatically runs the release workflow. The workflow downloads unchanged support assets, runs focused tests, builds and packs the changed package, performs an isolated installation smoke, and creates the immutable Release. If Pi AI changes, publish its new immutable Pi Release before the DSH tag and update the exact llm-pi-ai dependency. `workflow_dispatch` is a recovery option; do not dispatch it concurrently with the matching tag run. Never reuse a tag or overwrite release assets.

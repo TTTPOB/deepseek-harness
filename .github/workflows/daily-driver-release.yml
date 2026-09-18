@@ -16,8 +16,8 @@ concurrency:
 env:
   DSH_TELEMETRY_DISABLED: '1'
   BASE_VERSION: 0.1.5-rc.2
-  FORK_VERSION: 0.1.5-rc.2-fork1
-  PI_RELEASE: pi-ai-v0.85.1-fork1
+  FORK_VERSION: 0.1.5-rc.2-fork2
+  SUPPORT_RELEASE: daily-driver-v0.1.5-rc.2-fork1
 
 jobs:
   build:
@@ -50,27 +50,31 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "tag=$expected_tag" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile
-      - name: Verify changed packages
+      - name: Verify changed package
         run: |
-          pnpm exec vitest run packages/subagent/subagent/tests/continuation-messages.spec.ts packages/llm/llm-pi-ai/tests packages/mcp/mcp-client/tests/mcp-client.spec.ts packages/mcp/mcp-client/tests/apply.spec.ts packages/mcp/mcp-client/tests/reconnect.spec.ts packages/mcp/mcp-client/tests/egress.spec.ts
+          pnpm exec vitest run packages/mcp/mcp-client/tests/mcp-client.spec.ts packages/mcp/mcp-client/tests/apply.spec.ts packages/mcp/mcp-client/tests/reconnect.spec.ts packages/mcp/mcp-client/tests/egress.spec.ts
           pnpm exec vitest run --config vitest.e2e.config.ts packages/mcp/mcp-client/tests/mcp-client.e2e.ts
-      - name: Build official packages
-        run: pnpm run build:official
-      - name: Pack four overrides
+      - name: Build MCP client package
+        run: |
+          pnpm exec tsc -b packages/typert/generator/tsconfig.json packages/mcp/mcp-client/tsconfig.json
+          pnpm exec tsdown -F packages/mcp/mcp-client --env.DSH_BUILD_FACE host
+      - name: Assemble four overrides
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/daily-driver
-          pnpm --dir packages/subagent/subagent pack --pack-destination "$PWD/dist/daily-driver"
-          pnpm --dir packages/llm/llm-pi-ai pack --pack-destination "$PWD/dist/daily-driver"
           pnpm --dir packages/mcp/mcp-client pack --pack-destination "$PWD/dist/daily-driver"
-          gh release download "$PI_RELEASE" --repo TTTPOB/pi --pattern 'earendil-works-pi-ai-*.tgz' --dir dist/daily-driver
+          gh release download "$SUPPORT_RELEASE" --repo TTTPOB/deepseek-harness \
+            --pattern 'deepseek-ai-dsh-subagent-0.1.5-rc.2-fork1.tgz' \
+            --pattern 'deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.2-fork1.tgz' \
+            --pattern 'earendil-works-pi-ai-0.85.1-fork1.tgz' \
+            --dir dist/daily-driver
       - name: Verify isolated installation-wide overrides
         run: >-
           node scripts/daily-driver.mjs smoke
           dist/daily-driver/deepseek-ai-dsh-subagent-0.1.5-rc.2-fork1.tgz
           dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.2-fork1.tgz
-          dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.5-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.5-rc.2-fork2.tgz
           dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz
       - name: Checksum tested runtime and overrides
         working-directory: dist/daily-driver
@@ -113,4 +117,4 @@ jobs:
           sha256sum -c SHA256SUMS
           gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml SHA256SUMS \
             --target "$COMMIT" --title "$TAG" --latest \
-            --notes 'Fixed official DSH 0.1.5-rc.2 baseline. Installation-wide pnpm overrides replace subagent settlement guidance, llm-pi-ai deferred-tool/final parsing and Responses instructions support, MCP SDK v2 client, and Pi AI 0.85.1-fork1. Install all four fork1 assets together; runtime-package.json records the tested dependency graph.'
+            --notes 'Fixed official DSH 0.1.5-rc.2 baseline. This revision advances MCP client to 0.1.5-rc.2-fork2 with configurable stdio maxBufferSize while retaining the tested subagent, llm-pi-ai, and Pi AI fork1 assets. Install all four assets together; runtime-package.json records the tested dependency graph.'

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-09-12-pinned-daily-driver.md
-2026-09-12-pinned-daily-driver.md: 2d29f83d6081f5ef349dfadef443ec7e40bf90a6
-2026-09-12-pinned-daily-driver.zh.md: 57c1ec21b32784d764725c6e2148ac1e5e5c7f55
+2026-09-12-pinned-daily-driver.md: 208ed188c5211425317aa74734736c9ba1cfc80c
+2026-09-12-pinned-daily-driver.zh.md: fa7cd46d11d99a046af1f71088aba4d328f27a1b

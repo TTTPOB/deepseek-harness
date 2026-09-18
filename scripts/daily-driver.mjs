@@ -9,7 +9,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const baseVersion = '0.1.5-rc.2'
-const forkVersion = `${baseVersion}-fork1`
+const supportForkVersion = `${baseVersion}-fork1`
+const mcpForkVersion = `${baseVersion}-fork2`
 const piVersion = '0.85.1-fork1'
 const base = 'fb2c4b9e698e30edb738bca4cf0618587db7d203'
 const packageNames = [
@@ -32,11 +33,11 @@ async function verify() {
   for (const path of [
     'packages/subagent/subagent/package.json',
     'packages/llm/llm-pi-ai/package.json',
-    'packages/mcp/mcp-client/package.json',
   ]) {
-    assert.equal((await manifest(join(root, path))).version, forkVersion)
+    assert.equal((await manifest(join(root, path))).version, supportForkVersion)
   }
   const mcp = await manifest(join(root, 'packages/mcp/mcp-client/package.json'))
+  assert.equal(mcp.version, mcpForkVersion)
   assert.equal(mcp.dependencies['@modelcontextprotocol/client'], '^2.0.0')
   assert.equal(mcp.dependencies['@modelcontextprotocol/core'], '^2.0.0')
   const llm = await manifest(join(root, 'packages/llm/llm-pi-ai/package.json'))
@@ -50,14 +51,15 @@ async function verify() {
     'pnpm-lock.yaml',
     'pnpm-workspace.yaml',
     'THIRD_PARTY_NOTICES.md',
+    '.agents/notes/implemented/feature/2026-07-07-mcp-client-plugin',
     '.agents/notes/implemented/process/2026-09-12-pinned-daily-driver',
     'docs/cookbook/installing-and-maintaining-daily-driver',
-    'docs/config-catalog.md',
+    'docs/config-catalog',
     '.github/workflows/daily-driver-release.yml',
     'scripts/daily-driver.mjs',
   ]
   for (const path of paths) assert(allowed.some(prefix => path.startsWith(prefix)), `Unexpected fork change: ${path}`)
-  console.log(`daily-driver: fixed ${baseVersion} baseline with ${forkVersion} overrides; ${paths.length} allowed changed paths`)
+  console.log(`daily-driver: fixed ${baseVersion} baseline with MCP ${mcpForkVersion} and support ${supportForkVersion}; ${paths.length} allowed changed paths`)
 }
 
 async function smoke(subagentTarball, llmTarball, mcpTarball, piTarball) {
@@ -85,13 +87,15 @@ async function smoke(subagentTarball, llmTarball, mcpTarball, piTarball) {
     const subagentEntry = baseRequire.resolve(packageNames[0])
     const llmEntry = baseRequire.resolve(packageNames[1])
     const mcpEntry = dshRequire.resolve(packageNames[2])
-    for (const entry of [subagentEntry, llmEntry, mcpEntry]) {
-      assert.equal((await manifest(resolve(dirname(entry), '../package.json'))).version, forkVersion)
+    for (const entry of [subagentEntry, llmEntry]) {
+      assert.equal((await manifest(resolve(dirname(entry), '../package.json'))).version, supportForkVersion)
     }
+    assert.equal((await manifest(resolve(dirname(mcpEntry), '../package.json'))).version, mcpForkVersion)
     await import(pathToFileURL(subagentEntry).href)
     await import(pathToFileURL(llmEntry).href)
     const mcp = await import(pathToFileURL(mcpEntry).href)
     assert.equal(mcp.name, 'mcp-client')
+    assert((await readFile(mcpEntry, 'utf8')).includes('maxBufferSize'))
     assert((await readFile(subagentEntry, 'utf8')).includes('settlement will automatically notify the parent'))
     assert((await readFile(llmEntry, 'utf8')).includes('toolCallParsing: "final"'))
     const resolverPath = join(dirname(llmEntry), 'smoke-resolve.mjs')

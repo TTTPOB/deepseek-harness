@@ -9,13 +9,13 @@
 使用为本次安装选定的精确 fork 修订：
 
 ```sh
-tag=daily-driver-v0.1.5-rc.2-fork1
+tag=daily-driver-v0.1.5-rc.2-fork2
 release_dir=$(mktemp -d)
 gh release download "$tag" --repo TTTPOB/deepseek-harness --dir "$release_dir"
 (cd "$release_dir" && sha256sum -c SHA256SUMS)
 ```
 
-Release 包含三个版本为 `0.1.5-rc.2-fork1` 的 DSH tarball、Pi AI `0.85.1-fork1`、经过测试的运行时 manifest、pnpm workspace 配置与 lockfile，以及 `SHA256SUMS`。四个 tarball 必须一起安装。llm-pi-ai tarball 要求精确的 Pi fork 版本，不会静默解析到官方 Pi 包。
+Release 包含 MCP client `0.1.5-rc.2-fork2`、subagent 与 llm-pi-ai `0.1.5-rc.2-fork1`、Pi AI `0.85.1-fork1`、经过测试的运行时 manifest、pnpm workspace 配置与 lockfile，以及 `SHA256SUMS`。四个 tarball 必须一起安装。llm-pi-ai tarball 要求精确的 Pi fork 版本，不会静默解析到官方 Pi 包。
 
 ## 2. 在开发 checkout 之外安装
 
@@ -43,17 +43,15 @@ corepack pnpm@11.7.0 --dir "$runtime_dir" list \
   @earendil-works/pi-ai
 ```
 
-三个 DSH 包必须报告 `0.1.5-rc.2-fork1`，Pi AI 必须报告 `0.85.1-fork1`。既有 profile-local 同名副本优先于 installation fallback；声称 installation-wide override 生效前，先通过 `dsh plugin --profile <name> remove ...` 移除旧副本。
+MCP client 必须报告 `0.1.5-rc.2-fork2`，subagent 与 llm-pi-ai 必须报告 `0.1.5-rc.2-fork1`，Pi AI 必须报告 `0.85.1-fork1`。既有 profile-local 同名副本优先于 installation fallback；声称 installation-wide override 生效前，先通过 `dsh plugin --profile <name> remove ...` 移除旧副本。
 
 ## 4. 发布下一次 fork 修订
 
-保持上游版本不变，只递增 `forkN`。构建并冒烟验证四个 tarball，提交改动，无历史重写地集成到 `daily-driver`，然后先推 Pi tag，再推 DSH tag：
+保持每个上游版本不变，只为内容发生变化的包递增 `forkN`。构建该包，从前一份不可变 daily-driver Release 组装未变化的支持 tarball，对完整四包集合执行冒烟验证，提交改动，并在不重写历史的情况下集成到 `daily-driver`：
 
 ```sh
-git tag pi-ai-v0.85.1-fork2 <verified-pi-commit>
-git push fork pi-ai-v0.85.1-fork2
-git tag daily-driver-v0.1.5-rc.2-fork2 <verified-dsh-commit>
-git push fork daily-driver-v0.1.5-rc.2-fork2
+git tag daily-driver-v0.1.5-rc.2-fork3 <verified-dsh-commit>
+git push fork daily-driver-v0.1.5-rc.2-fork3
 ```
 
-每个 tag 都会自动运行对应发布 workflow。DSH workflow 下载已经发布的 Pi 资产，运行聚焦测试和官方构建，打包三个 DSH 覆盖包，执行隔离安装冒烟测试，再创建不可变 Release。`workflow_dispatch` 只用于恢复；不要让它与同一 tag run 并发。不得复用 tag 或覆盖 Release 资产。
+该 tag 会自动运行发布 workflow。Workflow 下载未变化的支持资产，运行聚焦测试，构建并打包发生变化的包，执行隔离安装冒烟测试，再创建不可变 Release。如果 Pi AI 发生变化，先发布其新的不可变 Pi Release，并更新 llm-pi-ai 的精确依赖，然后再推 DSH tag。`workflow_dispatch` 只用于恢复；不要让它与同一 tag run 并发。不得复用 tag 或覆盖 Release 资产。

@@ -10,11 +10,11 @@ daily-driver fork 需要三个 DSH 子包改动及匹配的 Pi AI 实现，同�
 
 ## Decision
 
-不可变基线是 `dsh-v0.1.5-rc.2` 的 `fb2c4b9e698e30edb738bca4cf0618587db7d203`。subagent、llm-pi-ai 与 MCP client 的 package manifest 使用 `0.1.5-rc.2-fork1`；其他 DSH 包和 CLI 保持 `0.1.5-rc.2`。Pi AI 在 staging 中改写为 `0.85.1-fork1`，llm-pi-ai 精确要求该版本。源码 workspace、CI、发布构建与运行时冒烟测试都从不可变 Pi fork Release tarball 解析该依赖。
+不可变基线是 `dsh-v0.1.5-rc.2` 的 `fb2c4b9e698e30edb738bca4cf0618587db7d203`。MCP client package manifest 使用 `0.1.5-rc.2-fork2`；subagent 与 llm-pi-ai 使用 `0.1.5-rc.2-fork1`；其他 DSH 包和 CLI 保持 `0.1.5-rc.2`。Pi AI 使用 `0.85.1-fork1`，llm-pi-ai 精确要求该版本。源码 workspace、CI、发布构建与运行时冒烟测试都从不可变 Pi fork Release tarball 解析该依赖。
 
-Fork 版本遵循 `<上游版本>-forkN`。每次修订递增 `N` 并创建新资产。Pi tag 为 `pi-ai-v0.85.1-fork1`，DSH tag 为 `daily-driver-v0.1.5-rc.2-fork1`。不得替换既有 tag、Release 或资产。
+Fork 版本遵循 `<上游版本>-forkN`。包发生修订时递增 `N`；未变化的支持包在下一份完整 daily-driver 资产集中保留已经测试的版本。Pi tag 为 `pi-ai-v0.85.1-fork1`，DSH tag 为 `daily-driver-v0.1.5-rc.2-fork2`。不得替换既有 tag、Release 或资产。
 
-两个发布 workflow 都响应匹配的 tag push，并保留可选手动触发。Tag run 会检查 tag 与源码推导的版本完全相等。Pi workflow 在 staging 中改写包版本、离线构建、检查 tarball manifest，并先发布 Pi。DSH workflow 下载该不可变 Pi 资产，运行聚焦包测试，构建官方包，打包三个 DSH 覆盖包，并在发布完整集合前把四个 tarball 一起安装到隔离运行时。
+发布 workflow 响应匹配的 tag push，并保留可选手动触发。Tag run 会检查 tag 与源码推导的版本完全相等。Pi 修订通过自己的 workflow 先行构建并发布。DSH workflow 从前一份不可变 daily-driver Release 下载未变化的支持资产，运行聚焦测试，只构建并打包发生变化的 DSH 包，并在发布完整集合前把四个 tarball 一起安装到隔离运行时。
 
 隔离运行时直接依赖每个 tarball，并将相同四个 file override 应用于整个安装。直接依赖防止 pnpm 为尚未发布到 npm 的 fork 版本查询 registry；override 让所有 Host 与 profile 依赖路径解析到相同 tarball。Workflow 发布运行时 manifest、workspace 配置、lockfile 与校验和，作为可复现安装记录。
 
@@ -30,4 +30,4 @@ rc.2 发布分支可以通过明确的 ours 策略 merge 保留旧 daily-driver 
 
 ## Testing
 
-发布校验器区分官方基线版本与三个 DSH fork 版本，并检查精确 Pi 依赖。本地打包会构建官方 DSH 输出与 Pi AI，再创建四个版本化 tarball。隔离冒烟测试以直接 tarball 依赖和匹配 override 安装官方运行时，导入三个 DSH built entry，检查改动后的构建文本与 MCP 身份，从 llm-pi-ai 解析 Pi，检查 Pi 版本及 Responses instructions 代码，并记录经过测试的 pnpm 依赖图。发布 workflow 继续运行聚焦包行为测试。
+发布校验器区分官方基线、MCP fork2、两个支持包 fork1 以及精确 Pi 依赖。发布构建只生成 MCP client，并复用不可变的支持 tarball。隔离冒烟测试以直接 tarball 依赖和匹配 override 安装官方运行时，导入三个 DSH built entry，检查支持包行为以及 MCP `maxBufferSize` 构建文本与身份，从 llm-pi-ai 解析 Pi，检查 Pi 版本及 Responses instructions 代码，并记录经过测试的 pnpm 依赖图。发布 workflow 继续运行聚焦 MCP 行为测试。
