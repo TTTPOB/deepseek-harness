@@ -1,0 +1,71 @@
+{
+  "model": "model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Find echo."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_discover",
+          "name": "discover",
+          "input": {}
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_discover",
+          "content": [
+            {
+              "type": "tool_reference",
+              "tool_name": "echo"
+            }
+          ],
+          "is_error": false
+        },
+        {
+          "type": "text",
+          "text": "Echo is available.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    }
+  ],
+  "max_tokens": 32768,
+  "stream": true,
+  "tools": [
+    {
+      "name": "discover",
+      "description": "Use discover.",
+      "eager_input_streaming": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "cache_control": {
+        "type": "ephemeral"
+      }
+    },
+    {
+      "name": "echo",
+      "description": "Use echo.",
+      "eager_input_streaming": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "defer_loading": true
+    }
+  ]
+}
