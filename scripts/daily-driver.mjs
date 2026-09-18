@@ -8,7 +8,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const version = '0.1.5-rc.2'
+const baseVersion = '0.1.5-rc.2'
+const forkVersion = `${baseVersion}-fork1`
+const piVersion = '0.85.1-fork1'
 const base = 'fb2c4b9e698e30edb738bca4cf0618587db7d203'
 const packageNames = [
   '@deepseek-ai/dsh-subagent',
@@ -26,17 +28,19 @@ async function manifest(path) {
 }
 
 async function verify() {
-  assert.equal((await manifest(join(root, 'apps/cli/package.json'))).version, version)
+  assert.equal((await manifest(join(root, 'apps/cli/package.json'))).version, baseVersion)
   for (const path of [
     'packages/subagent/subagent/package.json',
     'packages/llm/llm-pi-ai/package.json',
     'packages/mcp/mcp-client/package.json',
   ]) {
-    assert.equal((await manifest(join(root, path))).version, version)
+    assert.equal((await manifest(join(root, path))).version, forkVersion)
   }
   const mcp = await manifest(join(root, 'packages/mcp/mcp-client/package.json'))
   assert.equal(mcp.dependencies['@modelcontextprotocol/client'], '^2.0.0')
   assert.equal(mcp.dependencies['@modelcontextprotocol/core'], '^2.0.0')
+  const llm = await manifest(join(root, 'packages/llm/llm-pi-ai/package.json'))
+  assert.equal(llm.dependencies[piPackageName], piVersion)
   run('git', ['merge-base', '--is-ancestor', base, 'HEAD'])
   const paths = run('git', ['diff', '--name-only', base], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n').filter(Boolean)
   const allowed = [
@@ -44,12 +48,15 @@ async function verify() {
     'packages/llm/llm-pi-ai/',
     'packages/mcp/mcp-client/',
     'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
     'THIRD_PARTY_NOTICES.md',
+    '.agents/notes/implemented/process/2026-09-12-pinned-daily-driver',
+    'docs/cookbook/installing-and-maintaining-daily-driver',
     '.github/workflows/daily-driver-release.yml',
     'scripts/daily-driver.mjs',
   ]
   for (const path of paths) assert(allowed.some(prefix => path.startsWith(prefix)), `Unexpected fork change: ${path}`)
-  console.log(`daily-driver: fixed ${version}; ${paths.length} allowed changed paths`)
+  console.log(`daily-driver: fixed ${baseVersion} baseline with ${forkVersion} overrides; ${paths.length} allowed changed paths`)
 }
 
 async function smoke(subagentTarball, llmTarball, mcpTarball, piTarball) {
@@ -65,7 +72,7 @@ async function smoke(subagentTarball, llmTarball, mcpTarball, piTarball) {
       private: true,
       type: 'module',
       packageManager: 'pnpm@11.7.0',
-      dependencies: { '@deepseek-ai/dsh': version },
+      dependencies: { '@deepseek-ai/dsh': baseVersion, ...overrides },
     }, null, 2) + '\n')
     const overrideLines = Object.entries(overrides).map(([name, spec]) => `  ${JSON.stringify(name)}: ${JSON.stringify(spec)}`)
     await writeFile(join(runtime, 'pnpm-workspace.yaml'), `packages:\n  - .\noverrides:\n${overrideLines.join('\n')}\n`)
@@ -78,7 +85,7 @@ async function smoke(subagentTarball, llmTarball, mcpTarball, piTarball) {
     const llmEntry = baseRequire.resolve(packageNames[1])
     const mcpEntry = dshRequire.resolve(packageNames[2])
     for (const entry of [subagentEntry, llmEntry, mcpEntry]) {
-      assert.equal((await manifest(resolve(dirname(entry), '../package.json'))).version, version)
+      assert.equal((await manifest(resolve(dirname(entry), '../package.json'))).version, forkVersion)
     }
     await import(pathToFileURL(subagentEntry).href)
     await import(pathToFileURL(llmEntry).href)
@@ -91,7 +98,7 @@ async function smoke(subagentTarball, llmTarball, mcpTarball, piTarball) {
     const { resolveModule } = await import(pathToFileURL(resolverPath).href)
     const piEntry = fileURLToPath(resolveModule(piPackageName))
     const piManifestPath = resolve(dirname(piEntry), '../package.json')
-    assert.equal((await manifest(piManifestPath)).version, '0.85.1-dsh.2')
+    assert.equal((await manifest(piManifestPath)).version, piVersion)
     const piResponses = resolve(dirname(piManifestPath), 'dist/api/openai-responses.js')
     assert((await readFile(piResponses, 'utf8')).includes('params.instructions'))
     const entries = await readdir(join(runtime, 'node_modules/.pnpm'))
@@ -101,7 +108,7 @@ async function smoke(subagentTarball, llmTarball, mcpTarball, piTarball) {
     await writeFile(join(dirname(resolve(subagentTarball)), 'runtime-package.json'), await readFile(join(runtime, 'package.json')))
     await writeFile(join(dirname(resolve(subagentTarball)), 'runtime-pnpm-workspace.yaml'), await readFile(join(runtime, 'pnpm-workspace.yaml')))
     await writeFile(join(dirname(resolve(subagentTarball)), 'runtime-pnpm-lock.yaml'), await readFile(join(runtime, 'pnpm-lock.yaml')))
-    console.log(`daily-driver: isolated ${version} installation resolved all four overrides`)
+    console.log(`daily-driver: isolated ${baseVersion} installation resolved all four fork overrides`)
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }

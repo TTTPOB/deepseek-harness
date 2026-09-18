@@ -21,6 +21,8 @@ linkWorkspacePackages: true
 overrides:
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
+  # Published installations override this exact fork dependency with the Pi release tarball.
+  '@earendil-works/pi-ai@0.85.1-fork1': '0.85.1'
 
 peerDependencyRules:
   allowedVersions:

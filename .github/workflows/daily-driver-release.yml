@@ -1,6 +1,9 @@
 name: Daily-driver pinned package release
 
 on:
+  push:
+    tags:
+      - 'daily-driver-v*-fork*'
   workflow_dispatch:
 
 permissions:
@@ -12,7 +15,9 @@ concurrency:
 
 env:
   DSH_TELEMETRY_DISABLED: '1'
-  PI_RELEASE: pi-ai-v0.85.1-dsh.2
+  BASE_VERSION: 0.1.5-rc.2
+  FORK_VERSION: 0.1.5-rc.2-fork1
+  PI_RELEASE: pi-ai-v0.85.1-fork1
 
 jobs:
   build:
@@ -34,11 +39,16 @@ jobs:
       - name: Verify fixed baseline and release identity
         id: identity
         run: |
-          test "$GITHUB_REF" = refs/heads/daily-driver
+          expected_tag="daily-driver-v${FORK_VERSION}"
+          if [[ "$GITHUB_REF_TYPE" = tag ]]; then
+            test "$GITHUB_REF_NAME" = "$expected_tag"
+          else
+            test "$GITHUB_REF" = refs/heads/daily-driver
+          fi
           node scripts/daily-driver.mjs verify
           commit=$(git rev-parse HEAD)
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "tag=daily-driver-v0.1.5-rc.2-g${commit:0:10}" >> "$GITHUB_OUTPUT"
+          echo "tag=$expected_tag" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile
       - name: Verify changed packages
         run: |
@@ -58,10 +68,10 @@ jobs:
       - name: Verify isolated installation-wide overrides
         run: >-
           node scripts/daily-driver.mjs smoke
-          dist/daily-driver/deepseek-ai-dsh-subagent-0.1.5-rc.2.tgz
-          dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.2.tgz
-          dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.5-rc.2.tgz
-          dist/daily-driver/earendil-works-pi-ai-0.85.1-dsh.2.tgz
+          dist/daily-driver/deepseek-ai-dsh-subagent-0.1.5-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.5-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.5-rc.2-fork1.tgz
+          dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz
       - name: Checksum tested runtime and overrides
         working-directory: dist/daily-driver
         run: sha256sum ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml > SHA256SUMS
@@ -89,7 +99,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          current=$(gh api "repos/$GH_REPO/git/ref/heads/daily-driver" --jq '.object.sha')
+          if [[ "${{ github.event_name }}" = push ]]; then
+            current=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.sha')
+          else
+            current=$(gh api "repos/$GH_REPO/git/ref/heads/daily-driver" --jq '.object.sha')
+          fi
           test "$current" = "$COMMIT"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; immutable releases are never overwritten." >&2
@@ -99,4 +113,4 @@ jobs:
           sha256sum -c SHA256SUMS
           gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml SHA256SUMS \
             --target "$COMMIT" --title "$TAG" --latest \
-            --notes 'Fixed official DSH 0.1.5-rc.2 baseline. Installation-wide pnpm overrides replace subagent settlement guidance, llm-pi-ai deferred-tool/final parsing and Responses instructions support, MCP SDK v2 client, and Pi AI 0.85.1-dsh.2. Install all four assets together; runtime-package.json records the tested dependency graph.'
+            --notes 'Fixed official DSH 0.1.5-rc.2 baseline. Installation-wide pnpm overrides replace subagent settlement guidance, llm-pi-ai deferred-tool/final parsing and Responses instructions support, MCP SDK v2 client, and Pi AI 0.85.1-fork1. Install all four fork1 assets together; runtime-package.json records the tested dependency graph.'
