@@ -87,11 +87,12 @@ export function withContinuableReturnGuidance(
     ...prompt,
     {
       type: 'text',
-      text: `Your parent agent id is ${encodedParentId}. Before you finish, send your result to that agent with `
-        + `send_message({ agent_id: ${encodedParentId}, message: "<self-contained result>" }). The parent shares `
-        + 'your workspace but does not automatically receive your transcript, tool output, or reasoning. Send '
-        + 'earlier messages as well when a finding changes what the parent should do next; sending a message '
-        + 'does not end your turn.',
+      text: `Your parent agent id is ${encodedParentId}. When you are about to finish your current turn and settle, do not call `
+        + `send_message({ agent_id: ${encodedParentId}, message: "<self-contained result>" }) merely to report the same result to your parent. `
+        + 'Put the result in your final assistant response instead; settlement will automatically notify the parent with that final message. '
+        + 'The parent shares your workspace but does not automatically receive your transcript, tool output, or reasoning. Use send_message only '
+        + 'when information genuinely needs to reach the parent before you settle, especially when a finding changes what the parent should do next. '
+        + 'If you start background work, do not end the turn until your final report is complete; settling earlier may deliver an incomplete report.',
     },
   ]
 }
