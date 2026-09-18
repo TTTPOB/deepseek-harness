@@ -35,6 +35,7 @@ export function createTransport(config: Config): Transport {
         args: config.args,
         env: buildChildEnv(config.env),
         cwd: config.cwd,
+        ...(config.maxBufferSize === undefined ? {} : { maxBufferSize: config.maxBufferSize }),
       })
     case 'streamable-http':
       // The MCP SDK's StreamableHTTPClientTransport has optional callback

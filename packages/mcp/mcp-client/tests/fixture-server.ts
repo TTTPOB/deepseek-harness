@@ -30,6 +30,13 @@ server.registerTool('greet', {
   content: [{ type: 'text', text: `Hello, ${args.name}!` }],
 }))
 
+server.registerTool('large', {
+  title: 'Large Result Tool',
+  description: 'Returns a response larger than the SDK default stdio buffer.',
+}, async () => ({
+  content: [{ type: 'text', text: 'x'.repeat(11 * 1024 * 1024) }],
+}))
+
 server.registerTool('fail', {
   title: 'Fail Tool',
   description: 'Always returns an error.',

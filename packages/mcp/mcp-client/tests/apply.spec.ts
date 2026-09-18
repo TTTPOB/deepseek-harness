@@ -8,6 +8,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Config } from '@deepseek-ai/dsh-mcp-client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
 // ---- Mock MCP v2 client ----
 
@@ -129,6 +130,37 @@ describe('mcp-client plugin module exports', () => {
     expect(resolved.serverName).toBe('github-prod_1')
   })
 
+  it('Config schema preserves the SDK buffer default when maxBufferSize is omitted', () => {
+    const resolved = ConfigSchema({
+      transport: 'stdio',
+      serverName: 'srv',
+      command: 'echo',
+    } as never)
+    expect(resolved).not.toHaveProperty('maxBufferSize')
+  })
+
+  it('Config schema accepts a positive integer maxBufferSize in bytes', () => {
+    const resolved = ConfigSchema({
+      transport: 'stdio',
+      serverName: 'srv',
+      command: 'echo',
+      maxBufferSize: 64 * 1024 * 1024,
+    } as never)
+    expect(resolved).toHaveProperty('maxBufferSize', 67_108_864)
+  })
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'Config schema rejects invalid maxBufferSize %s',
+    (maxBufferSize) => {
+      expect(() => ConfigSchema({
+        transport: 'stdio',
+        serverName: 'srv',
+        command: 'echo',
+        maxBufferSize,
+      } as never)).toThrow()
+    },
+  )
+
   it('Config schema materializes reconnect defaults and merges partial overrides', () => {
     const omitted = ConfigSchema({
       transport: 'stdio',
@@ -181,8 +213,15 @@ describe('apply (plugin lifecycle)', () => {
     expect(mockConnect).toHaveBeenCalled()
     expect(mockListTools).toHaveBeenCalled()
     expect(mockSetNotificationHandler).toHaveBeenCalled()
+    expect(vi.mocked(StdioClientTransport).mock.calls.at(-1)?.[0]).not.toHaveProperty('maxBufferSize')
     expect(ctx.tools.get('mcp__srv__remote')).toBeDefined()
     expect(ctx.tools.get('remote')).toBeUndefined()
+  })
+
+  it('passes maxBufferSize to the stdio transport in bytes', async () => {
+    await apply(ctx, { ...stdioConfig, serverName: 'large', maxBufferSize: 64 * 1024 * 1024 })
+
+    expect(StdioClientTransport).toHaveBeenCalledWith(expect.objectContaining({ maxBufferSize: 67_108_864 }))
   })
 
   it('keeps the Cordis plugin loading until initial discovery publishes its tools', async () => {

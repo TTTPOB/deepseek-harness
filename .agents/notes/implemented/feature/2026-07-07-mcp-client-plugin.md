@@ -40,6 +40,7 @@ interface StdioConfig {
   args?: string[]
   env?: Record<string, string>
   cwd?: string
+  maxBufferSize?: number      // bytes; omission keeps the SDK default
   toolCallTimeoutMs?: number  // default 60_000
 }
 
@@ -151,7 +152,7 @@ A unified `execute` handler for all tools from one MCP server:
 
 ### Subprocess environment (stdio transport)
 
-Build the child environment from the subprocess seam's shared `scrubbedParentEnv()` base, which removes ambient names matching `/KEY|PASSWORD|SECRET|TOKEN/i` and ambient `DSH_*` names, then merge `config.env` on top. Explicit env overrides survive the scrub.
+Build the child environment from the subprocess seam's shared `scrubbedParentEnv()` base, which removes ambient names matching `/KEY|PASSWORD|SECRET|TOKEN/i` and ambient `DSH_*` names, then merge `config.env` on top. Explicit env overrides survive the scrub. A configured positive integer `maxBufferSize` passes to `StdioClientTransport` as the maximum bytes for one incoming JSON-RPC message; omission passes no option and retains the SDK's 10 MiB default.
 
 ### Disconnection / crash
 

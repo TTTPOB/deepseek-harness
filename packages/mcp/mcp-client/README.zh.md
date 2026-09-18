@@ -39,6 +39,7 @@ kind: "package-reference"
     transport: stdio
     command: npx
     args: ['-y', '@modelcontextprotocol/server-github']
+    maxBufferSize: 67108864 # 64 MiB, in bytes
     env:
       GITHUB_TOKEN: !!js process.env.GITHUB_TOKEN
 
@@ -57,6 +58,7 @@ kind: "package-reference"
 | `transport` | 必填 | `stdio` 或 `streamable-http` |
 | `serverName` | 必填 | 服务器工具名称的 namespace；`[A-Za-z0-9_-]{1,32}`，在一个注册作用域内唯一 |
 | `command` / `args` / `env` / `cwd` | — | stdio：可执行文件、参数、合并到清洗过的环境之上的额外环境变量、工作目录 |
+| `maxBufferSize` | MCP SDK 默认值（10 MiB） | stdio：一条入站 JSON-RPC 消息的正整数最大字节数；例如 `67108864` 为 64 MiB |
 | `url` / `headers` | — | streamable-http：端点 URL 与额外请求标头 |
 | `toolCallTimeoutMs` | `60,000` | 每次 `tools/call` 调用的超时 |
 | `failOnStartupError` | `false` | 初始连接或工具同步失败时拒绝插件激活 |

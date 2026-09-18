@@ -39,6 +39,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
     transport: stdio
     command: npx
     args: ['-y', '@modelcontextprotocol/server-github']
+    maxBufferSize: 67108864 # 64 MiB, in bytes
     env:
       GITHUB_TOKEN: !!js process.env.GITHUB_TOKEN
 
@@ -57,6 +58,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
 | `transport` | required | `stdio` or `streamable-http` |
 | `serverName` | required | Namespace for the server's tool names; `[A-Za-z0-9_-]{1,32}`, unique inside one registration scope |
 | `command` / `args` / `env` / `cwd` | — | stdio: executable, arguments, extra env merged over scrubbed ambient env, working directory |
+| `maxBufferSize` | MCP SDK default (10 MiB) | stdio: positive integer byte limit for one incoming JSON-RPC message; for example, `67108864` is 64 MiB |
 | `url` / `headers` | — | streamable-http: endpoint URL and extra request headers |
 | `toolCallTimeoutMs` | `60,000` | Timeout per `tools/call` invocation |
 | `failOnStartupError` | `false` | Reject plugin activation when the initial connection or tool synchronization fails |
