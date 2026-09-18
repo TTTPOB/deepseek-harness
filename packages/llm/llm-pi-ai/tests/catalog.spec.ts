@@ -873,12 +873,15 @@ describe('compat switches', () => {
       'acme-responses': {
         api: 'openai-responses',
         baseURL: 'https://acme.test',
-        compat: { supportsDeveloperRole: false },
+        compat: { supportsDeveloperRole: false, systemPromptFormat: 'instructions' },
         models: [{ id: 'acme-r', reasoningEfforts: { off: null, high: 'high' } }],
       },
     }, 'acme-responses')
 
-    expect(models.get('acme-r')?.compat).toEqual({ supportsDeveloperRole: false })
+    expect(models.get('acme-r')?.compat).toEqual({
+      supportsDeveloperRole: false,
+      systemPromptFormat: 'instructions',
+    })
   })
 
   it('carries an anthropic-only switch onto an anthropic-messages route', () => {

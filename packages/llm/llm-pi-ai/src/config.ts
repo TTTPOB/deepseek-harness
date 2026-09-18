@@ -255,6 +255,7 @@ const chatTemplateKwarg: z<ChatTemplateKwargValue> = z.union([
 const compatProfile: z<PiAiCompatProfile> = z.object({
   supportsStore: z.boolean(),
   supportsDeveloperRole: z.boolean(),
+  systemPromptFormat: z.union(['input', 'instructions']),
   supportsReasoningEffort: z.boolean(),
   supportsUsageInStreaming: z.boolean(),
   supportsFinishReason: z.boolean(),

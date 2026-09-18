@@ -269,6 +269,7 @@ const COMPLETIONS_COMPAT_GATE = {
 /** Disposition of every `OpenAIResponsesCompat` field; a drift gate like the one above. */
 const RESPONSES_COMPAT_GATE = {
   supportsDeveloperRole: 'offer',
+  systemPromptFormat: 'offer',
   supportsMaxOutputTokens: 'offer',
   supportsStrictMode: 'offer',
   supportsLongCacheRetention: 'offer',
@@ -375,6 +376,8 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
+  /** Whether the endpoint receives the system prompt in `input` or `instructions`; the three Responses protocols. */
+  systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
