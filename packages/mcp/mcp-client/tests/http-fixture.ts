@@ -1,9 +1,7 @@
 /** Keyless stateless Streamable HTTP MCP fixture for integration tests. */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import { McpServer, createMcpHandler } from '@modelcontextprotocol/server'
 
 /** Running HTTP fixture and the request headers it observed. */
 export interface HttpMcpFixture {
@@ -15,22 +13,40 @@ export interface HttpMcpFixture {
 /** Start a local stateless MCP endpoint exposing one `ping` tool. */
 export async function startHttpMcpFixture(): Promise<HttpMcpFixture> {
   const authorization: Array<string | undefined> = []
-  const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
-    authorization.push(request.headers.authorization)
+  const handler = createMcpHandler(() => {
     const mcp = new McpServer(
       { name: 'http-fixture', version: '1.0.0' },
       { capabilities: { tools: {} } },
     )
-    mcp.registerTool('ping', { description: 'Replies pong.', inputSchema: {} }, async () => ({
+    mcp.registerTool('ping', { description: 'Replies pong.' }, async () => ({
       content: [{ type: 'text', text: 'pong' }],
     }))
-    const transport = new StreamableHTTPServerTransport({})
-    response.on('close', () => {
-      void transport.close()
-      void mcp.close()
-    })
-    await mcp.connect(transport as Transport)
-    await transport.handleRequest(request, response)
+    return mcp
+  })
+  const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    authorization.push(request.headers.authorization)
+    const chunks: Buffer[] = []
+    for await (const chunk of request) {
+      if (typeof chunk === 'string') chunks.push(Buffer.from(chunk))
+      else if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk))
+      else throw new TypeError('HTTP fixture received an unsupported request chunk')
+    }
+    const headers = new Headers()
+    for (const [name, value] of Object.entries(request.headers)) {
+      if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value)
+    }
+    const method = request.method ?? 'GET'
+    const init: RequestInit = { method, headers }
+    if (chunks.length > 0 && method !== 'GET' && method !== 'HEAD') init.body = Buffer.concat(chunks).toString('utf8')
+    const webRequest = new Request(`http://${request.headers.host ?? '127.0.0.1'}${request.url ?? '/'}`, init)
+    const webResponse = await handler.fetch(webRequest)
+    response.writeHead(webResponse.status, Object.fromEntries(webResponse.headers))
+    if (webResponse.body === null) {
+      response.end()
+      return
+    }
+    for await (const chunk of webResponse.body as AsyncIterable<Uint8Array>) response.write(chunk)
+    response.end()
   }
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {

@@ -8,17 +8,18 @@
  * No API key needed — all servers are local/keyless.
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
+import { McpServer, createMcpHandler } from '@modelcontextprotocol/server'
+import { toNodeHandler } from '@modelcontextprotocol/node'
 import { z } from 'zod'
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -384,6 +385,28 @@ describe('server-everything — official test server', () => {
   })
 })
 
+describe('legacy protocol fallback — official test server', () => {
+  it('falls back to the 2025 initialize handshake for server-everything', async () => {
+    const client = new Client(
+      { name: 'dsh-mcp-client-e2e', version: '1.0.0' },
+      { versionNegotiation: { mode: 'auto' } },
+    )
+    const transport = new StdioClientTransport({
+      command: join(localBin, 'mcp-server-everything'),
+      args: ['stdio'],
+      cwd: packageDir,
+    })
+    try {
+      await client.connect(transport)
+      expect(client.getProtocolEra()).toBe('legacy')
+      const tools = await client.listTools()
+      expect(tools.tools.some(tool => tool.name === 'echo')).toBe(true)
+    } finally {
+      await client.close()
+    }
+  }, 60_000)
+})
+
 // ---- @modelcontextprotocol/server-filesystem ----
 
 describe('server-filesystem — real filesystem operations', () => {
@@ -463,46 +486,48 @@ describe('streamable-http — in-process MCP server', () => {
   let baseUrl: string
   /** Authorization header values observed by the HTTP server, in arrival order. */
   const seenAuth: Array<string | undefined> = []
+  /** Era selected by the v2 server factory for each stateless request. */
+  const seenEras: Array<'legacy' | 'modern'> = []
+  let httpToolVersion = 0
 
   /**
-   * Stateless Streamable HTTP endpoint: a fresh McpServer + server transport
-   * per request (the SDK's documented stateless pattern — no session id, no
-   * SSE stream to keep). The tool set mirrors a minimal fixture server.
+   * Strict modern handler: the v2 entry creates a fresh server for each
+   * request, and rejecting legacy traffic proves the client used negotiation.
    */
-  async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    seenAuth.push(req.headers.authorization)
+  const handler = createMcpHandler(({ era }) => {
+    seenEras.push(era)
     const server = new McpServer(
       { name: 'http-fixture', version: '1.0.0' },
-      { capabilities: { tools: {} } },
+      { capabilities: { tools: { listChanged: true } } },
     )
     server.registerTool('ping', {
       description: 'Replies pong.',
-      inputSchema: {},
     }, async () => ({
       content: [{ type: 'text', text: 'pong' }],
     }))
     server.registerTool('shout', {
       description: 'Upper-cases a message.',
-      inputSchema: { message: z.string().describe('Message to upper-case') },
+      inputSchema: z.object({ message: z.string().describe('Message to upper-case') }),
     }, async args => ({
       content: [{ type: 'text', text: args.message.toUpperCase() }],
     }))
-    // Stateless mode: sessionIdGenerator ABSENT (the runtime treats absent and
-    // explicit-undefined identically; exactOptionalPropertyTypes forbids the
-    // SDK-documented explicit `sessionIdGenerator: undefined` spelling).
-    const transport = new StreamableHTTPServerTransport({})
-    res.on('close', () => { void transport.close(); void server.close() })
-    // Same exactOptionalPropertyTypes mismatch the client transport factory
-    // documents (src/transport.ts): the SDK types optional callbacks without
-    // `| undefined`. The SDK constructed the object; the cast is safe.
-    await server.connect(transport as Transport)
-    await transport.handleRequest(req, res)
-  }
+    if (httpToolVersion > 0) {
+      server.registerTool('updated', {
+        description: 'Appears after a modern list change.',
+      }, async () => ({
+        content: [{ type: 'text', text: 'updated' }],
+      }))
+    }
+    return server
+  }, { legacy: 'reject' })
+  const nodeHandler = toNodeHandler(handler)
 
   beforeAll(async () => {
     httpServer = createServer((req, res) => {
-      handleMcpRequest(req, res).catch((error: unknown) => {
-        res.writeHead(500).end(String(error))
+      seenAuth.push(req.headers.authorization)
+      void nodeHandler(req as typeof req & { method: string; url: string }, res).catch((error: unknown) => {
+        if (!res.headersSent) res.writeHead(500)
+        res.end(String(error))
       })
     })
     const listening: PromiseWithResolvers<void> = Promise.withResolvers()
@@ -526,6 +551,7 @@ describe('streamable-http — in-process MCP server', () => {
 
   afterAll(async () => {
     if (ctx) await ctx.fiber.dispose()
+    await handler.close()
     await sleep(200)
     const closed: PromiseWithResolvers<void> = Promise.withResolvers()
     httpServer.close(() => { closed.resolve() })
@@ -554,6 +580,21 @@ describe('streamable-http — in-process MCP server', () => {
     })
     expect(result.isError).toBe(false)
     expect(result.content[0]).toEqual({ type: 'text', text: 'QUIET' })
+  })
+
+  it('negotiates the modern era for the stateless HTTP handler', () => {
+    expect(seenEras.length).toBeGreaterThan(0)
+    expect(seenEras).toContain('modern')
+    expect(seenEras).not.toContain('legacy')
+  })
+
+  it('refreshes tools from a modern subscriptions/listen notification', async () => {
+    httpToolVersion = 1
+    await sleep(250)
+    handler.notify.toolsChanged()
+    await vi.waitFor(() => {
+      expect(ctx.tools.get('mcp__web__updated')).toBeDefined()
+    }, { timeout: 5_000 })
   })
 
   it('sends configured headers on every HTTP request', () => {

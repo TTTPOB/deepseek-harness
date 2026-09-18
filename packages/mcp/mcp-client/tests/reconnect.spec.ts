@@ -11,7 +11,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { Config } from '@deepseek-ai/dsh-mcp-client'
 
-// ---- Mock MCP SDK ----
+// ---- Mock MCP v2 client ----
 
 // vi.mock factories are hoisted above every import/const, so the mock fns and
 // class must be created inside vi.hoisted to exist when the factories run.
@@ -38,22 +38,25 @@ const { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotification
     close = mockClose
     request = mockRequest
     setNotificationHandler = mockSetNotificationHandler
-    constructor() { instances.push(this) }
+    constructor(_clientInfo?: unknown, options?: {
+      listChanged?: { tools?: { onChanged?: (...args: never[]) => void } }
+    }) {
+      const onChanged = options?.listChanged?.tools?.onChanged
+      if (onChanged) mockSetNotificationHandler('notifications/tools/list_changed', onChanged)
+      instances.push(this)
+    }
   }
   const instances: MockClient[] = []
   return { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotificationHandler, MockClient, instances }
 })
 
-vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
+vi.mock('@modelcontextprotocol/client', () => ({
   Client: MockClient,
-}))
-
-vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
-  StdioClientTransport: vi.fn(),
-}))
-
-vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: vi.fn(),
+}))
+
+vi.mock('@modelcontextprotocol/client/stdio', () => ({
+  StdioClientTransport: vi.fn(),
 }))
 
 // vi.mock is hoisted above static imports, so the modules under test see the
@@ -203,8 +206,8 @@ describe('reconnect supervisor', () => {
 
     const gate: PromiseWithResolvers<unknown> = Promise.withResolvers()
     mockListTools.mockImplementation(() => gate.promise)
-    const handler = mockSetNotificationHandler.mock.calls[0]![1] as () => Promise<void>
-    const resync = handler()
+    const handler = mockSetNotificationHandler.mock.calls[0]![1] as (error: Error | null) => void
+    handler(null)
     await vi.waitFor(() => { expect(mockListTools).toHaveBeenCalledTimes(2) })
 
     mockConnect.mockRejectedValue(new Error('server gone'))
@@ -214,7 +217,6 @@ describe('reconnect supervisor', () => {
     })
 
     gate.resolve(listing('late'))
-    await resync
     await vi.waitFor(() => {
       expect(ctx.tools.get('mcp__srv__remote')).toBeUndefined()
       expect(ctx.tools.get('mcp__srv__late')).toBeUndefined()
@@ -446,15 +448,14 @@ describe('reconnect supervisor', () => {
 
     const gate: PromiseWithResolvers<unknown> = Promise.withResolvers()
     mockListTools.mockImplementation(() => gate.promise)
-    const handler = mockSetNotificationHandler.mock.calls[0]![1] as () => Promise<void>
-    const resync = handler()
+    const handler = mockSetNotificationHandler.mock.calls[0]![1] as (error: Error | null) => void
+    handler(null)
     await vi.waitFor(() => { expect(mockListTools).toHaveBeenCalledTimes(2) })
 
     const disposing = fiber.dispose()
     await sleep(10)
     gate.reject(new Error('Connection closed'))
     await disposing
-    await resync
 
     expect(errors.some(line => line.includes('tool re-sync failed'))).toBe(false)
   })
@@ -468,8 +469,8 @@ describe('reconnect supervisor', () => {
     await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__remote')).toBeDefined() })
     const listCalls = mockListTools.mock.calls.length
 
-    const staleHandler = mockSetNotificationHandler.mock.calls[0]![1] as () => Promise<void>
-    await staleHandler()
+    const staleHandler = mockSetNotificationHandler.mock.calls[0]![1] as (error: Error | null) => void
+    staleHandler(null)
     expect(mockListTools).toHaveBeenCalledTimes(listCalls)
   })
 })
