@@ -52,6 +52,7 @@ async function verify() {
     'THIRD_PARTY_NOTICES.md',
     '.agents/notes/implemented/process/2026-09-12-pinned-daily-driver',
     'docs/cookbook/installing-and-maintaining-daily-driver',
+    'docs/config-catalog.md',
     '.github/workflows/daily-driver-release.yml',
     'scripts/daily-driver.mjs',
   ]

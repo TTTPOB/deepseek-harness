@@ -1264,7 +1264,8 @@ export type PiAiModelOverride = Omit<PiAiModelProfile, 'id'>
  * not recognize the detection answers as though it were OpenAI itself, which
  * is wrong for most OpenAI-compatible gateways. So every field here is one a
  * deployment must be able to state because nothing can infer it, while the
- * fields pi-ai's catalog sets for a named vendor stay withheld.
+ * vendor-routing fields stay withheld. Deferred-tool capabilities are also
+ * configurable because a gateway can differ from its upstream model's catalog.
  *
  * A field belongs to the protocols whose upstream compat type declares it: a
  * model-level switch its protocol does not take fails resolution, and a
@@ -1282,6 +1283,8 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
+  /** Whether the endpoint receives the system prompt in `input` or `instructions`; the three Responses protocols. */
+  systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
@@ -1345,6 +1348,17 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Serialize deferred tools after tool results using Kimi format; `openai-completions`. Requires pi-ai deferred-tool context. */
+  deferredToolsMode?: PiAiDeferredToolsMode
+  /** Whether to serialize client-executed tool search; the three Responses protocols. Requires pi-ai deferred-tool context. */
+  supportsToolSearch?: boolean
+  /**
+   * Whether to serialize message-anchored `additional_tools`; the three Responses
+   * protocols. Wins over `supportsToolSearch` when both are true.
+   */
+  supportsAdditionalTools?: boolean
+  /** Whether to serialize `tool_reference` blocks in tool results; `anthropic-messages`. Requires pi-ai deferred-tool context. */
+  supportsToolReferences?: boolean
 }
 
 /** One request modality a pi-ai model may accept. */
@@ -1365,11 +1379,14 @@ export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFo
 
 /** The reasoning-budget field spellings pi-ai accepts. */
 export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['thinkingTokenBudgetField']>
+
+/** Provider-specific Chat Completions deferred-tool serialization modes. */
+export type PiAiDeferredToolsMode = NonNullable<OpenAICompletionsCompat['deferredToolsMode']>
 ```
 
-Depends on: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`)
+Depends on: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · `OpenAIResponsesCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`)
 
-Source: [`packages/llm/llm-pi-ai/src/config.ts:221`](../packages/llm/llm-pi-ai/src/config.ts)
+Source: [`packages/llm/llm-pi-ai/src/config.ts:222`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 
