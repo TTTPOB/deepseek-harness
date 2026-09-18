@@ -10,7 +10,7 @@ daily-driver fork 需要三个 DSH 子包改动及匹配的 Pi AI 实现，同�
 
 ## Decision
 
-不可变基线是 `dsh-v0.1.5-rc.2` 的 `fb2c4b9e698e30edb738bca4cf0618587db7d203`。subagent、llm-pi-ai 与 MCP client 的 package manifest 使用 `0.1.5-rc.2-fork1`；其他 DSH 包和 CLI 保持 `0.1.5-rc.2`。Pi AI 在 staging 中改写为 `0.85.1-fork1`，llm-pi-ai 精确要求该版本。源码 workspace 仅为了仓库安装而将这个尚未发布的依赖映射到官方 Pi AI；发布与运行时冒烟测试用 Pi fork tarball 覆盖它。
+不可变基线是 `dsh-v0.1.5-rc.2` 的 `fb2c4b9e698e30edb738bca4cf0618587db7d203`。subagent、llm-pi-ai 与 MCP client 的 package manifest 使用 `0.1.5-rc.2-fork1`；其他 DSH 包和 CLI 保持 `0.1.5-rc.2`。Pi AI 在 staging 中改写为 `0.85.1-fork1`，llm-pi-ai 精确要求该版本。源码 workspace、CI、发布构建与运行时冒烟测试都从不可变 Pi fork Release tarball 解析该依赖。
 
 Fork 版本遵循 `<上游版本>-forkN`。每次修订递增 `N` 并创建新资产。Pi tag 为 `pi-ai-v0.85.1-fork1`，DSH tag 为 `daily-driver-v0.1.5-rc.2-fork1`。不得替换既有 tag、Release 或资产。
 

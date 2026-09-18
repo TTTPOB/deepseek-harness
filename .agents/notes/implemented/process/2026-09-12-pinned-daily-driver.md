@@ -10,7 +10,7 @@ The daily-driver fork needs three DSH package changes and the matching Pi AI imp
 
 ## Decision
 
-The immutable baseline is `dsh-v0.1.5-rc.2` at `fb2c4b9e698e30edb738bca4cf0618587db7d203`. The subagent, llm-pi-ai, and MCP client package manifests use `0.1.5-rc.2-fork1`; all other DSH packages and the CLI remain `0.1.5-rc.2`. Pi AI is staged as `0.85.1-fork1`, and llm-pi-ai requires that exact version. The source workspace maps that unpublished dependency to official Pi AI only for repository installation; release and runtime smokes override it with the Pi fork tarball.
+The immutable baseline is `dsh-v0.1.5-rc.2` at `fb2c4b9e698e30edb738bca4cf0618587db7d203`. The subagent, llm-pi-ai, and MCP client package manifests use `0.1.5-rc.2-fork1`; all other DSH packages and the CLI remain `0.1.5-rc.2`. Pi AI is staged as `0.85.1-fork1`, and llm-pi-ai requires that exact version. The source workspace, CI, release build, and runtime smoke all resolve that dependency from the immutable Pi fork Release tarball.
 
 Fork versions follow `<upstream-version>-forkN`. A revision increments `N` and creates new assets. The Pi tag is `pi-ai-v0.85.1-fork1`; the DSH tag is `daily-driver-v0.1.5-rc.2-fork1`. Existing tags, Releases, and assets are never replaced.
 
