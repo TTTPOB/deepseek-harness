@@ -1,37 +1,40 @@
-# 升级个人 Web 安装
+# 维护共用插件日用安装
 
 [English](installing-and-maintaining-daily-driver.md) | 中文
 
-源码 checkout 可以已处于 0.1.7，而日用 global 安装和当前 Host 仍保持 0.1.5；只有用户以后在外部终端执行 `--apply` 才升级日用安装。这套 Linux/WSL 操作把官方顶层 `@deepseek-ai/dsh` CLI 升到 `0.1.7-rc.2`，使用源码仓库旁 `../artifacts/daily-driver-v0.1.7-rc.2-fork1` 中已有的 11 个 fork tarball。前提是 Node 24 与 pnpm 11.24；脚本不安装整个源码仓库依赖，也不抓取新的 Release 资产。全局安装仍依赖这些 tarball，应长期保留该目录。迁移只针对 `web` profile；`paper-chew`、`headless`、home 级 `cordis.patch.yml` 和旧 `.agent-presets` 目录保持不变。
+这套 Linux/WSL 操作使用官方 `@deepseek-ai/dsh@0.1.7-rc.2` CLI 和官方 Web app，配合持久目录 `../artifacts/daily-driver-v0.1.7-rc.2-fork1` 中的五个 DSH fork、Pi AI fork 和四个普通插件 tarball。MCP Panel 固定从 npm 安装 `0.6.19`。前提为 Node 24 和 Corepack pnpm 11.24.0。脚本不下载或发布资产，不启停 Host，也不修改运行中的会话。
 
-## 1. 停旧 Host，预览
+全局 pnpm overrides 只管理五个官方同名 fork 与 Pi AI。每个消费 profile 将相同的五个独立插件作为普通 dependencies 安装（四个本地 tarball 加 MCP Panel）；官方 fork 不进入 profile dependencies。`$DSH_HOME/cordis.patch.yml` 为所有 profile 唯一声明共用插件和个人 preset。原有全局配置（含 MCP）优先；原 profile patch 中的共用插件参数迁入对应全局 insert 行，并保留 `!!js` 表达式。未来真正属于某个 profile 的配置才放入 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`。Web bundles 保持 base 与官方 Web app；其它 profile 保留原有 bundles。
 
-先在**外部终端按原来的启动方式停止旧 Host**；脚本不会按进程名寻找或杀死 Host。然后在源码仓库执行：
+## 1. 预览现有 Web profile
+
+在源码 checkout 执行：
 
 ```sh
 node scripts/upgrade-daily-driver.mjs --dry-run
 ```
 
-不传选项也会预览；脚本通过 Corepack 固定调用 pnpm 11.24.0 完成定位、安装及回滚，不依赖仓库 packageManager 或 PATH 中的 pnpm，并输出所用版本。系统须有 Corepack。预览仅列路径、旧/目标版本、override 和行数、section 到 row 映射，以及将要创建的备份位置，不输出配置值。未知 settings section 会中止，不会默默丢掉。`!!js` 表达式按带标签数据保存，脚本不会执行。隔离安装可显式指定 `--home`、`--global-dir`、`--global-bin-dir`、`--artifacts`；测试时不能指向日用安装。
+预览只读路径、版本及行数，不写文件或打印配置值。缺少 `settings.yaml` 是正常情况；如果存在，受支持的旧 section 会迁入 Web 行，apply 时归档旧文件；未知 section 会报错而非丢弃。隔离 fixture 请显式传入 `--home`、`--global-dir`、`--global-bin-dir`、`--artifacts`。
 
-## 2. 一次执行升级
+## 2. 按需执行，再安装另一消费 profile
+
+先在外部按原启动方式自行停止 Host；以下命令供日后明确的维护窗口使用，不是开发期间对当前 Host 执行的命令：
 
 ```sh
 node scripts/upgrade-daily-driver.mjs --apply
+node scripts/upgrade-daily-driver.mjs --profile OTHER_EXISTING_PROFILE --apply
 ```
 
-脚本先完整复制旧 Web profile、全局 workspace overrides、旧 settings 与已安装 CLI 版本到输出的备份目录，并原样复制 `sessions`、`storages` 快照，不解析或修改原件。全局 pnpm workspace 保留其它 overrides 与 `allowBuilds`，设置 `blockExoticSubdeps: false`，将 11 个包名/版本限定键映射到持久 tarball 绝对路径。pnpm 以 `--config.enable-global-virtual-store=false --ignore-workspace add -g @deepseek-ai/dsh@0.1.7-rc.2` 安装官方顶层 CLI。新 Web profile 的 dependencies 为空、bundles 只含 base 和 web-app；patch 迁入原有配置，而已打包的 standard-ptc preset 与工具行不重复插入。执行时才读取当前 settings，保留改名 section 与原有 row 字段；归档旧 `settings.yaml` 以免新版再次自动导入。不必逐项 `dsh plugin remove`，也不手改旧 profile 的 lockfile 或 node_modules。
+第二条是可选命令，目标 profile 必须已经存在；不会自动迁移 `paper-chew`，也不改其 bundles。每次 apply 备份选定 profile 全部内容、全局 workspace、home patch 和已有 settings，并为 sessions/storages 留快照而不修改原件。pnpm 使用 `auto-install-peers=false` 管理 profile 依赖、lockfile 和 modules；其它 profile dependencies 与无关 global overrides 保留。Web profile 只有 base/Web app 两个 bundles。之后自行重启 Host，私下检查最终组合；`--dump-config` 可能展开凭据，不要公开输出。
 
-随后自行按原启动方式启动 Host，并私下检查 profile 与 UI；仅在能够保密输出时运行 `dsh --profile web --dump-config`，避免公开展开的凭据。此入口仅经过隔离 fixture 验证，**不表示日用 Host 已升级**，也不代替联网/LLM 验收。
+## 3. 必要时回滚选定 profile
 
-## 3. 必要时回滚
-
-再次停 Host，并使用 `--apply` 输出的实际备份路径：
+自行停 Host，使用对应 apply 输出的备份路径：
 
 ```sh
 node scripts/upgrade-daily-driver.mjs --rollback /absolute/path/to/backup
 ```
 
-如果升级指定了隔离路径，回滚时传相同的 `--home`、`--global-dir`、`--global-bin-dir`。它重装旧顶层 CLI 版本、恢复全局 workspace 文件、旧 Web profile 和旧 settings，不碰其它 profile。**回滚不自动逆转 session/storage 数据**：新版 DSH 启动后可能已写入新格式。备份中的升级前快照留作明确的人工数据恢复，不可静默覆盖升级后的新会话。检查数据兼容问题后，自己重新启动旧 Host。升级失败会打印备份位置与回滚命令。
+非 Web profile 加上 `--profile OTHER_EXISTING_PROFILE`；apply 若显式指定了 `--home`、`--global-dir`、`--global-bin-dir`，回滚时保持一致。回滚恢复该 profile、home patch、全局 workspace 和原有 settings，并重装记录的顶层 CLI 版本。它**不会**用旧 sessions/storages 快照覆盖新数据：之后可能已有新会话。快照只能单独人工审查后恢复。
 
-不可变资产的发布仍由[现有 Release workflow](../../.github/workflows/daily-driver-release.yml)负责；此本地入口不会 push、发布或重新打包。
+[Release workflow](../../.github/workflows/daily-driver-release.yml) 打包五个 DSH fork、Pi AI 与四个独立插件。其 CLI/profile lockfile 对应两套不同安装；项目依赖 smoke 检查兼容性和解析，不等于 Loader 激活。隔离 Host 组合已有独立验收，本操作不重复 LLM 调用，也不表示已修改真实日用安装。

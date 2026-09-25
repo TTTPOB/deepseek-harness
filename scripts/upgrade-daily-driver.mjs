@@ -164,7 +164,7 @@ async function main() {
   const args = options(process.argv.slice(2))
   const home = resolve(args.home ?? join(homedir(), '.dsh'))
   const globalDir = resolve(args['global-dir'] ?? pnpm(['--ignore-workspace', 'root', '-g']).split('\n').at(-1))
-  const artifacts = resolve(args.artifacts ?? join(repository, basename(dirname(repository)) === '.worktrees' ? '../../../artifacts/daily-driver-v0.1.7-rc.2-fork1' : '../artifacts/daily-driver-v0.1.7-rc.2-fork1'))
+  const artifacts = resolve(args.artifacts ?? join(repository, basename(dirname(repository)) === '.worktrees' ? '../../artifacts/daily-driver-v0.1.7-rc.2-fork1' : '../artifacts/daily-driver-v0.1.7-rc.2-fork1'))
   const profileName = args.profile ?? 'web'
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(profileName)) throw new Error('Invalid --profile name')
   const profile = join(home, 'profiles', profileName)
@@ -234,7 +234,7 @@ async function main() {
     await writeFile(patchPath, yaml.dump(shared.profile))
     await writeFile(homePatchPath, yaml.dump(shared.home))
     pnpm(['--config.auto-install-peers=false', '--ignore-workspace', '--dir', profile, 'install', '--no-frozen-lockfile'], { stdio: 'inherit' })
-    if (settingsText !== null) await rename(settingsPath, join(backup, 'settings.archived.yaml'))
+    if (profileName === 'web' && settingsText !== null) await rename(settingsPath, join(backup, 'settings.archived.yaml'))
     console.log(`Installed and migrated ${profileName}. Rollback: node scripts/upgrade-daily-driver.mjs --rollback ${backup}${args.home ? ` --home ${home}` : ''}${args['global-dir'] ? ` --global-dir ${globalDir}` : ''}${args['global-bin-dir'] ? ` --global-bin-dir ${resolve(args['global-bin-dir'])}` : ''}`)
   } catch (error) {
     console.error(`Upgrade failed: ${error.message}\nRestore with: node scripts/upgrade-daily-driver.mjs --rollback ${backup} --home ${home} --global-dir ${globalDir}`)

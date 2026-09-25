@@ -1,37 +1,40 @@
-# Upgrade the personal Web installation
+# Maintain the shared-plugin daily-driver installation
 
 English | [中文](installing-and-maintaining-daily-driver.zh.md)
 
-The source checkout can already be at 0.1.7 while the daily global installation and running Host remain at 0.1.5; only a later, external-terminal `--apply` upgrades that daily installation. This Linux/WSL procedure upgrades the official top-level `@deepseek-ai/dsh` CLI to `0.1.7-rc.2` with eleven existing fork tarballs in `../artifacts/daily-driver-v0.1.7-rc.2-fork1` (relative to this repository). Node 24 and pnpm 11.24 are prerequisites; the script does not install the source repository's dependencies or fetch new release assets. Keep the tarballs in this persistent location while the global installation uses them. The profile migration applies only to `web`; `paper-chew`, `headless`, the home-level `cordis.patch.yml`, and the legacy `.agent-presets` directory stay unchanged.
+This Linux/WSL procedure uses the official `@deepseek-ai/dsh@0.1.7-rc.2` CLI and official Web app with five DSH fork tarballs, the Pi AI fork, and four ordinary plugin tarballs from the persistent `../artifacts/daily-driver-v0.1.7-rc.2-fork1` directory. MCP Panel is pinned to npm version `0.6.19`. Node 24 and Corepack pnpm 11.24.0 are required. The script does not download or publish assets, launch or stop the Host, or change running sessions.
 
-## 1. Stop the old Host and preview
+The global pnpm overrides own only five official-package forks plus Pi AI. Every consuming profile installs the same five independent plugins as ordinary dependencies (four local tarballs and MCP Panel); official forks are not profile dependencies. `$DSH_HOME/cordis.patch.yml` declares shared plugins and the personal preset once for all profiles. Existing global patch rows, including MCP, take precedence; shared plugin settings formerly in a profile patch move to their global insert rows, preserving `!!js` expressions. Only future genuinely profile-specific configuration belongs in `$DSH_HOME/profiles/<profile>/cordis.patch.yml`. Web bundles stay base and the official Web app; another profile keeps its existing bundles.
 
-Stop the existing Host **from the external terminal using its original launch mechanism**; the script does not find or kill a process. Then, from the source repository:
+## 1. Preview the existing Web profile
+
+From the source checkout run:
 
 ```sh
 node scripts/upgrade-daily-driver.mjs --dry-run
 ```
 
-No option also previews; the script invokes Corepack's pinned pnpm 11.24.0 for discovery, installation, and rollback regardless of the repository's packageManager or the pnpm on PATH, and displays that version. Corepack must be available. The preview lists paths, old/target versions, override and row counts, section-to-row mappings, and the prospective backup location without exposing configuration values. Unknown settings sections stop the upgrade rather than being silently dropped. `!!js` expressions remain tagged data, not executed by the installer. For an isolated installation, pass explicit `--home`, `--global-dir`, `--global-bin-dir`, and `--artifacts` paths; do not point tests at the daily installation.
+The preview reads paths, versions and row counts without writing files or displaying configuration values. A missing `settings.yaml` is normal; when present, supported legacy sections migrate to Web rows and the file is archived on apply. Unknown sections fail rather than being discarded. For isolated fixtures pass `--home`, `--global-dir`, `--global-bin-dir`, and `--artifacts` explicitly.
 
-## 2. Upgrade once
+## 2. Apply when ready, then install another consumer if needed
+
+Stop the existing Host yourself through its original external launch mechanism before changing its installation. These commands are for a later deliberate maintenance window, not for running against the current Host during development:
 
 ```sh
 node scripts/upgrade-daily-driver.mjs --apply
+node scripts/upgrade-daily-driver.mjs --profile OTHER_EXISTING_PROFILE --apply
 ```
 
-The script first copies the complete old Web profile, global workspace overrides, old settings and installed CLI version into the displayed backup directory; it also copies `sessions` and `storages` verbatim without inspecting or changing the originals. The pnpm global workspace preserves unrelated overrides and `allowBuilds`, sets `blockExoticSubdeps: false`, and maps eleven package/version keys to persistent absolute tarball paths. pnpm installs the official CLI with `--config.enable-global-virtual-store=false --ignore-workspace add -g @deepseek-ai/dsh@0.1.7-rc.2`. The new Web profile has empty dependencies, only base and web-app bundles, and a migrated patch: the bundled standard-ptc preset and tool rows are not inserted twice. Current settings are read when the command executes; renamed sections and existing row fields are preserved, and the old `settings.yaml` is archived so the new version cannot auto-import it again. No `dsh plugin remove` or edits to the old profile's lockfile or modules are needed.
+The second command is optional and requires an existing profile; it does not migrate `paper-chew` or modify its bundles automatically. Each apply backs up the selected complete profile, global workspace, home patch and existing settings, and snapshots sessions/storages without changing them. pnpm manages profile dependencies, lockfile and modules with `auto-install-peers=false`; unrelated profile dependencies and unrelated global overrides survive. The Web profile retains only base/Web app bundles. Restart the Host yourself and privately verify the final composition; `--dump-config` can expose credentials, so do not publish its output.
 
-Restart the Host yourself using your existing launch method. Validate its profile and UI without printing expanded credentials; only run `dsh --profile web --dump-config` when its output can be kept private. This entry was checked with isolated fixtures; it does **not** claim the daily Host was upgraded or revalidate network/LLM behavior.
+## 3. Roll back the selected profile if needed
 
-## 3. Roll back if necessary
-
-Stop the Host again, then use the exact backup path printed by `--apply`:
+Stop the Host yourself and pass the backup path printed by the corresponding apply:
 
 ```sh
 node scripts/upgrade-daily-driver.mjs --rollback /absolute/path/to/backup
 ```
 
-If the upgrade used isolated path options, pass the same `--home`, `--global-dir`, and `--global-bin-dir` options to rollback. This reinstalls the former top-level CLI version, restores the global workspace file, old Web profile and old settings; it leaves other profiles unchanged. Rollback **does not revert session/storage data**: newer DSH might have written a newer format after launch. The backup retains their pre-upgrade snapshot for a deliberate manual data recovery; do not overwrite new sessions silently. Restart the old Host manually after checking any data compatibility concern. A failed apply prints its backup location and rollback command.
+For a non-Web profile include `--profile OTHER_EXISTING_PROFILE`; repeat any explicit `--home`, `--global-dir`, and `--global-bin-dir` paths from apply. Rollback restores that profile, home patch, global workspace and previous settings and reinstalls the recorded top-level CLI version. It does **not** overwrite current sessions/storages with their pre-apply snapshots: newer sessions may exist. Restore those snapshots only after separate manual review.
 
-The existing [release workflow](../../.github/workflows/daily-driver-release.yml) owns immutable asset publishing; this local entry does not push, publish, or rebuild packages.
+The [release workflow](../../.github/workflows/daily-driver-release.yml) packages five DSH forks, Pi AI and four independent plugins. Its CLI and profile lockfiles describe separate installs; project dependency smoke checks compatibility and resolution, not Loader activation. An isolated Host composition was validated separately; this procedure does not repeat LLM calls or claim that a live installation has been changed.
