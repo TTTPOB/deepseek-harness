@@ -10,6 +10,14 @@ on:
         description: Immutable URL of the adapted Firecrawl fork1 tarball
         required: true
         type: string
+      overlay_ref:
+        description: Exact tested source commit for workspace overlay
+        required: true
+        type: string
+      envrc_ref:
+        description: Exact tested source commit for workspace envrc
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -63,23 +71,26 @@ jobs:
             --pattern 'earendil-works-pi-ai-0.85.1-fork1.tgz' --dir dist/daily-driver
           curl -fLsS -o dist/daily-driver/dsh-progressive-tools-0.3.0.tgz \
             https://github.com/TTTPOB/dsh-progressive-tools/releases/download/v0.3.0/dsh-progressive-tools-0.3.0.tgz
-          curl -fLsS -o dist/daily-driver/dsh-workspace-overlay-0.2.0.tgz \
-            https://github.com/TTTPOB/dsh-workspace-overlay/releases/download/v0.2.0/dsh-workspace-overlay-0.2.0.tgz
-          curl -fLsS -o dist/daily-driver/dsh-workspace-envrc-0.2.0.tgz \
-            https://github.com/TTTPOB/dsh-workspace-envrc/releases/download/v0.2.0/dsh-workspace-envrc-0.2.0.tgz
           firecrawl_url="${{ inputs.firecrawl_tarball_url || vars.DSH_FIRECRAWL_TARBALL_URL }}"
           test -n "$firecrawl_url"
           curl -fLsS -o dist/daily-driver/firecrawl-dsh-firecrawl-0.1.0-fork1.tgz "$firecrawl_url"
-      - name: Install source with temporary external overrides
+      - name: Install source with temporary bootstrap manifest and overrides
         run: |
+          cp packages/bundle/web-app/package.json "$RUNNER_TEMP/web-app.package.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const webPath = 'packages/bundle/web-app/package.json'
+          const web = JSON.parse(readFileSync(webPath, 'utf8'))
+          delete web.dependencies['dsh-workspace-overlay']
+          delete web.dependencies['dsh-workspace-envrc']
+          writeFileSync(webPath, JSON.stringify(web, null, 2) + '\n')
+          NODE
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs'
           const path = 'pnpm-workspace.yaml'
           const source = readFileSync(path, 'utf8')
           const assets = {
             'dsh-progressive-tools': 'dsh-progressive-tools-0.3.0.tgz',
-            'dsh-workspace-overlay': 'dsh-workspace-overlay-0.2.0.tgz',
-            'dsh-workspace-envrc': 'dsh-workspace-envrc-0.2.0.tgz',
             '@firecrawl/dsh-firecrawl': 'firecrawl-dsh-firecrawl-0.1.0-fork1.tgz',
             '@earendil-works/pi-ai': 'earendil-works-pi-ai-0.85.1-fork1.tgz',
           }
@@ -102,13 +113,46 @@ jobs:
             pnpm exec tsdown -F "packages/$package" --env.DSH_BUILD_FACE host
           done
       - name: Pack the six DSH forks
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p dist/daily-driver
+          cp "$RUNNER_TEMP/web-app.package.json" packages/bundle/web-app/package.json
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          import assert from 'node:assert/strict'
+          const web = JSON.parse(readFileSync('packages/bundle/web-app/package.json', 'utf8'))
+          assert.equal(web.dependencies['dsh-workspace-overlay'], '0.2.0')
+          assert.equal(web.dependencies['dsh-workspace-envrc'], '0.2.0')
+          NODE
           for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry bundle/web-app; do
             pnpm --dir "packages/$package" pack --pack-destination "$PWD/dist/daily-driver"
           done
+      - name: Require pinned workspace plugin source commits
+        run: |
+          test -n "${{ inputs.overlay_ref || vars.DSH_OVERLAY_REF }}"
+          test -n "${{ inputs.envrc_ref || vars.DSH_ENVRC_REF }}"
+      - uses: actions/checkout@v6
+        with:
+          repository: TTTPOB/dsh-workspace-overlay
+          ref: ${{ inputs.overlay_ref || vars.DSH_OVERLAY_REF }}
+          path: dist/source-overlay
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: TTTPOB/dsh-workspace-envrc
+          ref: ${{ inputs.envrc_ref || vars.DSH_ENVRC_REF }}
+          path: dist/source-envrc
+          persist-credentials: false
+      - name: Build and pack workspace overlay from pinned source
+        run: |
+          printf "overrides:\n  '@deepseek-ai/dsh-agent': 'file:../daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz'\n  '@deepseek-ai/dsh-agent-preset-registry': 'file:../daily-driver/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz'\nblockExoticSubdeps: false\n" >> dist/source-overlay/pnpm-workspace.yaml
+          pnpm --dir dist/source-overlay install --no-frozen-lockfile
+          pnpm --dir dist/source-overlay run build
+          pnpm --dir dist/source-overlay pack --pack-destination "$PWD/dist/daily-driver"
+      - name: Build and pack workspace envrc from pinned source
+        run: |
+          printf "overrides:\n  '@deepseek-ai/dsh-agent': 'file:../daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz'\n  'dsh-workspace-overlay': 'file:../daily-driver/dsh-workspace-overlay-0.2.0.tgz'\nblockExoticSubdeps: false\n" >> dist/source-envrc/pnpm-workspace.yaml
+          pnpm --dir dist/source-envrc install --no-frozen-lockfile
+          pnpm --dir dist/source-envrc run build
+          pnpm --dir dist/source-envrc pack --pack-destination "$PWD/dist/daily-driver"
       - name: Verify isolated project dependency closure
         run: >-
           node scripts/daily-driver.mjs smoke

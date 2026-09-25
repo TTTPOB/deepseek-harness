@@ -8,7 +8,9 @@ This procedure keeps the official `@deepseek-ai/dsh@0.1.7-rc.2` CLI as the top-l
 
 Build and pack all six DSH forks from this baseline, not from an earlier DSH release: `dsh-subagent`, `dsh-llm-pi-ai`, `dsh-mcp-client`, `dsh-agent`, `dsh-agent-preset-registry`, and `dsh-web-app`, each at `0.1.7-rc.2-fork1`. Obtain Pi AI `0.85.1-fork1` from [its immutable release](https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.5-rc.2-fork1/earendil-works-pi-ai-0.85.1-fork1.tgz). Obtain progressive-tools `0.3.0`, workspace-overlay and workspace-envrc `0.2.0`, and the adapted Firecrawl `0.1.0-fork1` tarballs. MCP Panel `0.6.19` comes from npm. Do not put local `file:` paths in the published Web manifest.
 
-The Release workflow fetches the three personal plugins from their own immutable Releases and accepts the Firecrawl tarball as a required URL input (`firecrawl_tarball_url`, or `DSH_FIRECRAWL_TARBALL_URL` for a tag run). These assets must exist before that workflow can publish; it is not run as part of local validation.
+The Release workflow downloads Pi AI from the existing immutable Release and progressive-tools from its own Release. Firecrawl needs an explicit immutable tarball URL (`firecrawl_tarball_url`, or `DSH_FIRECRAWL_TARBALL_URL` for a tag run). The exact tested source commits of overlay and envrc are required as `overlay_ref` and `envrc_ref` (or tag-run variables `DSH_OVERLAY_REF` and `DSH_ENVRC_REF`). Those sources must be available before release; local validation does not run the remote workflow.
+
+The first release bootstraps in order: temporarily omit only overlay and envrc from the Web manifest while installing the DSH source tree; build the six DSH forks without changing the published manifest; restore its original bytes before packing the Web bundle. Then install, build and pack overlay against the new agent and preset-registry tarballs, followed by envrc against the new agent and overlay tarballs. The temporary overrides and derived source lockfiles stay on the CI runner. The original Web manifest with all five runtime dependencies is the only one packed. Finally the workflow checks the eleven-tarball project dependency closure and uploads the immutable release assets. Overlay and envrc do not require a separate preliminary Release.
 
 ## 2. Verify installation resolution
 
@@ -18,4 +20,4 @@ For the isolated production-style installation, configure pnpm global overrides 
 
 ## 3. Preserve immutable releases
 
-Commit and integrate validated package changes into the release branch, tag `daily-driver-v0.1.7-rc.2-fork1` only after all external asset Releases exist, and run the existing release workflow. Never reuse an existing tag or replace its tarballs. A missing Firecrawl URL or plugin asset stops the release before publishing.
+Commit and integrate validated package changes into the release branch, tag `daily-driver-v0.1.7-rc.2-fork1` only after the prerequisite Pi AI/progressive assets, Firecrawl URL, and pinned overlay/envrc source commits are available, and run the existing release workflow. Never reuse an existing tag or replace its tarballs. A missing Firecrawl URL or plugin asset stops the release before publishing.
