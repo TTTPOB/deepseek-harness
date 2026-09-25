@@ -14,7 +14,7 @@ import { entryListProblem, type PresetDefinition } from './definition.ts'
 import type { AgentPreset, Config } from './preset.ts'
 import { agentPresetProjectionDefinition } from './session.ts'
 import { auditRows, mountPreset, standingMountFor, serviceForAgent, type PresetMount } from './mount.ts'
-import { definitionComposition, mountedCompositionRows, type AgentPresetComposition } from './composition-inventory.ts'
+import { definitionComposition, type AgentPresetComposition } from './composition-inventory.ts'
 
 export { agentPresetProjectionDefinition } from './session.ts'
 export { entryListProblem, type PresetDefinition } from './definition.ts'
@@ -32,19 +32,26 @@ interface Generation {
   key: ScopeKey
   mount: PresetMount
   users: number
-  retired: boolean
+  record: Definition
+  workspace?: ScopeKey
+  disposed?: boolean
 }
 interface Definition {
   config: PresetDefinition
   context: Context
-  ready: Promise<void>
-  generation?: Generation
-  /** Mount failure; unset while a tree is mounted, whose rows {@link AgentPresetRegistry.diagnostic} re-audits on read. */
   broken?: string
 }
 interface Binding {
   parent: ScopeParentBinding
-  generation: Generation
+  generation?: Generation
+  placement?: PresetPlacement
+}
+
+/** Workspace lease transferred to the preset registry for one Agent. */
+export interface PresetPlacement {
+  readonly key: ScopeKey
+  readonly ctx: Context
+  release(): Promise<void>
 }
 
 /** Registry of YAML-declared presets and the revisions live Agents retain. */
@@ -57,6 +64,7 @@ export class AgentPresetRegistry extends TypertRemoteService {
   private readonly owner: Context
   private readonly definitions = new Map<string, Definition>()
   private readonly generations = new Map<ScopeKey, Generation>()
+  private readonly mounts = new Map<ScopeKey | undefined, Map<Definition, Promise<Generation>>>()
   private readonly bindings = new WeakMap<ScopeKey, Binding>()
   private readonly switches = new Map<string, Promise<unknown>>()
 
@@ -73,78 +81,96 @@ export class AgentPresetRegistry extends TypertRemoteService {
   /** Default preset for a subsequently created session. */
   get defaultId(): string { return this.config.selectedDefault.get() ?? this.config.default }
 
-  /** Register and eagerly load a definition; activation failure remains visible in the roster.
-   * @param definition Parsed configuration supplied by the declaring plugin.
-   * @returns Definition disposer after activation or its diagnostic settles; the declaring plugin owns it.
-   */
+  /** Register a declaration; mount it on first Agent or cold inspection use. */
   async register(definition: PresetDefinition): Promise<() => Promise<void>> {
     const context = this.ctx
     if (!definition.id.trim()) throw new Error('Preset id must not be empty')
     if (this.definitions.has(definition.id)) throw new Error(`Duplicate agent preset: ${definition.id}`)
-    const record: Definition = { config: definition, context, ready: Promise.resolve() }
+    const record: Definition = { config: definition, context }
+    const broken = entryListProblem(definition.plugins)
+    if (broken !== undefined) record.broken = broken
     this.definitions.set(definition.id, record)
     let disposed = false
-    const unregister = async (): Promise<void> => {
+    return async () => {
       if (disposed) return
       disposed = true
       this.definitions.delete(definition.id)
-      await record.ready
-      if (record.generation !== undefined) {
-        record.generation.retired = true
-        await this.collect(record.generation)
+      for (const generation of this.generations.values()) {
+        if (generation.record === record) await this.collect(generation)
       }
     }
-    record.ready = this.activate(record)
-    await record.ready
-    return unregister
   }
 
-  private async activate(record: Definition): Promise<void> {
-    const key = {}
-    const scope = createScope(this.owner, key)
-    try {
-      const problem = entryListProblem(record.config.plugins)
-      if (problem !== undefined) throw new Error(problem)
-      const context = scope.ctx.extend({ baseUrl: record.context.baseUrl })
-      const mount = await mountPreset(context, record.config.id, record.config.plugins)
-      const generation: Generation = { scope, key, mount, users: 0, retired: false }
-      this.generations.set(key, generation)
-      record.generation = generation
-    } catch (error) {
-      record.broken = (error as Error).message
-      this.owner.logger.warn(`agent preset ${record.config.id}: ${record.broken}`)
-      await scope.dispose()
-    }
-  }
-
-  /**
-   * Current activation diagnostic of a definition.
-   *
-   * A mount failure is final. A mounted tree is re-audited on every read: a
-   * row waiting for a Host service activates by itself once that provider
-   * finishes, so the audit waits for the Host Loader tree to settle before
-   * reporting the row as unusable. Callers therefore must not run inside a
-   * Host row's own activation, which the settlement would wait on.
-   * @param record - the definition to audit.
-   * @returns one line per unusable row, or undefined when the definition is usable.
-   */
   private async diagnostic(record: Definition): Promise<string | undefined> {
-    await record.ready
-    if (record.generation === undefined) return record.broken
-    const tree = record.generation.mount.tree
-    let audit = await auditRows(tree)
-    if (audit.pending.length > 0) {
-      await this.owner.loader.await()
-      audit = await auditRows(tree)
-    }
-    const lines = [...audit.failed, ...audit.pending]
-    return lines.length === 0 ? undefined : lines.join('\n')
+    return record.broken
   }
 
   private async collect(generation: Generation): Promise<void> {
-    if (!generation.retired || generation.users !== 0) return
+    if (generation.users !== 0 || generation.disposed) return
+    generation.disposed = true
     this.generations.delete(generation.key)
+    const cache = this.mounts.get(generation.workspace)
+    cache?.delete(generation.record)
+    if (cache?.size === 0) this.mounts.delete(generation.workspace)
     await generation.scope.dispose()
+  }
+
+  private async retain(id?: string, placement?: PresetPlacement): Promise<Generation> {
+    const wanted = id ?? this.defaultId
+    for (;;) {
+      const record = this.definitions.get(wanted)
+      if (record === undefined) throw new RemoteError('agent-preset/not-found', `Unknown agent preset: ${wanted}`,
+        { agentPreset: wanted, available: [...this.definitions.keys()] })
+      if (record.broken !== undefined) throw new RemoteError('agent-preset/invalid', record.broken,
+        { agentPreset: wanted, reason: record.broken })
+      let cache = this.mounts.get(placement?.key)
+      if (cache === undefined) {
+        cache = new Map()
+        this.mounts.set(placement?.key, cache)
+      }
+      let pending = cache.get(record)
+      if (pending === undefined) {
+        const created = this.mountGeneration(record, placement)
+        pending = created
+        cache.set(record, created)
+        void created.catch(() => {
+          if (cache.get(record) === created) cache.delete(record)
+          if (cache.size === 0) this.mounts.delete(placement?.key)
+        })
+      }
+      const generation = await pending
+      if (this.definitions.get(wanted) !== record || generation.disposed) {
+        await this.collect(generation)
+        continue
+      }
+      generation.users++
+      return generation
+    }
+  }
+
+  private async mountGeneration(record: Definition, placement?: PresetPlacement): Promise<Generation> {
+    const key: ScopeKey = {}
+    const scope = createScope(placement?.ctx ?? this.owner, key,
+      placement === undefined ? undefined : { parent: placement.key })
+    try {
+      const context = scope.ctx.extend({ baseUrl: record.context.baseUrl })
+      const mount = await mountPreset(context, record.config.id, record.config.plugins)
+      let audit = await auditRows(mount.tree)
+      if (audit.pending.length > 0) {
+        await this.owner.loader.await()
+        audit = await auditRows(mount.tree)
+      }
+      if (audit.pending.length > 0 || audit.failed.length > 0) {
+        throw new Error([...audit.failed, ...audit.pending].join('\n'))
+      }
+      const generation: Generation = { scope, key, mount, users: 0, record,
+        ...(placement === undefined ? {} : { workspace: placement.key }) }
+      this.generations.set(key, generation)
+      return generation
+    } catch (error) {
+      await scope.dispose()
+      throw error
+    }
   }
 
   /** Read every declared preset, including activation failures.
@@ -205,21 +231,26 @@ export class AgentPresetRegistry extends TypertRemoteService {
     })
   }
 
-  private async retain(id?: string): Promise<Generation> {
-    const wanted = id ?? this.defaultId
-    while (true) {
-      const record = this.definitions.get(wanted)
-      if (record === undefined) throw new RemoteError('agent-preset/not-found', `Unknown agent preset: ${wanted}`,
-        { agentPreset: wanted, available: [...this.definitions.keys()] })
-      const broken = await this.diagnostic(record)
-      if (this.definitions.get(wanted) !== record) continue
-      const generation = record.generation
-      if (broken !== undefined || generation === undefined) {
-        const reason = broken as string
-        throw new RemoteError('agent-preset/invalid', reason, { agentPreset: wanted, reason })
-      }
-      generation.users++
-      return generation
+  /** Transfer a workspace lease into the Agent scope before caller setup. */
+  place(ctx: Context, placement: PresetPlacement): void {
+    const key = scopeOf(ctx)
+    if (key === undefined) throw new Error('Agent placement requires a scoped context')
+    if (this.bindings.has(key)) throw new Error('Agent is already placed')
+    const binding: Binding = { parent: bindScopeParent(key, placement.key), placement }
+    this.bindings.set(key, binding)
+    try {
+      ctx.effect(() => async () => {
+        this.bindings.delete(key)
+        const generation = binding.generation
+        if (generation !== undefined) {
+          generation.users--
+          await this.collect(generation)
+        }
+        await placement.release()
+      }, 'agent-preset.placement')
+    } catch (error) {
+      this.bindings.delete(key)
+      throw error
     }
   }
 
@@ -229,23 +260,31 @@ export class AgentPresetRegistry extends TypertRemoteService {
     const binding = this.bindings.get(key)
     if (binding?.generation === generation) return
     if (binding !== undefined) {
+      if (binding.placement !== undefined && generation.workspace !== binding.placement.key) {
+        throw new Error('Cannot bind a preset from another workspace')
+      }
       binding.parent.rebind(generation.key)
       const old = binding.generation
       generation.users++
       binding.generation = generation
-      old.users--
-      await this.collect(old)
+      if (old !== undefined) {
+        old.users--
+        await this.collect(old)
+      }
     } else this.join(ctx, key, generation)
   }
 
   private join(ctx: Context, key: ScopeKey, generation: Generation): void {
-    const binding = { parent: bindScopeParent(key, generation.key), generation }
+    const binding: Binding = { parent: bindScopeParent(key, generation.key), generation }
     generation.users++
     this.bindings.set(key, binding)
     ctx.effect(() => async () => {
       this.bindings.delete(key)
-      binding.generation.users--
-      await this.collect(binding.generation)
+      const current = binding.generation
+      if (current !== undefined) {
+        current.users--
+        await this.collect(current)
+      }
     }, 'agent-preset.binding')
   }
 
@@ -255,7 +294,8 @@ export class AgentPresetRegistry extends TypertRemoteService {
    * @returns Bound preset identity.
    */
   async mount(ctx: Context, id?: string): Promise<AgentPreset> {
-    const generation = await this.retain(id)
+    const key = scopeOf(ctx)
+    const generation = await this.retain(id, key === undefined ? undefined : this.bindings.get(key)?.placement)
     try {
       await this.bind(ctx, generation)
       return { id: generation.mount.presetId }
@@ -278,8 +318,14 @@ export class AgentPresetRegistry extends TypertRemoteService {
     // A child has no existing binding, so this path has no asynchronous cleanup.
     const key = scopeOf(ctx)
     if (key === undefined) throw new Error('Child preset binding requires a scope')
-    if (this.bindings.has(key)) throw new Error('Child already joined a preset')
-    this.join(ctx, key, generation)
+    const binding = this.bindings.get(key)
+    if (binding?.generation !== undefined) throw new Error('Child already joined a preset')
+    if (binding !== undefined) {
+      if (binding.placement?.key !== generation.workspace) throw new Error('Cannot inherit a preset across workspaces')
+      binding.parent.rebind(generation.key)
+      binding.generation = generation
+      generation.users++
+    } else this.join(ctx, key, generation)
     return mounted.presetId
   }
 
@@ -359,7 +405,7 @@ export class AgentPresetRegistry extends TypertRemoteService {
       return { id, ...(name === undefined ? {} : { name }), ...(description === undefined ? {} : { description }),
         isDefault: id === this.defaultId,
         ...(broken === undefined ? {} : { broken }),
-        rows: record.generation === undefined ? ('rows' in read ? read.rows : []) : mountedCompositionRows(record.generation.mount.tree) }
+        rows: 'rows' in read ? read.rows : [] }
     }))
   }
 }

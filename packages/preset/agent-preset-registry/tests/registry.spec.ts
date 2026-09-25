@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { createScope } from '@deepseek-ai/dsh-scope'
+import { createScope, scopeOf, scopeParentOf } from '@deepseek-ai/dsh-scope'
 import { assembleContextFor } from '@deepseek-ai/dsh-agent'
 import { entryListProblem, livePresetMounts } from '../src/index.ts'
 import { currentKey, harness, declare, contribution, agentOn, liveRegistries, plugin } from './harness.ts'
@@ -13,12 +13,59 @@ const contexts: Context[] = []
 afterEach(async () => { for (const ctx of contexts.splice(0)) await ctx.fiber.dispose() })
 async function setup() { const ctx = await harness(); contexts.push(ctx); return ctx }
 
+describe('workspace placement', () => {
+  it('shares a workspace generation, inherits the exact parent and releases the lease last', async () => {
+    const ctx = await setup()
+    await declare(ctx, contribution('standard'))
+    const workspace = createScope(ctx, {})
+    const other = createScope(ctx, {})
+    const first = createScope(ctx, {})
+    const second = createScope(ctx, {})
+    const child = createScope(ctx, {})
+    const foreign = createScope(ctx, {})
+    const order: string[] = []
+    const place = (agent: typeof first, root: typeof workspace) => ctx.agentPresets.place(agent.ctx, {
+      key: scopeOf(root.ctx)!, ctx: root.ctx, release: async () => { order.push('lease') },
+    })
+    place(first, workspace)
+    place(second, workspace)
+    place(child, workspace)
+    place(foreign, other)
+    expect(scopeParentOf(scopeOf(first.ctx)!)).toBe(scopeOf(workspace.ctx))
+    await ctx.agentPresets.mount(first.ctx)
+    await ctx.agentPresets.mount(second.ctx)
+    expect(scopeParentOf(scopeOf(first.ctx)!)).toBe(scopeParentOf(scopeOf(second.ctx)!))
+    expect(ctx.agentPresets.composeFrom(child.ctx, first.ctx)).toBe('standard')
+    expect(() => ctx.agentPresets.composeFrom(foreign.ctx, first.ctx)).toThrow(/across workspaces/)
+    expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+    await first.dispose()
+    await second.dispose()
+    expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+    await child.dispose()
+    expect(livePresetMounts(ctx.fiber)).toEqual([])
+    expect(order).toEqual(['lease', 'lease', 'lease'])
+    await foreign.dispose()
+    await workspace.dispose()
+    await other.dispose()
+  })
+
+  it('keeps cold inspection off workspace placement', async () => {
+    const ctx = await setup()
+    await declare(ctx, contribution('standard'))
+    expect(livePresetMounts(ctx.fiber)).toEqual([])
+    expect(await ctx.agentPresets.resolve()).toEqual({ id: 'standard' })
+    expect((await ctx.agentPresets.compositionInventory())[0]?.rows).toHaveLength(1)
+    await using _cold = await ctx.agentPresets.acquireScope()
+    expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+  })
+})
+
 describe('declarative preset revisions', () => {
-  it('eagerly scopes tool and prompt registrations and shares one revision across Agents', async () => {
+  it('lazily scopes tool and prompt registrations while Agents use them', async () => {
     const ctx = await setup()
     await declare(ctx, contribution('standard'))
     await declare(ctx, contribution('minimal'))
-    expect(livePresetMounts(ctx.fiber)).toHaveLength(2)
+    expect(livePresetMounts(ctx.fiber)).toEqual([])
     const first = await agentOn(ctx, 'first')
     const second = await agentOn(ctx, 'second', 'minimal')
     const third = await agentOn(ctx, 'third')
@@ -41,13 +88,13 @@ describe('declarative preset revisions', () => {
     await old.dispose()
     await declare(ctx, { ...contribution('replacement'), id: 'standard' })
     expect(await currentKey(ctx)).not.toBe(oldKey)
-    expect(livePresetMounts(ctx.fiber)).toHaveLength(2)
+    expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
     const child = createScope(ctx, {})
     expect(ctx.agentPresets.composeFrom(child.ctx, agent.ctx)).toBe('standard')
     await agent.dispose()
-    expect(livePresetMounts(ctx.fiber)).toHaveLength(2)
-    await child.dispose()
     expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+    await child.dispose()
+    expect(livePresetMounts(ctx.fiber)).toEqual([])
     const fresh = await agentOn(ctx, 'fresh')
     expect(ctx.tools.schemas(fresh).map(row => row.name)).toEqual(['replacement'])
   })
@@ -69,7 +116,7 @@ describe('declarative preset revisions', () => {
     const ctx = await setup()
     await declare(ctx, { id: 'broken', plugins: [{ name: 'missing-preset-plugin-for-test' }] })
     await declare(ctx, contribution('standard'))
-    expect(await ctx.agentPresets.resolve('broken')).toMatchObject({ id: 'broken', broken: expect.any(String) as string })
+    expect(await ctx.agentPresets.resolve('broken')).toEqual({ id: 'broken' })
     const scope = createScope(ctx, {})
     await expect(ctx.agentPresets.mount(scope.ctx, 'broken')).rejects.toThrow()
     expect(await ctx.agentPresets.mount(scope.ctx)).toEqual({ id: 'standard' })
@@ -158,7 +205,8 @@ it.each([['throws', 'refused'], ['global-service', 'require isolate realms']])('
   const ctx = await setup()
   const { plugin } = await import('./harness.ts')
   await declare(ctx, { id: 'invalid', plugins: [{ name: plugin(name), config: { message: 'refused', service: 'fixtureService' } }] })
-  expect((await ctx.agentPresets.resolve('invalid')).broken).toContain(reason)
+  expect(await ctx.agentPresets.resolve('invalid')).toEqual({ id: 'invalid' })
+  await expect(ctx.agentPresets.mount(createScope(ctx, {}).ctx, 'invalid')).rejects.toThrow(reason)
   expect(ctx.get('fixtureService')).toBeUndefined()
   expect(livePresetMounts(ctx.fiber)).toEqual([])
 })
@@ -167,42 +215,13 @@ it('keeps a row waiting for an absent service mounted, reports it, and refuses b
   const ctx = await setup()
   const { plugin } = await import('./harness.ts')
   await declare(ctx, { id: 'invalid', plugins: [{ name: plugin('needs-missing') }] })
-  expect((await ctx.agentPresets.resolve('invalid')).broken).toContain('waiting for serviceThatDoesNotExist')
-  expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+  expect(await ctx.agentPresets.resolve('invalid')).toEqual({ id: 'invalid' })
+  expect(livePresetMounts(ctx.fiber)).toEqual([])
   await expect(ctx.agentPresets.mount(createScope(ctx, {}).ctx, 'invalid')).rejects.toThrow('waiting for serviceThatDoesNotExist')
-  expect((await ctx.agentPresets.list())[0]!.broken).toContain('waiting for serviceThatDoesNotExist')
+  expect((await ctx.agentPresets.list())[0]).toEqual({ id: 'invalid' })
 })
 
-it('waits for a Host provider still activating instead of recording the preset as broken', async () => {
-  const ctx = await setup()
-  const { plugin } = await import('./harness.ts')
-  let release!: () => void
-  const paused = new Promise<void>((resolve) => { release = resolve })
-  let entered!: () => void
-  const started = new Promise<void>((resolve) => { entered = resolve })
-  ctx.loader.builtins.slowProvider = { async apply(host: Context) {
-    entered()
-    await paused
-    host.provide('serviceThatDoesNotExist', { label: 'late host' })
-  } }
-  const hostUpdate = ctx.loader.root.update([{ id: 'slow', name: 'cordis:slowProvider' }])
-  await started
-  await declare(ctx, { id: 'late', plugins: [{ name: plugin('needs-missing') }] })
-  expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
-  const acquiring = ctx.agentPresets.acquireScope('late')
-  const outcome = await Promise.race([
-    acquiring.then(() => 'settled', () => 'settled'),
-    new Promise<string>((resolve) => { setImmediate(() => { resolve('waiting') }) }),
-  ])
-  expect(outcome).toBe('waiting')
-  release()
-  await hostUpdate
-  const lease = await acquiring
-  expect(await ctx.agentPresets.resolve('late')).toEqual({ id: 'late' })
-  expect((await ctx.agentPresets.compositionInventory())[0]).toMatchObject({ id: 'late',
-    rows: [expect.objectContaining({ moduleName: plugin('needs-missing'), enabled: true })] })
-  await lease[Symbol.asyncDispose]()
-})
+
 
 it('allows an isolated service and resolves it through the Agent composition', async () => {
   const ctx = await setup()
@@ -276,33 +295,16 @@ it('serializes competing blank-session selections and recovers after a failed se
   expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBe('standard')
 })
 
-it('retains a newly acquired generation when a previous activation is replaced', async () => {
-  const ctx = await setup()
-  let release!: () => void
-  const paused = new Promise<void>((resolve) => { release = resolve })
-  let entered!: () => void
-  const started = new Promise<void>((resolve) => { entered = resolve })
-  ctx.loader.builtins.delayed = { async apply() { entered(); await paused } }
-  const pending = ctx.agentPresets.register({ id: 'standard', plugins: [{ name: 'cordis:delayed' }] })
-  await started
-  const leasePromise = ctx.agentPresets.acquireScope()
-  release()
-  const dispose = await pending
-  const lease = await leasePromise
-  await dispose()
-  expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
-  await lease[Symbol.asyncDispose]()
-  expect(livePresetMounts(ctx.fiber)).toHaveLength(0)
-})
 
-it('does not lose the durable selection when a tools observer rejects notification', async () => {
+
+it('does not log a selection when lazy mounting fails', async () => {
   const ctx = await setup()
   await declare(ctx, contribution('standard'))
   await declare(ctx, contribution('minimal'))
   const agent = await agentOn(ctx, 'observer')
   ctx.on('tools/change', () => { throw new Error('observer refused') })
-  expect(await ctx.agentPresets.select(agent, 'minimal')).toBe('minimal')
-  expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBe('minimal')
+  await expect(ctx.agentPresets.select(agent, 'minimal')).rejects.toThrow('observer refused')
+  expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBeNull()
 })
 
 it('inventories failed conditional entries without executing their expressions again', async () => {
@@ -311,7 +313,7 @@ it('inventories failed conditional entries without executing their expressions a
     { name: 'missing', disabled: { __jsExpr: 'false' } },
   ] })
   const inventory = await ctx.agentPresets.compositionInventory()
-  expect(inventory[0]).toMatchObject({ id: 'broken', broken: expect.any(String) as string,
+  expect(inventory[0]).toMatchObject({ id: 'broken',
     rows: [{ moduleName: 'missing', enabled: 'conditional', condition: 'false' }] })
 })
 
@@ -363,5 +365,5 @@ it('reports every process-global service published by a preset', async () => {
     child.provide('presetAlpha', {})
   } }
   await declare(ctx, { id: 'leaks', plugins: [{ name: 'cordis:leaks' }] })
-  expect((await ctx.agentPresets.resolve('leaks')).broken).toContain('presetAlpha, presetZulu')
+  await expect(ctx.agentPresets.mount(createScope(ctx, {}).ctx, 'leaks')).rejects.toThrow('presetAlpha, presetZulu')
 })

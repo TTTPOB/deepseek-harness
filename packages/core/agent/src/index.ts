@@ -381,15 +381,10 @@ export class AgentRegistry extends Service {
   }
 
   /**
-   * Create and publish a new agent through the registered factory.
-   * Distinct from {@link register} (which records an already-constructed
-   * agent): this constructs the agent and its session. Rejects if no factory is
-   * registered or creation/setup fails. The resolved {@link AgentHandle} lets
-   * the owner tear down exactly this agent.
-   * @param options - shared identity, optional live parent, session seed/metadata, and agent options.
-   * @returns the handle after setup, rollback-covered publication, and loop start complete.
+   * Register setup run before each create/resume caller setup.
+   * @param setup - contribution composed into unpublished Agent setup.
+   * @returns disposer owned by the registering plugin fiber.
    */
-  /** Register setup run before each create/resume caller setup; dispose to remove it. */
   registerSetup(setup: AgentSetup): () => void {
     if (this.setups.has(setup)) throw new Error('Agent setup is already registered')
     this.setups.add(setup)
@@ -411,6 +406,15 @@ export class AgentRegistry extends Service {
     }
   }
 
+  /**
+   * Create and publish a new agent through the registered factory.
+   * Distinct from {@link register} (which records an already-constructed
+   * agent): this constructs the agent and its session. Rejects if no factory is
+   * registered or creation/setup fails. The resolved {@link AgentHandle} lets
+   * the owner tear down exactly this agent.
+   * @param options - shared identity, optional live parent, session seed/metadata, and agent options.
+   * @returns the handle after setup, rollback-covered publication, and loop start complete.
+   */
   async create(options: CreateAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
     const composed = this.composeSetup(options.setup)

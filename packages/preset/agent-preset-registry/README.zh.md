@@ -53,9 +53,9 @@ Web 内置定义来自 `dsh-web-app` bundle。定义使用普通插件行；注�
 <details>
 <summary>实现细节 — 点击展开</summary>
 
-每个声明在启动时创建注册表拥有的 scope 和内存 Loader 树。更新或移除声明会让旧代际退役；Agent、子 Agent 和临时历史读取各自持有引用，最后一个引用释放后才销毁插件树。插件注册继承 preset scope，Agent scope 的父链接决定可见性；Agent loop 仍由宿主共享。
+注册声明时校验子插件列表。`place(agentCtx, { key, ctx, release })` 将 workspace 租约交给注册表后，Agent 按需在其 workspace 下挂载注册表拥有的 preset 代际。注册表独占 Agent 父链接和租约，Agent 卸载时先释放 preset 再释放租约。同一 workspace 的 Agent 在使用期间共享代际；无人使用时立即销毁。子 Agent 只在同 workspace 继承父 Agent 的确切代际。未设置 placement 的 Agent 使用 Host scope；冷读取 `acquireScope(id)` 临时租用 Host scope，不获取 workspace。定义更新或撤销不改变现有 Agent 保留的旧代。Agent loop 仍由宿主共享。
 
-激活审计检查导入失败、缺失服务和向全局泄漏的服务。导入失败、激活失败和泄漏会拒绝挂载。等待 Host 服务的行保持挂载，每次读取和绑定都在 Host Loader 树结算后重新审计，因此启动顺序不决定结果。失败只禁用该定义的新绑定。会话日志保存 preset ID 和空白会话的切换记录；重启恢复使用该 ID 的当前定义，缺失时拒绝恢复。
+代际挂载时审计导入失败、缺失服务和向全局泄漏的服务；失败拒绝对应 Agent 的挂载。`list`、`resolve` 与未激活的 `compositionInventory` 只报告声明级诊断，不把某 workspace 的失败作为全局 roster 健康状态。会话日志保存 preset ID 和空白会话的切换记录；重启恢复使用该 ID 的当前定义，缺失时拒绝恢复。
 
 | 文件 | 职责 |
 |---|---|
