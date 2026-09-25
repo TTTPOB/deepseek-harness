@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { ToolCallId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createSettlementMessage } from '../src/continuation-messages.ts'
+import { createSettlementMessage, withContinuableReturnGuidance } from '../src/continuation-messages.ts'
+
+describe('continuable return guidance', () => {
+  it('uses settlement for final reports and send_message only for early findings', () => {
+    const content = withContinuableReturnGuidance(SessionId('parent'), [
+      { type: 'text', text: 'Do the task.' },
+    ])
+    const guidance = content.at(-1)
+
+    expect(guidance).toMatchObject({ type: 'text' })
+    if (guidance?.type !== 'text') throw new Error('expected text guidance')
+    expect(guidance.text).toContain('settlement will automatically notify the parent')
+    expect(guidance.text).toContain('Use send_message only when information genuinely needs to reach the parent before you settle')
+    expect(guidance.text).toContain('do not end the turn until your final report is complete')
+  })
+})
 
 const childId = SessionId('settled-child')
 const summary = { type: 'text', text: `Background subagent ${childId} finished and will do no further work unless you send it more.` }
