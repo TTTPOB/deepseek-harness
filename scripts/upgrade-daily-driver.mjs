@@ -235,9 +235,9 @@ async function main() {
     await writeFile(homePatchPath, yaml.dump(shared.home))
     pnpm(['--config.auto-install-peers=false', '--ignore-workspace', '--dir', profile, 'install', '--no-frozen-lockfile'], { stdio: 'inherit' })
     if (profileName === 'web' && settingsText !== null) await rename(settingsPath, join(backup, 'settings.archived.yaml'))
-    console.log(`Installed and migrated ${profileName}. Rollback: node scripts/upgrade-daily-driver.mjs --rollback ${backup}${args.home ? ` --home ${home}` : ''}${args['global-dir'] ? ` --global-dir ${globalDir}` : ''}${args['global-bin-dir'] ? ` --global-bin-dir ${resolve(args['global-bin-dir'])}` : ''}`)
+    console.log(`Installed and migrated ${profileName}. Rollback: node scripts/upgrade-daily-driver.mjs --rollback ${backup}${profileName !== 'web' ? ` --profile ${profileName}` : ''}${args.home ? ` --home ${home}` : ''}${args['global-dir'] ? ` --global-dir ${globalDir}` : ''}${args['global-bin-dir'] ? ` --global-bin-dir ${resolve(args['global-bin-dir'])}` : ''}`)
   } catch (error) {
-    console.error(`Upgrade failed: ${error.message}\nRestore with: node scripts/upgrade-daily-driver.mjs --rollback ${backup} --home ${home} --global-dir ${globalDir}`)
+    console.error(`Upgrade failed: ${error.message}\nRestore with: node scripts/upgrade-daily-driver.mjs --rollback ${backup} --home ${home} --global-dir ${globalDir}${profileName !== 'web' ? ` --profile ${profileName}` : ''}${args['global-bin-dir'] ? ` --global-bin-dir ${resolve(args['global-bin-dir'])}` : ''}`)
     throw error
   }
 }
