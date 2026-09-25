@@ -14,7 +14,7 @@ Release workflow 从三个个人插件各自的不可变 Release 下载资产；
 
 给 `node scripts/daily-driver.mjs smoke` 传入 11 个 tarball 路径，顺序由脚本 usage 错误列出：六个 DSH fork、Pi AI、progressive-tools、overlay、envrc、Firecrawl。脚本用 pnpm 11.24 在临时隔离安装中保持官方顶层 CLI，并通过 overrides 检查 Web bundle 的实际依赖解析和插件构建入口；同时在第一个 tarball 旁边保存已验证的 runtime package、workspace 配置和 lockfile。完成后删除临时安装。该检查不启动 Web Host，也不验证联网 provider。
 
-隔离的正式安装需为上述十个 fork/插件 tarball 配置 pnpm global overrides，顶层 `@deepseek-ai/dsh` 仍为官方版。tarball 应保存在安装期间不会变化的目录。初始化独立 `$DSH_HOME`，核对 Web profile 的 bundles 恰好为 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`，dependencies 为 `{}`。使用 `dsh --profile web --dump-config` 核对个人插件行和 `standard-ptc`，再以独立端口启动隔离 Host。端点、凭据引用、用户的 preset 选择和私有 MCP 服务器列表留在该隔离 profile patch，不放进发行 bundle。
+隔离的正式安装需为上述十一个 fork/插件 tarball 配置 pnpm global overrides，顶层 `@deepseek-ai/dsh` 仍为官方版。tarball 应保存在安装期间不会变化的目录。初始化独立 `$DSH_HOME`，核对 Web profile 的 bundles 恰好为 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`，dependencies 为 `{}`。使用 `dsh --profile web --dump-config` 核对个人插件行和 `standard-ptc`，再以独立端口启动隔离 Host。端点、凭据引用、用户的 preset 选择和私有 MCP 服务器列表留在该隔离 profile patch，不放进发行 bundle。
 
 ## 3. 保留发行资产不可变
 
