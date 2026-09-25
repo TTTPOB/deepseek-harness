@@ -1,6 +1,7 @@
 /** Fixed-baseline checks and an isolated project dependency-closure smoke. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -35,6 +36,15 @@ function run(command, args, options = {}) {
 
 async function manifest(path) {
   return JSON.parse(await readFile(path, 'utf8'))
+}
+
+function piManifestPath(anchor) {
+  const name = '@earendil-works/pi-ai'
+  for (const directory of anchor.resolve.paths(name)) {
+    const path = join(directory, name, 'package.json')
+    if (existsSync(path)) return path
+  }
+  throw new Error(`Cannot locate installed ${name} manifest from llm-pi-ai`)
 }
 
 async function verify() {
@@ -99,7 +109,7 @@ async function smoke(tarballs) {
         : plugins.includes(name) || name === '@deepseek-ai/dsh-agent-preset-registry' ? webRequire
         : name === '@deepseek-ai/dsh-subagent' || name === '@deepseek-ai/dsh-llm-pi-ai' || name === '@deepseek-ai/dsh-agent' ? baseRequire : cliRequire
       const path = name === '@earendil-works/pi-ai'
-        ? join(dirname(dirname(anchor.resolve(name))), 'package.json')
+        ? piManifestPath(anchor)
         : anchor.resolve(`${name}/package.json`)
       const packageMeta = await manifest(path)
       assert.equal(packageMeta.version, index < forks.length ? forkVersion : index === forks.length ? piVersion : pluginVersions[index - forks.length - 1], name)
