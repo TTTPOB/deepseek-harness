@@ -1103,15 +1103,16 @@ describe('compat switches', () => {
     })).toThrow(/compat "supportsDevelperRole", which no wire protocol declares; the configurable switches are .*\bsupportsDeveloperRole\b/)
   })
 
-  it('keeps explicit Responses tool-search and instructions settings after schema validation', () => {
-    const model = resolveProfiles(LlmPiAi.Config({ providers: {
-      gateway: {
-        api: 'openai-responses', baseURL: 'https://gateway.test/v1',
-        compat: { supportsToolSearch: true, systemPromptFormat: 'instructions' },
-        models: [{ id: 'model' }],
-      },
-    } }).providers).get('gateway')?.piProvider?.getModels()[0]
-    expect(model?.compat).toMatchObject({ supportsToolSearch: true, systemPromptFormat: 'instructions' })
+  it('keeps explicit Responses tool-search and instructions settings after schema validation', async () => {
+    const gateway: LlmPiAi.PiAiProviderProfile = {
+      api: 'openai-responses', baseURL: 'https://gateway.test/v1',
+      compat: { supportsToolSearch: true, systemPromptFormat: 'instructions' },
+      models: [{ id: 'model' }],
+    }
+    const ctx = await bootWithSettings({})
+    await configurations.get(ctx)!.update({ providers: { gateway } })
+    const model = resolveProfiles({ gateway }).get('gateway')?.piProvider?.getModels()[0]
+    expect(model?.compat).toMatchObject(gateway.compat)
   })
 
   it('refuses compat keys pi-ai’s catalog owns, pointing at the catalog route', () => {
