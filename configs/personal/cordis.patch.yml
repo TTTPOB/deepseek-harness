@@ -1,5 +1,39 @@
-# Personal declarative preset mounted by the Web preset registry.
-# Profile patches may override this declaration by id.
+# Home-level Cordis patch template; profile-owned Host rows remain unchanged.
+- insert:
+    - id: progressive-tools
+      name: dsh-progressive-tools
+      config:
+        deferTools: mcp
+
+    - id: workspace-registry
+      name: dsh-workspace-overlay
+      config:
+        trustWorkspaceConfig: true
+        watchWorkspaceConfig: true
+        reloadDebounceMs: 150
+    - id: workspace-mcp-manager
+      name: dsh-workspace-overlay/mcp/manager
+    - id: workspace-agent-integration
+      name: dsh-workspace-overlay/integration-plugin
+
+    - id: workspace-envrc
+      name: dsh-workspace-envrc
+      config:
+        executable: direnv
+        shimShell: /bin/bash
+        enableBash: true
+        enableWorkspaceMcp: true
+        versionCheckTimeoutMs: 5000
+    - id: workspace-envrc-integration
+      name: dsh-workspace-envrc/integration-plugin
+
+    - id: web-fetch-firecrawl
+      name: '@firecrawl/dsh-firecrawl/fetch'
+
+    - id: mcp-panel
+      name: dsh-mcp-panel
+
+# Declarative personal preset inserted after profile composition.
 - insert:
     - id: preset-standard-ptc
       name: '@deepseek-ai/dsh-agent-preset'
