@@ -1,0 +1,21 @@
+# Install the personal Web distribution
+
+English | [中文](installing-and-maintaining-daily-driver.zh.md)
+
+This procedure keeps the official `@deepseek-ai/dsh@0.1.7-rc.2` CLI as the top-level package. The Web bundle fork owns its five runtime plugin dependencies and personal composition; the Web profile selects only `dsh-base` and `dsh-web-app`, with empty profile dependencies. Install in an isolated pnpm global directory and `$DSH_HOME` before changing a daily installation.
+
+## 1. Obtain immutable inputs
+
+Build and pack all six DSH forks from this baseline, not from an earlier DSH release: `dsh-subagent`, `dsh-llm-pi-ai`, `dsh-mcp-client`, `dsh-agent`, `dsh-agent-preset-registry`, and `dsh-web-app`, each at `0.1.7-rc.2-fork1`. Obtain Pi AI `0.85.1-fork1` from [its immutable release](https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.5-rc.2-fork1/earendil-works-pi-ai-0.85.1-fork1.tgz). Obtain progressive-tools `0.3.0`, workspace-overlay and workspace-envrc `0.2.0`, and the adapted Firecrawl `0.1.0-fork1` tarballs. MCP Panel `0.6.19` comes from npm. Do not put local `file:` paths in the published Web manifest.
+
+The Release workflow fetches the three personal plugins from their own immutable Releases and accepts the Firecrawl tarball as a required URL input (`firecrawl_tarball_url`, or `DSH_FIRECRAWL_TARBALL_URL` for a tag run). These assets must exist before that workflow can publish; it is not run as part of local validation.
+
+## 2. Verify installation resolution
+
+Pass the 11 tarball paths to `node scripts/daily-driver.mjs smoke`, in the order printed by its usage error: six DSH forks, Pi AI, progressive-tools, overlay, envrc, and Firecrawl. The script installs an official top-level CLI in temporary isolation with pnpm 11.24 global-style overrides, checks the Web bundle's actual dependency resolution and built plugin entries, and records the tested runtime package, workspace and lockfile next to the first tarball. Its temp installation is removed on completion. It does not boot a Web Host or validate network-backed provider behavior.
+
+For the isolated production-style installation, configure pnpm global overrides for the same ten fork/plugin tarballs, leaving `@deepseek-ai/dsh` itself official. Keep the plugin tarballs in an immutable directory for the lifetime of the installation. Initialize a separate `$DSH_HOME`, confirm the Web profile bundles are precisely `@deepseek-ai/dsh-base` then `@deepseek-ai/dsh-web-app`, and keep profile dependencies `{}`. Run `dsh --profile web --dump-config` to check personal rows and `standard-ptc`, then boot the isolated Host on a separate port. Endpoint addresses, credential references, user preset selection and private MCP server lists belong in that isolated profile patch, never the bundle.
+
+## 3. Preserve immutable releases
+
+Commit and integrate validated package changes into the release branch, tag `daily-driver-v0.1.7-rc.2-fork1` only after all external asset Releases exist, and run the existing release workflow. Never reuse an existing tag or replace its tarballs. A missing Firecrawl URL or plugin asset stops the release before publishing.

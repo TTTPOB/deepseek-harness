@@ -1,0 +1,164 @@
+name: Daily-driver pinned package release
+
+on:
+  push:
+    tags:
+      - 'daily-driver-v*-fork*'
+  workflow_dispatch:
+    inputs:
+      firecrawl_tarball_url:
+        description: Immutable URL of the adapted Firecrawl fork1 tarball
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-driver-release
+  cancel-in-progress: false
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+  BASE_VERSION: 0.1.7-rc.2
+  FORK_VERSION: 0.1.7-rc.2-fork1
+  PI_RELEASE: daily-driver-v0.1.5-rc.2-fork1
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.identity.outputs.commit }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify fixed baseline and release identity
+        id: identity
+        run: |
+          expected_tag="daily-driver-v${FORK_VERSION}"
+          if [[ "$GITHUB_REF_TYPE" = tag ]]; then
+            test "$GITHUB_REF_NAME" = "$expected_tag"
+          else
+            test "$GITHUB_REF" = refs/heads/daily-driver
+          fi
+          node scripts/daily-driver.mjs verify
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tag=$expected_tag" >> "$GITHUB_OUTPUT"
+      - name: Fetch external plugin assets before source installation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/daily-driver
+          gh release download "$PI_RELEASE" --repo TTTPOB/deepseek-harness \
+            --pattern 'earendil-works-pi-ai-0.85.1-fork1.tgz' --dir dist/daily-driver
+          curl -fLsS -o dist/daily-driver/dsh-progressive-tools-0.3.0.tgz \
+            https://github.com/TTTPOB/dsh-progressive-tools/releases/download/v0.3.0/dsh-progressive-tools-0.3.0.tgz
+          curl -fLsS -o dist/daily-driver/dsh-workspace-overlay-0.2.0.tgz \
+            https://github.com/TTTPOB/dsh-workspace-overlay/releases/download/v0.2.0/dsh-workspace-overlay-0.2.0.tgz
+          curl -fLsS -o dist/daily-driver/dsh-workspace-envrc-0.2.0.tgz \
+            https://github.com/TTTPOB/dsh-workspace-envrc/releases/download/v0.2.0/dsh-workspace-envrc-0.2.0.tgz
+          firecrawl_url="${{ inputs.firecrawl_tarball_url || vars.DSH_FIRECRAWL_TARBALL_URL }}"
+          test -n "$firecrawl_url"
+          curl -fLsS -o dist/daily-driver/firecrawl-dsh-firecrawl-0.1.0-fork1.tgz "$firecrawl_url"
+      - name: Install source with temporary external overrides
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const path = 'pnpm-workspace.yaml'
+          const source = readFileSync(path, 'utf8')
+          const assets = {
+            'dsh-progressive-tools': 'dsh-progressive-tools-0.3.0.tgz',
+            'dsh-workspace-overlay': 'dsh-workspace-overlay-0.2.0.tgz',
+            'dsh-workspace-envrc': 'dsh-workspace-envrc-0.2.0.tgz',
+            '@firecrawl/dsh-firecrawl': 'firecrawl-dsh-firecrawl-0.1.0-fork1.tgz',
+            '@earendil-works/pi-ai': 'earendil-works-pi-ai-0.85.1-fork1.tgz',
+          }
+          const lines = Object.entries(assets).map(([name, file]) => `  '${name}': 'file:dist/daily-driver/${file}'`)
+          writeFileSync(path, source.replace('\npeerDependencyRules:', `\n${lines.join('\n')}\n\npeerDependencyRules:`))
+          NODE
+          pnpm install --no-frozen-lockfile
+      - name: Build affected packages
+        run: |
+          pnpm exec tsc -b packages/typert/generator/tsconfig.json \
+            packages/subagent/subagent/tsconfig.json \
+            packages/llm/llm-pi-ai/tsconfig.json \
+            packages/mcp/mcp-client/tsconfig.json \
+            packages/core/agent/tsconfig.json \
+            packages/preset/agent-preset-registry/tsconfig.json \
+            packages/bundle/web-app/tsconfig.json
+          for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry bundle/web-app; do
+            pnpm exec tsdown -F "packages/$package" --env.DSH_BUILD_FACE host
+          done
+      - name: Assemble overrides and personal plugin tarballs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/daily-driver
+          for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry bundle/web-app; do
+            pnpm --dir "packages/$package" pack --pack-destination "$PWD/dist/daily-driver"
+          done
+      - name: Verify isolated installation-wide overrides
+        run: >-
+          node scripts/daily-driver.mjs smoke
+          dist/daily-driver/deepseek-ai-dsh-subagent-0.1.7-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-web-app-0.1.7-rc.2-fork1.tgz
+          dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz
+          dist/daily-driver/dsh-progressive-tools-0.3.0.tgz
+          dist/daily-driver/dsh-workspace-overlay-0.2.0.tgz
+          dist/daily-driver/dsh-workspace-envrc-0.2.0.tgz
+          dist/daily-driver/firecrawl-dsh-firecrawl-0.1.0-fork1.tgz
+      - name: Checksum tested runtime and overrides
+        working-directory: dist/daily-driver
+        run: sha256sum ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-driver-package
+          path: dist/daily-driver/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: daily-driver-package
+          path: release
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.build.outputs.commit }}
+          TAG: ${{ needs.build.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" = push ]]; then
+            current=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.sha')
+          else
+            current=$(gh api "repos/$GH_REPO/git/ref/heads/daily-driver" --jq '.object.sha')
+          fi
+          test "$current" = "$COMMIT"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; immutable releases are never overwritten." >&2
+            exit 1
+          fi
+          cd release
+          sha256sum -c SHA256SUMS
+          gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml SHA256SUMS \
+            --target "$COMMIT" --title "$TAG" --latest \
+            --notes 'Official DSH 0.1.7-rc.2 CLI with six DSH fork1 overrides, Pi AI fork1, and five Web plugin tarballs. Install and smoke all assets together.'
