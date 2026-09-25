@@ -38,13 +38,12 @@ async function manifest(path) {
   return JSON.parse(await readFile(path, 'utf8'))
 }
 
-function piManifestPath(anchor) {
-  const name = '@earendil-works/pi-ai'
+function packageManifestPath(anchor, name) {
   for (const directory of anchor.resolve.paths(name)) {
     const path = join(directory, name, 'package.json')
     if (existsSync(path)) return path
   }
-  throw new Error(`Cannot locate installed ${name} manifest from llm-pi-ai`)
+  throw new Error(`Cannot locate installed ${name} manifest from its dependency anchor`)
 }
 
 async function verify() {
@@ -108,9 +107,7 @@ async function smoke(tarballs) {
       const anchor = name === '@earendil-works/pi-ai' ? createRequire(baseRequire.resolve('@deepseek-ai/dsh-llm-pi-ai/package.json'))
         : plugins.includes(name) || name === '@deepseek-ai/dsh-agent-preset-registry' ? webRequire
         : name === '@deepseek-ai/dsh-subagent' || name === '@deepseek-ai/dsh-llm-pi-ai' || name === '@deepseek-ai/dsh-agent' ? baseRequire : cliRequire
-      const path = name === '@earendil-works/pi-ai'
-        ? piManifestPath(anchor)
-        : anchor.resolve(`${name}/package.json`)
+      const path = packageManifestPath(anchor, name)
       const packageMeta = await manifest(path)
       assert.equal(packageMeta.version, index < forks.length ? forkVersion : index === forks.length ? piVersion : pluginVersions[index - forks.length - 1], name)
       if (name !== '@earendil-works/pi-ai') {
@@ -123,7 +120,7 @@ async function smoke(tarballs) {
         for (const specifier of entries) await import(pathToFileURL(anchor.resolve(specifier)).href)
       }
     }
-    const panelMeta = await manifest(webRequire.resolve('dsh-mcp-panel/package.json'))
+    const panelMeta = await manifest(packageManifestPath(webRequire, 'dsh-mcp-panel'))
     assert.equal(panelMeta.version, '0.6.19')
     assert.equal(evaluatePluginCompatibility(panelMeta, {}, baseVersion), undefined, 'Incompatible dsh peers: dsh-mcp-panel')
     await import(pathToFileURL(webRequire.resolve('dsh-mcp-panel')).href)
