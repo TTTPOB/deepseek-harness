@@ -22,7 +22,7 @@ const names = [
   ['@firecrawl/dsh-firecrawl', 'firecrawl-dsh-firecrawl-0.1.0-fork1.tgz'],
   ['@earendil-works/pi-ai@0.85.1-fork1', 'earendil-works-pi-ai-0.85.1-fork1.tgz'],
 ]
-const obsoleteRows = new Set(['web-search-firecrawl', 'web-fetch-http', 'web-fetch-firecrawl', 'tool-web', 'progressive-tools'])
+const obsoleteRows = new Set(['web-search-firecrawl', 'tool-web'])
 const supportedSections = new Set(['agent-presets', 'subagent-model-selection', 'ui-onboarding', 'ui-developer-tools', 'shell', 'llm-pi-ai', 'llm-deepseek', 'agent-default-model', 'agent-loop', 'ui-conversation', 'ui-settings', 'ui-settings-general', 'ui-settings-models', 'ui-settings-shell', 'web', 'mcp-client', 'agent-preset-registry', 'subagent-model-selection-settings'])
 const renamed = {
   'agent-presets': 'agent-preset-registry',
@@ -156,8 +156,8 @@ async function main() {
     globalConfig.blockExoticSubdeps = false
     await writeFile(workspacePath, yaml.dump(globalConfig))
     const installArgs = ['--config.enable-global-virtual-store=false', '--ignore-workspace', 'add', '-g', '@deepseek-ai/dsh@0.1.7-rc.2']
-    if (args['global-dir']) installArgs.unshift(`--global-dir=${globalDir}`)
-    if (args['global-bin-dir']) installArgs.unshift(`--global-bin-dir=${resolve(args['global-bin-dir'])}`)
+    if (args['global-dir']) installArgs.unshift(`--config.global-dir=${dirname(globalDir)}`)
+    if (args['global-bin-dir']) installArgs.unshift(`--config.global-bin-dir=${resolve(args['global-bin-dir'])}`)
     command('pnpm', installArgs, { stdio: 'inherit' })
     await rm(profile, { recursive: true })
     await mkdir(profile, { recursive: true })
@@ -193,8 +193,8 @@ async function restore(backup, paths) {
   if (metadata.hadWorkspace) await cp(workspaceBackup, paths.workspacePath)
   else await rm(paths.workspacePath, { force: true })
   const installArgs = ['--config.enable-global-virtual-store=false', '--ignore-workspace', 'add', '-g', `@deepseek-ai/dsh@${paths.oldVersion}`]
-  if (paths.globalDir) installArgs.unshift(`--global-dir=${paths.globalDir}`)
-  if (paths.bin) installArgs.unshift(`--global-bin-dir=${resolve(paths.bin)}`)
+  if (paths.globalDir) installArgs.unshift(`--config.global-dir=${dirname(paths.globalDir)}`)
+  if (paths.bin) installArgs.unshift(`--config.global-bin-dir=${resolve(paths.bin)}`)
   command('pnpm', installArgs, { stdio: 'inherit' })
   await rm(paths.profile, { recursive: true, force: true })
   await cp(join(backup, 'web'), paths.profile, { recursive: true })
