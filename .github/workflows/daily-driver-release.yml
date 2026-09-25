@@ -127,8 +127,8 @@ jobs:
           done
       - name: Require pinned workspace plugin source commits
         run: |
-          test -n "${{ inputs.overlay_ref || vars.DSH_OVERLAY_REF }}"
-          test -n "${{ inputs.envrc_ref || vars.DSH_ENVRC_REF }}"
+          [[ "${{ inputs.overlay_ref || vars.DSH_OVERLAY_REF }}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${{ inputs.envrc_ref || vars.DSH_ENVRC_REF }}" =~ ^[0-9a-f]{40}$ ]]
       - uses: actions/checkout@v6
         with:
           repository: TTTPOB/dsh-workspace-overlay
