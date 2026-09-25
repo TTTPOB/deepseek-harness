@@ -10,7 +10,7 @@
 
 Release workflow 从已有不可变 Release 下载 Pi AI、从 progressive-tools 自己的 Release 下载其资产。Firecrawl 使用明确的不可变 tarball URL（`firecrawl_tarball_url`，tag 触发时可用 `DSH_FIRECRAWL_TARBALL_URL`）；overlay/envrc 需要精确已验证的源码 commit 输入 `overlay_ref`、`envrc_ref`（tag 触发时对应变量为 `DSH_OVERLAY_REF`、`DSH_ENVRC_REF`）。正式发行前须取得这些资产及源码；本地验证不运行远端工作流。
 
-首次发行按顺序打破依赖环：DSH 源码安装时仅暂时移除 Web manifest 中的 overlay/envrc 依赖，构建六个 DSH fork，打包 Web bundle 前恢复原始 manifest 字节。然后用新 agent 和 preset-registry tarball 安装、构建、打包 overlay；再用新 agent 和 overlay tarball 安装、构建、打包 envrc。临时 overrides 与派生的源码 lockfile 只留在 CI runner，发布的 Web manifest 保留全部五个运行时依赖。最后执行十一 tarball 的普通项目依赖闭包检查并上传不可变资产。overlay 和 envrc 不要求先独立发布。
+首次发行按顺序打破依赖环：DSH 源码安装时仅暂时移除 Web manifest 中的 overlay/envrc 依赖，构建六个 DSH fork，打包 Web bundle 前恢复原始 manifest 字节。然后用新 agent 和 preset-registry tarball 安装、构建、打包 overlay；再用相同的 agent、preset-registry fork 和新 overlay tarball 安装、构建、打包 envrc。临时 overrides 与派生的源码 lockfile 只留在 CI runner，发布的 Web manifest 保留全部五个运行时依赖。最后执行十一 tarball 的普通项目依赖闭包检查并上传不可变资产。overlay 和 envrc 不要求先独立发布。
 
 ## 2. 验证实际解析
 

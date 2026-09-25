@@ -109,8 +109,8 @@ jobs:
             packages/core/agent/tsconfig.json \
             packages/preset/agent-preset-registry/tsconfig.json \
             packages/bundle/web-app/tsconfig.json
-          for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry bundle/web-app; do
-            pnpm exec tsdown -F "packages/$package" --env.DSH_BUILD_FACE host
+          for package in dsh-subagent dsh-llm-pi-ai dsh-mcp-client dsh-agent dsh-agent-preset-registry dsh-web-app; do
+            pnpm exec tsdown -F "@deepseek-ai/$package" --env.DSH_BUILD_FACE host
           done
       - name: Pack the six DSH forks
         run: |
@@ -149,7 +149,7 @@ jobs:
           pnpm --dir dist/source-overlay pack --pack-destination "$PWD/dist/daily-driver"
       - name: Build and pack workspace envrc from pinned source
         run: |
-          printf "overrides:\n  '@deepseek-ai/dsh-agent': 'file:../daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz'\n  'dsh-workspace-overlay': 'file:../daily-driver/dsh-workspace-overlay-0.2.0.tgz'\nblockExoticSubdeps: false\n" >> dist/source-envrc/pnpm-workspace.yaml
+          printf "overrides:\n  '@deepseek-ai/dsh-agent': 'file:../daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz'\n  '@deepseek-ai/dsh-agent-preset-registry': 'file:../daily-driver/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz'\n  'dsh-workspace-overlay': 'file:../daily-driver/dsh-workspace-overlay-0.2.0.tgz'\nblockExoticSubdeps: false\n" >> dist/source-envrc/pnpm-workspace.yaml
           pnpm --dir dist/source-envrc install --no-frozen-lockfile
           pnpm --dir dist/source-envrc run build
           pnpm --dir dist/source-envrc pack --pack-destination "$PWD/dist/daily-driver"
