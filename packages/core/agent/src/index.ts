@@ -245,6 +245,7 @@ interface FactorySlot {
 export class AgentRegistry extends Service {
   private store = new Map<SessionId, AgentEntry>()
   private factory: FactorySlot | undefined
+  private readonly setups = new Set<AgentSetup>()
   private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
@@ -388,8 +389,32 @@ export class AgentRegistry extends Service {
    * @param options - shared identity, optional live parent, session seed/metadata, and agent options.
    * @returns the handle after setup, rollback-covered publication, and loop start complete.
    */
+  /** Register setup run before each create/resume caller setup; dispose to remove it. */
+  registerSetup(setup: AgentSetup): () => void {
+    if (this.setups.has(setup)) throw new Error('Agent setup is already registered')
+    this.setups.add(setup)
+    return this.ctx.effect(() => () => { this.setups.delete(setup) }, 'agents.setup()')
+  }
+
+  private composeSetup(caller: AgentSetup | undefined): AgentSetup | undefined {
+    const contributions = [...this.setups]
+    if (contributions.length === 0) return caller
+    return async (agentCtx, agent) => {
+      const commits: AgentSetupCommit[] = []
+      for (const setup of contributions) {
+        const commit = await setup(agentCtx, agent)
+        if (commit) commits.push(commit)
+      }
+      const commit = await caller?.(agentCtx, agent)
+      if (commit) commits.push(commit)
+      return { commit: () => { for (const item of commits) item.commit() } }
+    }
+  }
+
   async create(options: CreateAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
+    const composed = this.composeSetup(options.setup)
+    if (composed) options = { ...options, setup: composed }
     // Re-trace a Service-backed factory through the accessing context
     // explicitly. This preserves AgentLoop's dependency origin while binding
     // its effects to ownerCtx; plain factories receive ownerCtx as an explicit
@@ -409,6 +434,8 @@ export class AgentRegistry extends Service {
    */
   async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
+    const composed = this.composeSetup(options.setup)
+    if (composed) options = { ...options, setup: composed }
     const { target } = this.requireFactory()
     const receiver = getTraceable(ownerCtx, target)
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver

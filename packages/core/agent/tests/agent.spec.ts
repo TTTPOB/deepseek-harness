@@ -345,6 +345,46 @@ describe('AgentRegistry factory seam', () => {
     await expect(ctx.agents.create({ sessionId: SessionId('after-s') })).rejects.toThrow(/no agent factory/)
   })
 
+  it('runs effect-owned setup contributions before caller setup on create and resume', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const events: string[] = []
+    ctx.agents.setFactory({
+      async createAgent(_owner, options) {
+        const agent = stubAgent(options.sessionId)
+        const commit = await options.setup?.(ctx, agent)
+        commit?.commit()
+        events.push('published')
+        return { agent, dispose: async () => {} }
+      },
+      async resume(_owner, options) {
+        const agent = stubAgent(options.resumeSessionId)
+        const commit = await options.setup?.(ctx, agent)
+        commit?.commit()
+        events.push('published')
+        return { agent, dispose: async () => {} }
+      },
+    })
+    const contribution = await ctx.plugin(Object.assign((owner: Context) => {
+      owner.agents.registerSetup(() => {
+        events.push('contribution')
+        return { commit: () => { events.push('contribution commit') } }
+      })
+    }, { inject: ['agents'] }))
+    const setup = () => {
+      events.push('caller')
+      return { commit: () => { events.push('caller commit') } }
+    }
+    await ctx.agents.create({ sessionId: SessionId('create'), setup })
+    await ctx.agents.resume({ resumeSessionId: SessionId('resume'), setup })
+    expect(events).toEqual(Array.from({ length: 2 }, () =>
+      ['contribution', 'caller', 'contribution commit', 'caller commit', 'published']).flat())
+    await contribution.dispose()
+    events.length = 0
+    await ctx.agents.create({ sessionId: SessionId('after'), setup })
+    expect(events).toEqual(['caller', 'caller commit', 'published'])
+  })
+
   it('canonicalizes an already traced Service before tracing it for the caller', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)
