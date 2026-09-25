@@ -9,10 +9,10 @@
 先在**外部终端按原来的启动方式停止旧 Host**；脚本不会按进程名寻找或杀死 Host。然后在源码仓库执行：
 
 ```sh
-node scripts/upgrade-daily-driver.mjs
+node scripts/upgrade-daily-driver.mjs --dry-run
 ```
 
-预览仅列路径、旧/目标版本、override 和行数、section 到 row 映射，以及将要创建的备份位置，不输出配置值。未知 settings section 会中止，不会默默丢掉。`!!js` 表达式按带标签数据保存，脚本不会执行。隔离安装可显式指定 `--home`、`--global-dir`、`--global-bin-dir`、`--artifacts`；测试时不能指向日用安装。
+不传选项也会预览；脚本通过 Corepack 固定调用 pnpm 11.24.0 完成定位、安装及回滚，不依赖仓库 packageManager 或 PATH 中的 pnpm，并输出所用版本。系统须有 Corepack。预览仅列路径、旧/目标版本、override 和行数、section 到 row 映射，以及将要创建的备份位置，不输出配置值。未知 settings section 会中止，不会默默丢掉。`!!js` 表达式按带标签数据保存，脚本不会执行。隔离安装可显式指定 `--home`、`--global-dir`、`--global-bin-dir`、`--artifacts`；测试时不能指向日用安装。
 
 ## 2. 一次执行升级
 

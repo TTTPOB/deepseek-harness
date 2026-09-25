@@ -9,10 +9,10 @@ The source checkout can already be at 0.1.7 while the daily global installation 
 Stop the existing Host **from the external terminal using its original launch mechanism**; the script does not find or kill a process. Then, from the source repository:
 
 ```sh
-node scripts/upgrade-daily-driver.mjs
+node scripts/upgrade-daily-driver.mjs --dry-run
 ```
 
-The preview lists paths, old/target versions, override and row counts, section-to-row mappings, and the prospective backup location without exposing configuration values. Unknown settings sections stop the upgrade rather than being silently dropped. `!!js` expressions remain tagged data, not executed by the installer. For an isolated installation, pass explicit `--home`, `--global-dir`, `--global-bin-dir`, and `--artifacts` paths; do not point tests at the daily installation.
+No option also previews; the script invokes Corepack's pinned pnpm 11.24.0 for discovery, installation, and rollback regardless of the repository's packageManager or the pnpm on PATH, and displays that version. Corepack must be available. The preview lists paths, old/target versions, override and row counts, section-to-row mappings, and the prospective backup location without exposing configuration values. Unknown settings sections stop the upgrade rather than being silently dropped. `!!js` expressions remain tagged data, not executed by the installer. For an isolated installation, pass explicit `--home`, `--global-dir`, `--global-bin-dir`, and `--artifacts` paths; do not point tests at the daily installation.
 
 ## 2. Upgrade once
 

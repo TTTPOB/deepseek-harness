@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = join(repo, 'worktree.smoke')
-const realGlobal = execFileSync('pnpm', ['root', '-g'], { encoding: 'utf8' }).trim().split('\n').at(-1)
+const realGlobal = execFileSync('corepack', ['pnpm@11.24.0', '--config.manage-package-manager-versions=false', '--ignore-workspace', 'root', '-g'], { encoding: 'utf8', env: { ...process.env, COREPACK_ENABLE_PROJECT_SPEC: '0' } }).trim().split('\n').at(-1)
 let owning
 for (const entry of await readdir(realGlobal, { withFileTypes: true })) {
   const candidate = join(realGlobal, entry.name, 'node_modules/@deepseek-ai/dsh/package.json')
@@ -50,9 +50,14 @@ try {
   await writeFile(join(web, 'cordis.patch.yml'), '- id: web-fetch-firecrawl\n  config:\n    baseURL: https://fetch.example.test\n    apiKey: !!js process.env.TEST_CANARY_SECRET\n- id: progressive-tools\n  config:\n    maxDescribeTools: 7\n- id: web\n  config:\n    fetchProvider: old\n    credential: !!js "process.env.TEST_CANARY_SECRET"\n- id: web-search-firecrawl\n  config: {}\n- insert:\n    - id: mcp-canary\n      name: canary\n      config:\n        token: !!js "process.env.TEST_CANARY_SECRET"\n')
   await writeFile(join(home, 'settings.yaml'), 'agent-presets:\n  default: standard\n  agents: []\nagent-default-model:\n  model: my-not-test-model\nsubagent-model-selection:\n  models: [my-not-test-model]\nui-onboarding:\n  onboardingDone: true\nshell:\n  timeoutMs: 12345\n')
   for (const name of ['deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-subagent-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-web-app-0.1.7-rc.2-fork1.tgz', 'dsh-progressive-tools-0.3.0.tgz', 'dsh-workspace-envrc-0.2.0.tgz', 'dsh-workspace-overlay-0.2.0.tgz', 'firecrawl-dsh-firecrawl-0.1.0-fork1.tgz', 'earendil-works-pi-ai-0.85.1-fork1.tgz']) await writeFile(join(artifactDir, name), '')
-  await writeFile(join(bin, 'pnpm'), `#!/usr/bin/env node\nimport fs from 'node:fs';const args=process.argv.slice(2);const dir=args.find(x=>x.startsWith('--config.global-dir='))?.slice('--config.global-dir='.length);if(!dir||!args.includes('add'))process.exit(2);const spec=args.at(-1);const file=dir+'/v11/project/package.json';const data=JSON.parse(fs.readFileSync(file));data.dependencies['@deepseek-ai/dsh']=spec.slice('@deepseek-ai/dsh@'.length);fs.writeFileSync(file,JSON.stringify(data));\n`, { mode: 0o755 })
-  const preview = run()
+  await writeFile(join(bin, 'corepack'), `#!/usr/bin/env node\nimport fs from 'node:fs';const args=process.argv.slice(2);if(args.shift()!=='pnpm@11.24.0'||args.shift()!=='--config.manage-package-manager-versions=false'||args.shift()!=='--pm-on-fail=ignore'||process.env.COREPACK_ENABLE_PROJECT_SPEC!=='0')process.exit(2);if(args[0]==='--version'){console.log('11.24.0');process.exit(0)}const dir=args.find(x=>x.startsWith('--config.global-dir='))?.slice('--config.global-dir='.length);if(!dir||!args.includes('add'))process.exit(2);const spec=args.at(-1);const file=dir+'/v11/project/package.json';const data=JSON.parse(fs.readFileSync(file));data.dependencies['@deepseek-ai/dsh']=spec.slice('@deepseek-ai/dsh@'.length);fs.writeFileSync(file,JSON.stringify(data));\n`, { mode: 0o755 })
+  const beforeWorkspace = await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8')
+  const beforeSettings = await readFile(join(home, 'settings.yaml'), 'utf8')
+  const preview = run('--dry-run')
   assert.equal(preview.status, 0, preview.stderr)
+  assert.match(preview.stdout, /Mode: preview; pnpm: 11\.24\.0/)
+  assert.equal(await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8'), beforeWorkspace)
+  assert.equal(await readFile(join(home, 'settings.yaml'), 'utf8'), beforeSettings)
   assert(!preview.stdout.includes('TEST_CANARY_SECRET'))
   assert(!existsSync(join(home, 'backups')))
   const applied = run('--apply')

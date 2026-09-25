@@ -38,16 +38,29 @@ function command(program, args, options = {}) {
   return result.stdout?.trim() ?? ''
 }
 
+function pnpm(args, options = {}) {
+  try {
+    return command('corepack', ['pnpm@11.24.0', '--config.manage-package-manager-versions=false', '--pm-on-fail=ignore', ...args], {
+      ...options,
+      env: { ...process.env, ...options.env, COREPACK_ENABLE_PROJECT_SPEC: '0' },
+    })
+  } catch (error) {
+    if (error.message.includes('spawnSync corepack ENOENT')) throw new Error('Corepack is required to run pnpm 11.24.0; install or enable Corepack and retry')
+    throw error
+  }
+}
+
 function options(argv) {
   const result = { mode: 'preview' }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
     if (flag === '--apply') result.mode = 'apply'
+    else if (flag === '--dry-run') result.mode = 'preview'
     else if (flag === '--rollback') { result.mode = 'rollback'; result.backup = argv[++i] }
     else if (['--home', '--global-dir', '--global-bin-dir', '--artifacts'].includes(flag)) result[flag.slice(2)] = argv[++i]
     else throw new Error(`Unknown option: ${flag}`)
     if (flag === '--rollback' && !result.backup) throw new Error('Missing value for --rollback')
-    if (flag !== '--apply' && flag !== '--rollback' && !result[flag.slice(2)]) throw new Error(`Missing value for ${flag}`)
+    if (flag !== '--apply' && flag !== '--dry-run' && flag !== '--rollback' && !result[flag.slice(2)]) throw new Error(`Missing value for ${flag}`)
   }
   return result
 }
@@ -109,13 +122,14 @@ function migrate(settings, patch) {
 async function main() {
   const args = options(process.argv.slice(2))
   const home = resolve(args.home ?? join(homedir(), '.dsh'))
-  const globalDir = resolve(args['global-dir'] ?? command('pnpm', ['root', '-g']).split('\n').at(-1))
-  const artifacts = resolve(args.artifacts ?? join(repository, basename(dirname(repository)) === '.worktrees' ? '../../artifacts/daily-driver-v0.1.7-rc.2-fork1' : '../artifacts/daily-driver-v0.1.7-rc.2-fork1'))
+  const globalDir = resolve(args['global-dir'] ?? pnpm(['--ignore-workspace', 'root', '-g']).split('\n').at(-1))
+  const artifacts = resolve(args.artifacts ?? join(repository, basename(dirname(repository)) === '.worktrees' ? '../../../artifacts/daily-driver-v0.1.7-rc.2-fork1' : '../artifacts/daily-driver-v0.1.7-rc.2-fork1'))
   const profile = join(home, 'profiles/web')
   const workspacePath = join(globalDir, 'pnpm-workspace.yaml')
   const profilePath = join(profile, 'package.json')
   const patchPath = join(profile, 'cordis.patch.yml')
   const settingsPath = join(home, 'settings.yaml')
+  const pnpmVersion = pnpm(['--version'])
   if (args.mode === 'rollback') {
     const backup = resolve(args.backup)
     const metadata = JSON.parse(await readFile(join(backup, 'backup.json'), 'utf8'))
@@ -134,7 +148,7 @@ async function main() {
   for (const [, filename] of names) if (!existsSync(join(artifacts, filename))) throw new Error(`Missing tarball ${join(artifacts, filename)}`)
   const { target, descriptions } = migrate(settings, patch)
   const backup = join(home, 'backups', `daily-driver-${new Date().toISOString().replaceAll(':', '-')}`)
-  console.log(`Mode: ${args.mode}; old DSH: ${currentVersion}; target DSH: 0.1.7-rc.2`)
+  console.log(`Mode: ${args.mode}; pnpm: ${pnpmVersion}; old DSH: ${currentVersion}; target DSH: 0.1.7-rc.2`)
   console.log(`Global: ${globalDir}; home: ${home}; artifacts: ${artifacts}; backup: ${backup}`)
   console.log(`Overrides: ${names.length}; Web rows: ${patch.length} -> ${target.length}; settings sections: ${descriptions.length}`)
   for (const description of descriptions) console.log(`  ${description}`)
@@ -158,7 +172,7 @@ async function main() {
     const installArgs = ['--config.enable-global-virtual-store=false', '--ignore-workspace', 'add', '-g', '@deepseek-ai/dsh@0.1.7-rc.2']
     if (args['global-dir']) installArgs.unshift(`--config.global-dir=${dirname(globalDir)}`)
     if (args['global-bin-dir']) installArgs.unshift(`--config.global-bin-dir=${resolve(args['global-bin-dir'])}`)
-    command('pnpm', installArgs, { stdio: 'inherit' })
+    pnpm(installArgs, { stdio: 'inherit' })
     await rm(profile, { recursive: true })
     await mkdir(profile, { recursive: true })
     profileConfig.dependencies = {}
@@ -195,7 +209,7 @@ async function restore(backup, paths) {
   const installArgs = ['--config.enable-global-virtual-store=false', '--ignore-workspace', 'add', '-g', `@deepseek-ai/dsh@${paths.oldVersion}`]
   if (paths.globalDir) installArgs.unshift(`--config.global-dir=${dirname(paths.globalDir)}`)
   if (paths.bin) installArgs.unshift(`--config.global-bin-dir=${resolve(paths.bin)}`)
-  command('pnpm', installArgs, { stdio: 'inherit' })
+  pnpm(installArgs, { stdio: 'inherit' })
   await rm(paths.profile, { recursive: true, force: true })
   await cp(join(backup, 'web'), paths.profile, { recursive: true })
   if (metadata.hadSettings) await cp(join(backup, 'settings.yaml'), paths.settingsPath)
