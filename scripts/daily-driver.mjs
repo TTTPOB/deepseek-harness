@@ -73,6 +73,7 @@ async function verify() {
     'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'THIRD_PARTY_NOTICES.md',
     '.agents/notes/implemented/', 'docs/cookbook/installing-and-maintaining-daily-driver',
     'docs/config-catalog', '.github/workflows/daily-driver-release.yml', 'scripts/daily-driver.mjs',
+    'scripts/upgrade-daily-driver.mjs', 'scripts/upgrade-daily-driver.test.mjs',
   ]
   for (const path of paths) assert(allowed.some(prefix => path.startsWith(prefix)), `Unexpected fork change: ${path}`)
   console.log(`daily-driver: fixed ${baseVersion} baseline, ${paths.length} allowed changed paths`)

@@ -5,7 +5,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -35,7 +35,7 @@ const renamed = {
 function command(program, args, options = {}) {
   const result = spawnSync(program, args, { encoding: 'utf8', ...options })
   if (result.error || result.status !== 0) throw new Error(`${program} ${args[0]} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`)
-  return result.stdout.trim()
+  return result.stdout?.trim() ?? ''
 }
 
 function options(argv) {
@@ -46,7 +46,8 @@ function options(argv) {
     else if (flag === '--rollback') { result.mode = 'rollback'; result.backup = argv[++i] }
     else if (['--home', '--global-dir', '--global-bin-dir', '--artifacts'].includes(flag)) result[flag.slice(2)] = argv[++i]
     else throw new Error(`Unknown option: ${flag}`)
-    if (flag !== '--apply' && !result[flag.slice(2)]) throw new Error(`Missing value for ${flag}`)
+    if (flag === '--rollback' && !result.backup) throw new Error('Missing value for --rollback')
+    if (flag !== '--apply' && flag !== '--rollback' && !result[flag.slice(2)]) throw new Error(`Missing value for ${flag}`)
   }
   return result
 }
@@ -108,8 +109,8 @@ function migrate(settings, patch) {
 async function main() {
   const args = options(process.argv.slice(2))
   const home = resolve(args.home ?? join(homedir(), '.dsh'))
-  const globalDir = resolve(args['global-dir'] ?? command('pnpm', ['root', '-g']))
-  const artifacts = resolve(args.artifacts ?? join(repository, '../artifacts/daily-driver-v0.1.7-rc.2-fork1'))
+  const globalDir = resolve(args['global-dir'] ?? command('pnpm', ['root', '-g']).split('\n').at(-1))
+  const artifacts = resolve(args.artifacts ?? join(repository, basename(dirname(repository)) === '.worktrees' ? '../../artifacts/daily-driver-v0.1.7-rc.2-fork1' : '../artifacts/daily-driver-v0.1.7-rc.2-fork1'))
   const profile = join(home, 'profiles/web')
   const workspacePath = join(globalDir, 'pnpm-workspace.yaml')
   const profilePath = join(profile, 'package.json')
@@ -144,6 +145,9 @@ async function main() {
   await cp(profile, join(backup, 'web'), { recursive: true })
   if (existsSync(workspacePath)) await cp(workspacePath, join(backup, 'pnpm-workspace.yaml'))
   if (settingsText !== null) await cp(settingsPath, join(backup, 'settings.yaml'))
+  for (const directory of ['sessions', 'storages']) {
+    if (existsSync(join(home, directory))) await cp(join(home, directory), join(backup, directory), { recursive: true })
+  }
   await writeFile(join(backup, 'backup.json'), JSON.stringify({ home, globalDir, oldVersion: currentVersion, hadWorkspace: existsSync(workspacePath), hadSettings: settingsText !== null }, null, 2) + '\n')
   try {
     const overrides = Object.fromEntries(names.map(([name, filename]) => [name, `file:${join(artifacts, filename)}`]))

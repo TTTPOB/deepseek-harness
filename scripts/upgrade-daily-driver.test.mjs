@@ -1,0 +1,91 @@
+import assert from 'node:assert/strict'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, realpathSync } from 'node:fs'
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const fixture = join(repo, 'worktree.smoke')
+const realGlobal = execFileSync('pnpm', ['root', '-g'], { encoding: 'utf8' }).trim().split('\n').at(-1)
+let owning
+for (const entry of await readdir(realGlobal, { withFileTypes: true })) {
+  const candidate = join(realGlobal, entry.name, 'node_modules/@deepseek-ai/dsh/package.json')
+  if (entry.isDirectory() && existsSync(candidate)) { owning = realpathSync(dirname(candidate)); break }
+}
+assert(owning, 'Installed DSH YAML parser is needed for isolated fixture')
+const yaml = createRequire(join(owning, 'package.json'))('js-yaml')
+const expression = new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: value => ({ expression: value }) })
+const load = value => yaml.load(value, { schema: yaml.DEFAULT_SCHEMA.extend([expression]) })
+const globalDir = join(fixture, 'global')
+const home = join(fixture, 'home')
+const web = join(home, 'profiles/web')
+const artifactDir = join(fixture, 'artifacts')
+const bin = join(fixture, 'bin')
+const cli = join(repo, 'scripts/upgrade-daily-driver.mjs')
+const args = ['--home', home, '--global-dir', globalDir, '--global-bin-dir', bin, '--artifacts', artifactDir]
+function run(...flags) {
+  return spawnSync(process.execPath, [cli, ...flags, ...args], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
+}
+
+try {
+  await rm(fixture, { recursive: true, force: true })
+  await mkdir(join(globalDir, 'project/node_modules/@deepseek-ai'), { recursive: true })
+  await mkdir(web, { recursive: true })
+  await mkdir(artifactDir)
+  await mkdir(bin)
+  await mkdir(join(home, 'sessions'), { recursive: true })
+  await mkdir(join(home, 'storages'), { recursive: true })
+  await writeFile(join(home, 'sessions/canary'), 'old-session')
+  await writeFile(join(home, 'storages/canary'), 'old-storage')
+  await symlink(owning, join(globalDir, 'project/node_modules/@deepseek-ai/dsh'))
+  await writeFile(join(globalDir, 'project/package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.1.5-rc.2' } }))
+  await writeFile(join(globalDir, 'pnpm-workspace.yaml'), 'overrides:\n  unrelated: file:/persistent/other.tgz\nallowBuilds:\n  unrelated: true\n')
+  const oldProfile = { name: 'web', dependencies: { legacy: '1.0.0' }, dsh: { profile: { bundles: ['old'], custom: true } } }
+  await writeFile(join(web, 'package.json'), JSON.stringify(oldProfile))
+  await writeFile(join(web, 'pnpm-lock.yaml'), 'legacy-lock')
+  await mkdir(join(web, 'node_modules'))
+  await writeFile(join(web, 'node_modules/old'), 'legacy-module')
+  await writeFile(join(web, 'cordis.patch.yml'), '- id: web\n  config:\n    fetchProvider: old\n    credential: !!js "process.env.TEST_CANARY_SECRET"\n- id: web-search-firecrawl\n  config: {}\n- insert:\n    - id: mcp-canary\n      name: canary\n      config:\n        token: !!js "process.env.TEST_CANARY_SECRET"\n')
+  await writeFile(join(home, 'settings.yaml'), 'agent-presets:\n  default: standard\n  agents: []\nagent-default-model:\n  model: my-not-test-model\nsubagent-model-selection:\n  models: [my-not-test-model]\nui-onboarding:\n  onboardingDone: true\n')
+  for (const name of ['deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-subagent-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-web-app-0.1.7-rc.2-fork1.tgz', 'dsh-progressive-tools-0.3.0.tgz', 'dsh-workspace-envrc-0.2.0.tgz', 'dsh-workspace-overlay-0.2.0.tgz', 'firecrawl-dsh-firecrawl-0.1.0-fork1.tgz', 'earendil-works-pi-ai-0.85.1-fork1.tgz']) await writeFile(join(artifactDir, name), '')
+  await writeFile(join(bin, 'pnpm'), `#!/usr/bin/env node\nimport fs from 'node:fs';const args=process.argv.slice(2);const dir=args.find(x=>x.startsWith('--global-dir='))?.slice(13);if(!dir||!args.includes('add'))process.exit(2);const spec=args.at(-1);const file=dir+'/project/package.json';const data=JSON.parse(fs.readFileSync(file));data.dependencies['@deepseek-ai/dsh']=spec.slice('@deepseek-ai/dsh@'.length);fs.writeFileSync(file,JSON.stringify(data));\n`, { mode: 0o755 })
+  const preview = run()
+  assert.equal(preview.status, 0, preview.stderr)
+  assert(!preview.stdout.includes('TEST_CANARY_SECRET'))
+  assert(!existsSync(join(home, 'backups')))
+  const applied = run('--apply')
+  assert.equal(applied.status, 0, applied.stderr)
+  const backups = await readdir(join(home, 'backups'))
+  assert.equal(backups.length, 1)
+  const backup = join(home, 'backups', backups[0])
+  assert.equal(await readFile(join(backup, 'sessions/canary'), 'utf8'), 'old-session')
+  assert.equal(await readFile(join(backup, 'storages/canary'), 'utf8'), 'old-storage')
+  assert.equal((await readdir(web)).includes('node_modules'), false)
+  assert(!existsSync(join(home, 'settings.yaml')))
+  const migrated = load(await readFile(join(web, 'cordis.patch.yml'), 'utf8'))
+  assert(!migrated.some(row => row.id === 'web-search-firecrawl'))
+  assert.equal(migrated.find(row => row.id === 'web').config.credential.expression, 'process.env.TEST_CANARY_SECRET')
+  assert.equal(migrated.find(row => row.insert).insert[0].config.token.expression, 'process.env.TEST_CANARY_SECRET')
+  assert.equal(migrated.find(row => row.id === 'agent-default-model').config.model, 'my-not-test-model')
+  assert.deepEqual(migrated.find(row => row.id === 'agent-preset-registry').config, { default: 'standard-ptc', agents: [], selectedDefault: 'standard' })
+  assert.deepEqual(JSON.parse(await readFile(join(web, 'package.json'), 'utf8')).dependencies, {})
+  const global = load(await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8'))
+  assert.equal(global.overrides.unrelated, 'file:/persistent/other.tgz')
+  assert.equal(global.allowBuilds.unrelated, true)
+  assert.equal(global.blockExoticSubdeps, false)
+  assert.equal(Object.keys(global.overrides).length, 12)
+  assert.equal(global.overrides['@earendil-works/pi-ai@0.85.1-fork1'], `file:${join(artifactDir, 'earendil-works-pi-ai-0.85.1-fork1.tgz')}`)
+  const rolled = run('--rollback', backup)
+  assert.equal(rolled.status, 0, rolled.stderr)
+  assert.deepEqual(JSON.parse(await readFile(join(web, 'package.json'), 'utf8')), oldProfile)
+  assert.equal(await readFile(join(web, 'pnpm-lock.yaml'), 'utf8'), 'legacy-lock')
+  assert.equal(await readFile(join(web, 'node_modules/old'), 'utf8'), 'legacy-module')
+  assert.equal((await readFile(join(home, 'settings.yaml'), 'utf8')).includes('my-not-test-model'), true)
+  assert.equal(load(await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8')).overrides.unrelated, 'file:/persistent/other.tgz')
+  assert.equal(JSON.parse(await readFile(join(globalDir, 'project/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh'], '0.1.5-rc.2')
+  console.log('isolated upgrade preview/apply/rollback: passed; YAML expressions, configuration, and snapshots retained')
+} finally {
+  await rm(fixture, { recursive: true, force: true })
+}

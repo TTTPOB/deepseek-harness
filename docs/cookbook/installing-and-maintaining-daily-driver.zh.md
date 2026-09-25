@@ -1,23 +1,37 @@
-# 安装个人 Web 发行组合
+# 升级个人 Web 安装
 
 [English](installing-and-maintaining-daily-driver.md) | 中文
 
-顶层 CLI 保持官方 `@deepseek-ai/dsh@0.1.7-rc.2`。Web bundle fork 自行依赖五个运行时插件并声明个人组合；Web profile 只选择 `dsh-base`、`dsh-web-app`，其 dependencies 为 `{}`。切换日用安装前，先使用独立 pnpm global 目录及 `$DSH_HOME` 验证。
+这套 Linux/WSL 操作把官方顶层 `@deepseek-ai/dsh` CLI 升到 `0.1.7-rc.2`，使用源码仓库旁 `../artifacts/daily-driver-v0.1.7-rc.2-fork1` 中已有的 11 个 fork tarball。前提是 Node 24 与 pnpm 11.24；脚本不安装整个源码仓库依赖，也不抓取新的 Release 资产。全局安装仍依赖这些 tarball，应长期保留该目录。迁移只针对 `web` profile；`paper-chew`、`headless`、home 级 `cordis.patch.yml` 和旧 `.agent-presets` 目录保持不变。
 
-## 1. 准备不可变资产
+## 1. 停旧 Host，预览
 
-从同一目标基线构建并打包六个 DSH fork：`dsh-subagent`、`dsh-llm-pi-ai`、`dsh-mcp-client`、`dsh-agent`、`dsh-agent-preset-registry`、`dsh-web-app`，版本均为 `0.1.7-rc.2-fork1`，不能复用旧 DSH tarball。Pi AI `0.85.1-fork1` 使用[已有不可变 Release](https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.5-rc.2-fork1/earendil-works-pi-ai-0.85.1-fork1.tgz)。另备 progressive-tools `0.3.0`、workspace-overlay 和 workspace-envrc `0.2.0`、适配版 Firecrawl `0.1.0-fork1` 的 tarball；MCP Panel `0.6.19` 直接从 npm 安装。发布版 Web manifest 不得写入本机 `file:` 路径。
+先在**外部终端按原来的启动方式停止旧 Host**；脚本不会按进程名寻找或杀死 Host。然后在源码仓库执行：
 
-Release workflow 从已有不可变 Release 下载 Pi AI、从 progressive-tools 自己的 Release 下载其资产。Firecrawl 使用明确的不可变 tarball URL（`firecrawl_tarball_url`，tag 触发时可用 `DSH_FIRECRAWL_TARBALL_URL`）；overlay/envrc 需要精确已验证的源码 commit 输入 `overlay_ref`、`envrc_ref`（tag 触发时对应变量为 `DSH_OVERLAY_REF`、`DSH_ENVRC_REF`）。正式发行前须取得这些资产及源码；本地验证不运行远端工作流。
+```sh
+node scripts/upgrade-daily-driver.mjs
+```
 
-首次发行按顺序打破依赖环：DSH 源码安装时仅暂时移除 Web manifest 中的 overlay/envrc 依赖，构建六个 DSH fork，打包 Web bundle 前恢复原始 manifest 字节。然后用新 agent 和 preset-registry tarball 安装、构建、打包 overlay；再用相同的 agent、preset-registry fork 和新 overlay tarball 安装、构建、打包 envrc。临时 overrides 与派生的源码 lockfile 只留在 CI runner，发布的 Web manifest 保留全部五个运行时依赖。最后执行十一 tarball 的普通项目依赖闭包检查并上传不可变资产。overlay 和 envrc 不要求先独立发布。
+预览仅列路径、旧/目标版本、override 和行数、section 到 row 映射，以及将要创建的备份位置，不输出配置值。未知 settings section 会中止，不会默默丢掉。`!!js` 表达式按带标签数据保存，脚本不会执行。隔离安装可显式指定 `--home`、`--global-dir`、`--global-bin-dir`、`--artifacts`；测试时不能指向日用安装。
 
-## 2. 验证实际解析
+## 2. 一次执行升级
 
-给 `node scripts/daily-driver.mjs smoke` 传入 11 个 tarball 路径，顺序由脚本 usage 错误列出：六个 DSH fork、Pi AI、progressive-tools、overlay、envrc、Firecrawl。脚本使用 pnpm 11.24 对官方顶层 CLI 执行临时**普通项目安装**，检查 Web bundle 的依赖解析、插件构建入口导入，以及 app-boot 对打包 manifest 的运行时 peer 兼容性判定；同时在第一个 tarball 旁边保存已验证的 runtime package、workspace 配置和 lockfile。完成后删除临时项目。这不能证明 pnpm global 安装、profile bundle 发现、Cordis Loader、Web Host 或联网 provider 的行为。
+```sh
+node scripts/upgrade-daily-driver.mjs --apply
+```
 
-隔离的正式安装需为上述十一个 fork/插件 tarball 配置 pnpm global overrides，顶层 `@deepseek-ai/dsh` 仍为官方版。tarball 应保存在安装期间不会变化的目录。初始化独立 `$DSH_HOME`，核对 Web profile 的 bundles 恰好为 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`，dependencies 为 `{}`。使用 `dsh --profile web --dump-config` 核对个人插件行和 `standard-ptc`，再以独立端口启动隔离 Host。端点、凭据引用、用户的 preset 选择和私有 MCP 服务器列表留在该隔离 profile patch，不放进发行 bundle。
+脚本先完整复制旧 Web profile、全局 workspace overrides、旧 settings 与已安装 CLI 版本到输出的备份目录，并原样复制 `sessions`、`storages` 快照，不解析或修改原件。全局 pnpm workspace 保留其它 overrides 与 `allowBuilds`，设置 `blockExoticSubdeps: false`，将 11 个包名/版本限定键映射到持久 tarball 绝对路径。pnpm 以 `--config.enable-global-virtual-store=false --ignore-workspace add -g @deepseek-ai/dsh@0.1.7-rc.2` 安装官方顶层 CLI。新 Web profile 的 dependencies 为空、bundles 只含 base 和 web-app；patch 迁入原有配置，而已打包的 standard-ptc preset 与工具行不重复插入。执行时才读取当前 settings，保留改名 section 与原有 row 字段；归档旧 `settings.yaml` 以免新版再次自动导入。不必逐项 `dsh plugin remove`，也不手改旧 profile 的 lockfile 或 node_modules。
 
-## 3. 保留发行资产不可变
+随后自行按原启动方式启动 Host，并私下检查 profile 与 UI；仅在能够保密输出时运行 `dsh --profile web --dump-config`，避免公开展开的凭据。此入口仅经过隔离 fixture 验证，**不表示日用 Host 已升级**，也不代替联网/LLM 验收。
 
-将通过验证的各包提交集成进发行分支，只有 Pi AI/progressive 资产、Firecrawl URL 与已固定的 overlay/envrc 源码 commit 均可获取时才打 `daily-driver-v0.1.7-rc.2-fork1` tag，复用现有工作流。不得复用已有 tag 或覆盖 tarball。缺少 Firecrawl URL 或插件资产时，工作流会在发布前停止。
+## 3. 必要时回滚
+
+再次停 Host，并使用 `--apply` 输出的实际备份路径：
+
+```sh
+node scripts/upgrade-daily-driver.mjs --rollback /absolute/path/to/backup
+```
+
+如果升级指定了隔离路径，回滚时传相同的 `--home`、`--global-dir`、`--global-bin-dir`。它重装旧顶层 CLI 版本、恢复全局 workspace 文件、旧 Web profile 和旧 settings，不碰其它 profile。**回滚不自动逆转 session/storage 数据**：新版 DSH 启动后可能已写入新格式。备份中的升级前快照留作明确的人工数据恢复，不可静默覆盖升级后的新会话。检查数据兼容问题后，自己重新启动旧 Host。升级失败会打印备份位置与回滚命令。
+
+不可变资产的发布仍由[现有 Release workflow](../../.github/workflows/daily-driver-release.yml)负责；此本地入口不会 push、发布或重新打包。
