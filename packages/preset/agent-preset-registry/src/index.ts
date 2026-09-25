@@ -242,11 +242,14 @@ export class AgentPresetRegistry extends TypertRemoteService {
       ctx.effect(() => async () => {
         this.bindings.delete(key)
         const generation = binding.generation
-        if (generation !== undefined) {
-          generation.users--
-          await this.collect(generation)
+        try {
+          if (generation !== undefined) {
+            generation.users--
+            await this.collect(generation)
+          }
+        } finally {
+          await placement.release()
         }
-        await placement.release()
       }, 'agent-preset.placement')
     } catch (error) {
       this.bindings.delete(key)
@@ -320,8 +323,8 @@ export class AgentPresetRegistry extends TypertRemoteService {
     if (key === undefined) throw new Error('Child preset binding requires a scope')
     const binding = this.bindings.get(key)
     if (binding?.generation !== undefined) throw new Error('Child already joined a preset')
+    if (binding?.placement?.key !== generation.workspace) throw new Error('Cannot inherit a preset across workspaces')
     if (binding !== undefined) {
-      if (binding.placement?.key !== generation.workspace) throw new Error('Cannot inherit a preset across workspaces')
       binding.parent.rebind(generation.key)
       binding.generation = generation
       generation.users++

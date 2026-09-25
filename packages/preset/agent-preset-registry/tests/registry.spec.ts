@@ -23,9 +23,10 @@ describe('workspace placement', () => {
     const second = createScope(ctx, {})
     const child = createScope(ctx, {})
     const foreign = createScope(ctx, {})
-    const order: string[] = []
+    const unplaced = createScope(ctx, {})
+    const order: number[] = []
     const place = (agent: typeof first, root: typeof workspace) => ctx.agentPresets.place(agent.ctx, {
-      key: scopeOf(root.ctx)!, ctx: root.ctx, release: async () => { order.push('lease') },
+      key: scopeOf(root.ctx)!, ctx: root.ctx, release: async () => { order.push(livePresetMounts(ctx.fiber).length) },
     })
     place(first, workspace)
     place(second, workspace)
@@ -37,14 +38,16 @@ describe('workspace placement', () => {
     expect(scopeParentOf(scopeOf(first.ctx)!)).toBe(scopeParentOf(scopeOf(second.ctx)!))
     expect(ctx.agentPresets.composeFrom(child.ctx, first.ctx)).toBe('standard')
     expect(() => ctx.agentPresets.composeFrom(foreign.ctx, first.ctx)).toThrow(/across workspaces/)
+    expect(() => ctx.agentPresets.composeFrom(unplaced.ctx, first.ctx)).toThrow(/across workspaces/)
     expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
     await first.dispose()
     await second.dispose()
     expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
     await child.dispose()
     expect(livePresetMounts(ctx.fiber)).toEqual([])
-    expect(order).toEqual(['lease', 'lease', 'lease'])
+    expect(order).toEqual([1, 1, 0])
     await foreign.dispose()
+    await unplaced.dispose()
     await workspace.dispose()
     await other.dispose()
   })
@@ -55,8 +58,11 @@ describe('workspace placement', () => {
     expect(livePresetMounts(ctx.fiber)).toEqual([])
     expect(await ctx.agentPresets.resolve()).toEqual({ id: 'standard' })
     expect((await ctx.agentPresets.compositionInventory())[0]?.rows).toHaveLength(1)
-    await using _cold = await ctx.agentPresets.acquireScope()
-    expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+    {
+      await using _cold = await ctx.agentPresets.acquireScope()
+      expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+    }
+    expect(livePresetMounts(ctx.fiber)).toEqual([])
   })
 })
 
