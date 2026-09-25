@@ -92,13 +92,20 @@ async function smoke(tarballs) {
     const webPath = cliRequire.resolve('@deepseek-ai/dsh-web-app/package.json')
     const webRequire = createRequire(webPath)
     const baseRequire = createRequire(cliRequire.resolve('@deepseek-ai/dsh-base/package.json'))
+    const { evaluatePluginCompatibility } = await import(pathToFileURL(cliRequire.resolve('@deepseek-ai/dsh-app-boot')).href)
     assert.equal((await manifest(webPath)).version, forkVersion)
     for (const [index, name] of names.entries()) {
       const anchor = name === '@earendil-works/pi-ai' ? createRequire(baseRequire.resolve('@deepseek-ai/dsh-llm-pi-ai/package.json'))
         : plugins.includes(name) || name === '@deepseek-ai/dsh-agent-preset-registry' ? webRequire
         : name === '@deepseek-ai/dsh-subagent' || name === '@deepseek-ai/dsh-llm-pi-ai' || name === '@deepseek-ai/dsh-agent' ? baseRequire : cliRequire
-      const path = anchor.resolve(`${name}/package.json`)
-      assert.equal((await manifest(path)).version, index < forks.length ? forkVersion : index === forks.length ? piVersion : pluginVersions[index - forks.length - 1], name)
+      const path = name === '@earendil-works/pi-ai'
+        ? join(dirname(dirname(anchor.resolve(name))), 'package.json')
+        : anchor.resolve(`${name}/package.json`)
+      const packageMeta = await manifest(path)
+      assert.equal(packageMeta.version, index < forks.length ? forkVersion : index === forks.length ? piVersion : pluginVersions[index - forks.length - 1], name)
+      if (name !== '@earendil-works/pi-ai') {
+        assert.equal(evaluatePluginCompatibility(packageMeta, {}, baseVersion), undefined, `Incompatible dsh peers: ${name}`)
+      }
       if (plugins.includes(name)) {
         const entries = name === 'dsh-workspace-overlay' ? [name, `${name}/mcp/manager`, `${name}/integration-plugin`]
           : name === 'dsh-workspace-envrc' ? [name, `${name}/integration-plugin`]
@@ -106,8 +113,9 @@ async function smoke(tarballs) {
         for (const specifier of entries) await import(pathToFileURL(anchor.resolve(specifier)).href)
       }
     }
-    const panelPath = webRequire.resolve('dsh-mcp-panel/package.json')
-    assert.equal((await manifest(panelPath)).version, '0.6.19')
+    const panelMeta = await manifest(webRequire.resolve('dsh-mcp-panel/package.json'))
+    assert.equal(panelMeta.version, '0.6.19')
+    assert.equal(evaluatePluginCompatibility(panelMeta, {}, baseVersion), undefined, 'Incompatible dsh peers: dsh-mcp-panel')
     await import(pathToFileURL(webRequire.resolve('dsh-mcp-panel')).href)
     const patch = await readFile(join(dirname(webPath), 'personal-web.patch.yml'), 'utf8')
     for (const id of ['progressive-tools', 'workspace-registry', 'workspace-envrc', 'web-fetch-firecrawl', 'mcp-panel']) {
