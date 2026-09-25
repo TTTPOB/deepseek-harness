@@ -125,6 +125,15 @@ const MAX_TOKENS_FIELD_GATE: Record<PiAiMaxTokensField, true> = {
 /** The output-cap field spellings a profile may name. */
 export const MAX_TOKENS_FIELDS = Object.keys(MAX_TOKENS_FIELD_GATE) as readonly PiAiMaxTokensField[]
 
+/** Provider-specific Chat Completions deferred-tool serialization modes. */
+export type PiAiDeferredToolsMode = NonNullable<OpenAICompletionsCompat['deferredToolsMode']>
+
+/** Drift gate over the deferred-tool modes accepted by the installed pi-ai. */
+const DEFERRED_TOOLS_MODE_GATE: Record<PiAiDeferredToolsMode, true> = { kimi: true }
+
+/** Deferred-tool serialization modes a profile may name. */
+export const DEFERRED_TOOLS_MODES = Object.keys(DEFERRED_TOOLS_MODE_GATE) as readonly PiAiDeferredToolsMode[]
+
 /** The reasoning-budget field spellings pi-ai accepts. */
 export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['thinkingTokenBudgetField']>
 
@@ -253,20 +262,21 @@ const COMPLETIONS_COMPAT_GATE = {
   zaiToolStream: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
   sendSessionAffinityHeaders: 'withhold',
-  deferredToolsMode: 'withhold',
+  deferredToolsMode: 'offer',
   sessionAffinityFormat: 'withhold',
 } as const satisfies Record<keyof OpenAICompletionsCompat, CompatDisposition>
 
 /** Disposition of every `OpenAIResponsesCompat` field; a drift gate like the one above. */
 const RESPONSES_COMPAT_GATE = {
   supportsDeveloperRole: 'offer',
+  systemPromptFormat: 'offer',
   supportsMaxOutputTokens: 'offer',
   supportsStrictMode: 'offer',
   supportsLongCacheRetention: 'offer',
   sessionAffinityFormat: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
-  supportsAdditionalTools: 'withhold',
-  supportsToolSearch: 'withhold',
+  supportsAdditionalTools: 'offer',
+  supportsToolSearch: 'offer',
   supportsExplicitPromptCacheMode: 'withhold',
 } as const satisfies Record<keyof OpenAIResponsesCompat, CompatDisposition>
 
@@ -280,7 +290,7 @@ const ANTHROPIC_COMPAT_GATE = {
   allowEmptySignature: 'offer',
   supportsStrictTools: 'offer',
   sendSessionAffinityHeaders: 'withhold',
-  supportsToolReferences: 'withhold',
+  supportsToolReferences: 'offer',
   supportsMidConvoEffort: 'withhold',
   allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
@@ -365,6 +375,8 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
+  /** Whether the endpoint receives the system prompt in `input` or `instructions`; the three Responses protocols. */
+  systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
@@ -428,6 +440,17 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Serialize deferred tools after tool results using Kimi format; `openai-completions`. Requires pi-ai deferred-tool context. */
+  deferredToolsMode?: PiAiDeferredToolsMode
+  /** Whether to serialize client-executed tool search; the three Responses protocols. Requires pi-ai deferred-tool context. */
+  supportsToolSearch?: boolean
+  /**
+   * Whether to serialize message-anchored `additional_tools`; the three
+   * Responses protocols. Wins over `supportsToolSearch` when both are true.
+   */
+  supportsAdditionalTools?: boolean
+  /** Whether to serialize `tool_reference` blocks in tool results; `anthropic-messages`. Requires pi-ai deferred-tool context. */
+  supportsToolReferences?: boolean
 }
 
 /** Compile-time constraint that `T` is `never`. */

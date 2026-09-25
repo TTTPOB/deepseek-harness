@@ -1103,8 +1103,19 @@ describe('compat switches', () => {
     })).toThrow(/compat "supportsDevelperRole", which no wire protocol declares; the configurable switches are .*\bsupportsDeveloperRole\b/)
   })
 
+  it('keeps explicit Responses tool-search and instructions settings after schema validation', () => {
+    const model = resolveProfiles(LlmPiAi.Config({ providers: {
+      gateway: {
+        api: 'openai-responses', baseURL: 'https://gateway.test/v1',
+        compat: { supportsToolSearch: true, systemPromptFormat: 'instructions' },
+        models: [{ id: 'model' }],
+      },
+    } }).providers).get('gateway')?.piProvider?.getModels()[0]
+    expect(model?.compat).toMatchObject({ supportsToolSearch: true, systemPromptFormat: 'instructions' })
+  })
+
   it('refuses compat keys pi-ai’s catalog owns, pointing at the catalog route', () => {
-    for (const compat of [{ openRouterRouting: {} }, { supportsAdditionalTools: true }]) {
+    for (const compat of [{ openRouterRouting: {} }, { sendSessionAffinityHeaders: true }]) {
       expect(() => resolveProfiles({
         'acme-gateway': {
           api: 'openai-completions',
