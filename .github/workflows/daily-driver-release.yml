@@ -74,24 +74,13 @@ jobs:
           firecrawl_url="${{ inputs.firecrawl_tarball_url || vars.DSH_FIRECRAWL_TARBALL_URL }}"
           test -n "$firecrawl_url"
           curl -fLsS -o dist/daily-driver/firecrawl-dsh-firecrawl-0.1.0-fork1.tgz "$firecrawl_url"
-      - name: Install source with temporary bootstrap manifest and overrides
+      - name: Install source with Pi override
         run: |
-          cp packages/bundle/web-app/package.json "$RUNNER_TEMP/web-app.package.json"
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs'
-          const webPath = 'packages/bundle/web-app/package.json'
-          const web = JSON.parse(readFileSync(webPath, 'utf8'))
-          delete web.dependencies['dsh-workspace-overlay']
-          delete web.dependencies['dsh-workspace-envrc']
-          writeFileSync(webPath, JSON.stringify(web, null, 2) + '\n')
-          NODE
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs'
           const path = 'pnpm-workspace.yaml'
           const source = readFileSync(path, 'utf8')
           const assets = {
-            'dsh-progressive-tools': 'dsh-progressive-tools-0.3.0.tgz',
-            '@firecrawl/dsh-firecrawl': 'firecrawl-dsh-firecrawl-0.1.0-fork1.tgz',
             '@earendil-works/pi-ai': 'earendil-works-pi-ai-0.85.1-fork1.tgz',
           }
           const lines = Object.entries(assets).map(([name, file]) => `  '${name}': 'file:dist/daily-driver/${file}'`)
@@ -107,22 +96,13 @@ jobs:
             packages/llm/llm-pi-ai/tsconfig.json \
             packages/mcp/mcp-client/tsconfig.json \
             packages/core/agent/tsconfig.json \
-            packages/preset/agent-preset-registry/tsconfig.json \
-            packages/bundle/web-app/tsconfig.json
-          for package in dsh-subagent dsh-llm-pi-ai dsh-mcp-client dsh-agent dsh-agent-preset-registry dsh-web-app; do
+            packages/preset/agent-preset-registry/tsconfig.json
+          for package in dsh-subagent dsh-llm-pi-ai dsh-mcp-client dsh-agent dsh-agent-preset-registry; do
             pnpm exec tsdown -F "@deepseek-ai/$package" --env.DSH_BUILD_FACE host
           done
-      - name: Pack the six DSH forks
+      - name: Pack the five DSH forks
         run: |
-          cp "$RUNNER_TEMP/web-app.package.json" packages/bundle/web-app/package.json
-          node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs'
-          import assert from 'node:assert/strict'
-          const web = JSON.parse(readFileSync('packages/bundle/web-app/package.json', 'utf8'))
-          assert.equal(web.dependencies['dsh-workspace-overlay'], '0.2.0')
-          assert.equal(web.dependencies['dsh-workspace-envrc'], '0.2.0')
-          NODE
-          for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry bundle/web-app; do
+          for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry; do
             pnpm --dir "packages/$package" pack --pack-destination "$PWD/dist/daily-driver"
           done
       - name: Require pinned workspace plugin source commits
@@ -161,7 +141,6 @@ jobs:
           dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz
           dist/daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz
           dist/daily-driver/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz
-          dist/daily-driver/deepseek-ai-dsh-web-app-0.1.7-rc.2-fork1.tgz
           dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz
           dist/daily-driver/dsh-progressive-tools-0.3.0.tgz
           dist/daily-driver/dsh-workspace-overlay-0.2.0.tgz
@@ -202,6 +181,6 @@ jobs:
             exit 1
           fi
           cd release
-          gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml \
+          gh release create "$TAG" ./*.tgz runtime-cli-package.json runtime-cli-pnpm-workspace.yaml runtime-cli-pnpm-lock.yaml runtime-profile-package.json runtime-profile-pnpm-lock.yaml \
             --target "$COMMIT" --title "$TAG" --latest \
-            --notes 'Official DSH 0.1.7-rc.2 CLI with six DSH fork1 overrides, Pi AI fork1, and four external Web plugin tarballs; MCP Panel 0.6.19 resolves from npm. Project dependency smoke does not verify global profile or Loader behavior.'
+            --notes 'Official DSH 0.1.7-rc.2 CLI with five DSH fork1 overrides, Pi AI fork1, official Web app, and four ordinary shared-plugin tarballs plus MCP Panel 0.6.19. CLI and profile dependency smoke does not verify Loader behavior.'

@@ -19,7 +19,6 @@ const forks = [
   '@deepseek-ai/dsh-mcp-client',
   '@deepseek-ai/dsh-agent',
   '@deepseek-ai/dsh-agent-preset-registry',
-  '@deepseek-ai/dsh-web-app',
 ]
 const plugins = [
   'dsh-progressive-tools',
@@ -49,8 +48,7 @@ function packageManifestPath(anchor, name) {
 async function verify() {
   assert.equal((await manifest(join(root, 'apps/cli/package.json'))).version, baseVersion)
   for (const name of forks) {
-    const packagePath = name === '@deepseek-ai/dsh-web-app' ? 'bundle/web-app'
-      : name === '@deepseek-ai/dsh-agent-preset-registry' ? 'preset/agent-preset-registry'
+    const packagePath = name === '@deepseek-ai/dsh-agent-preset-registry' ? 'preset/agent-preset-registry'
       : name === '@deepseek-ai/dsh-agent' ? 'core/agent'
       : name === '@deepseek-ai/dsh-llm-pi-ai' ? 'llm/llm-pi-ai'
       : name === '@deepseek-ai/dsh-mcp-client' ? 'mcp/mcp-client' : 'subagent/subagent'
@@ -59,17 +57,15 @@ async function verify() {
   const web = await manifest(join(root, 'packages/bundle/web-app/package.json'))
   const llm = await manifest(join(root, 'packages/llm/llm-pi-ai/package.json'))
   assert.equal(llm.dependencies['@earendil-works/pi-ai'], piVersion)
-  for (const [index, name] of plugins.entries()) {
-    assert.equal(web.dependencies[name], index === 3 ? '0.1.0' : pluginVersions[index], name)
-  }
-  assert.equal(web.dependencies['dsh-mcp-panel'], '0.6.19')
-  assert(web.dsh.bundle.patch.includes('./personal-web.patch.yml'))
-  assert(web.dsh.bundle.patch.includes('./presets/standard-ptc.patch.yml'))
+  assert.equal(web.version, baseVersion)
+  for (const name of [...plugins, 'dsh-mcp-panel']) assert.equal(web.dependencies?.[name], undefined, name)
+  assert(!JSON.stringify(web.dsh?.bundle ?? {}).includes('personal-web.patch.yml'))
+  assert(!JSON.stringify(web.dsh?.bundle ?? {}).includes('standard-ptc.patch.yml'))
   run('git', ['merge-base', '--is-ancestor', base, 'HEAD'])
   const paths = run('git', ['diff', '--name-only', base], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n').filter(Boolean)
   const allowed = [
     'packages/subagent/subagent/', 'packages/llm/llm-pi-ai/', 'packages/mcp/mcp-client/',
-    'packages/core/agent/', 'packages/preset/agent-preset-registry/', 'packages/bundle/web-app/',
+    'packages/core/agent/', 'packages/preset/agent-preset-registry/', 'packages/bundle/web-app/', 'configs/personal/',
     'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'THIRD_PARTY_NOTICES.md',
     '.agents/notes/implemented/', 'docs/cookbook/installing-and-maintaining-daily-driver',
     'docs/config-catalog', '.github/workflows/daily-driver-release.yml', 'scripts/daily-driver.mjs',
@@ -83,9 +79,12 @@ async function smoke(tarballs) {
   assert.equal(tarballs.length, names.length, `Pass ${names.length} tarballs in names order`)
   const temporary = await mkdtemp(join(tmpdir(), 'dsh-daily-driver-'))
   const runtime = join(temporary, 'runtime')
-  const overrides = Object.fromEntries(names.map((name, index) => [name, `file:./${basename(tarballs[index])}`]))
+  const home = join(temporary, 'home')
+  const profile = join(home, 'profiles/web')
+  const overrides = Object.fromEntries(names.slice(0, forks.length + 1).map((name, index) => [name, `file:./${basename(tarballs[index])}`]))
   try {
     await mkdir(runtime)
+    await mkdir(profile, { recursive: true })
     for (const tarball of tarballs) await copyFile(resolve(tarball), join(runtime, basename(tarball)))
     await writeFile(join(runtime, 'package.json'), JSON.stringify({
       name: 'dsh-daily-driver-runtime', private: true, type: 'module', packageManager: 'pnpm@11.24.0',
@@ -100,41 +99,48 @@ async function smoke(tarballs) {
     assert.equal((await manifest(cliPath)).version, baseVersion)
     const cliRequire = createRequire(cliPath)
     const webPath = cliRequire.resolve('@deepseek-ai/dsh-web-app/package.json')
-    const webRequire = createRequire(webPath)
     const baseRequire = createRequire(cliRequire.resolve('@deepseek-ai/dsh-base/package.json'))
+    const webRequire = createRequire(webPath)
     const { evaluatePluginCompatibility } = await import(pathToFileURL(cliRequire.resolve('@deepseek-ai/dsh-app-boot')).href)
-    assert.equal((await manifest(webPath)).version, forkVersion)
-    for (const [index, name] of names.entries()) {
+    assert.equal((await manifest(webPath)).version, baseVersion)
+    for (const [index, name] of names.slice(0, forks.length + 1).entries()) {
       const anchor = name === '@earendil-works/pi-ai' ? createRequire(baseRequire.resolve('@deepseek-ai/dsh-llm-pi-ai/package.json'))
-        : plugins.includes(name) || name === '@deepseek-ai/dsh-agent-preset-registry' ? webRequire
-        : name === '@deepseek-ai/dsh-subagent' || name === '@deepseek-ai/dsh-llm-pi-ai' || name === '@deepseek-ai/dsh-agent' ? baseRequire : cliRequire
+        : name === '@deepseek-ai/dsh-agent-preset-registry' ? webRequire : baseRequire
       const path = packageManifestPath(anchor, name)
       const packageMeta = await manifest(path)
-      assert.equal(packageMeta.version, index < forks.length ? forkVersion : index === forks.length ? piVersion : pluginVersions[index - forks.length - 1], name)
-      if (name !== '@earendil-works/pi-ai') {
-        assert.equal(evaluatePluginCompatibility(packageMeta, {}, baseVersion), undefined, `Incompatible dsh peers: ${name}`)
-      }
-      if (plugins.includes(name)) {
-        const entries = name === 'dsh-workspace-overlay' ? [name, `${name}/mcp/manager`, `${name}/integration-plugin`]
-          : name === 'dsh-workspace-envrc' ? [name, `${name}/integration-plugin`]
-          : name === '@firecrawl/dsh-firecrawl' ? [`${name}/fetch`] : [name]
-        for (const specifier of entries) await import(pathToFileURL(anchor.resolve(specifier)).href)
-      }
+      assert.equal(packageMeta.version, index < forks.length ? forkVersion : piVersion, name)
+      if (name !== '@earendil-works/pi-ai') assert.equal(evaluatePluginCompatibility(packageMeta, {}, baseVersion), undefined, name)
     }
-    const panelMeta = await manifest(packageManifestPath(webRequire, 'dsh-mcp-panel'))
+    const profileDeps = Object.fromEntries(plugins.map((name, index) => [name, `file:${resolve(tarballs[forks.length + 1 + index])}`]))
+    profileDeps['dsh-mcp-panel'] = '0.6.19'
+    await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'web', private: true, dependencies: profileDeps,
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } }, null, 2) + '\n')
+    await copyFile(join(root, 'configs/personal/cordis.patch.yml'), join(home, 'cordis.patch.yml'))
+    run('pnpm', ['--config.auto-install-peers=false', 'install', '--ignore-scripts', '--no-frozen-lockfile'], { cwd: profile })
+    const profileRequire = createRequire(join(profile, 'package.json'))
+    for (const [index, name] of plugins.entries()) {
+      const meta = await manifest(packageManifestPath(profileRequire, name))
+      assert.equal(meta.version, pluginVersions[index], name)
+      assert.equal(evaluatePluginCompatibility(meta, {}, baseVersion), undefined, name)
+      const entries = name === 'dsh-workspace-overlay' ? [name, `${name}/mcp/manager`, `${name}/integration-plugin`]
+        : name === 'dsh-workspace-envrc' ? [name, `${name}/integration-plugin`]
+        : name === '@firecrawl/dsh-firecrawl' ? [`${name}/fetch`] : [name]
+      for (const specifier of entries) assert(profileRequire.resolve(specifier), specifier)
+    }
+    const panelMeta = await manifest(packageManifestPath(profileRequire, 'dsh-mcp-panel'))
     assert.equal(panelMeta.version, '0.6.19')
-    assert.equal(evaluatePluginCompatibility(panelMeta, {}, baseVersion), undefined, 'Incompatible dsh peers: dsh-mcp-panel')
-    await import(pathToFileURL(webRequire.resolve('dsh-mcp-panel')).href)
-    const patch = await readFile(join(dirname(webPath), 'personal-web.patch.yml'), 'utf8')
-    for (const id of ['progressive-tools', 'workspace-registry', 'workspace-envrc', 'web-fetch-firecrawl', 'mcp-panel']) {
-      assert(patch.includes(`id: ${id}`), id)
-    }
+    assert.equal(evaluatePluginCompatibility(panelMeta, {}, baseVersion), undefined)
+    const homePatch = await readFile(join(home, 'cordis.patch.yml'), 'utf8')
+    for (const id of ['progressive-tools', 'workspace-registry', 'workspace-envrc', 'web-fetch-firecrawl', 'mcp-panel', 'preset-standard-ptc']) assert(homePatch.includes(`id: ${id}`), id)
     const entries = await readdir(join(runtime, 'node_modules/.pnpm'))
     for (const name of forks) assert(entries.some(entry => entry.includes(name.split('/').at(-1)) && entry.includes('file+')), name)
-    await writeFile(join(dirname(resolve(tarballs[0])), 'runtime-package.json'), await readFile(join(runtime, 'package.json')))
-    await writeFile(join(dirname(resolve(tarballs[0])), 'runtime-pnpm-workspace.yaml'), await readFile(join(runtime, 'pnpm-workspace.yaml')))
-    await writeFile(join(dirname(resolve(tarballs[0])), 'runtime-pnpm-lock.yaml'), await readFile(join(runtime, 'pnpm-lock.yaml')))
-    console.log(`daily-driver: project install of official ${baseVersion} CLI resolves Web plugin dependencies; global profile and Loader remain untested`)
+    const output = dirname(resolve(tarballs[0]))
+    await writeFile(join(output, 'runtime-cli-package.json'), await readFile(join(runtime, 'package.json')))
+    await writeFile(join(output, 'runtime-cli-pnpm-workspace.yaml'), await readFile(join(runtime, 'pnpm-workspace.yaml')))
+    await writeFile(join(output, 'runtime-cli-pnpm-lock.yaml'), await readFile(join(runtime, 'pnpm-lock.yaml')))
+    await writeFile(join(output, 'runtime-profile-package.json'), await readFile(join(profile, 'package.json')))
+    await writeFile(join(output, 'runtime-profile-pnpm-lock.yaml'), await readFile(join(profile, 'pnpm-lock.yaml')))
+    console.log(`daily-driver: official ${baseVersion} CLI resolves five forks/Pi; profile resolves five ordinary plugins; Loader checked separately`)
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
