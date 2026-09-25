@@ -29,7 +29,7 @@ const renamed = {
   'subagent-model-selection': 'subagent-model-selection-settings',
   'ui-onboarding': 'ui-settings-general',
   'ui-developer-tools': 'ui-settings',
-  shell: 'shell',
+  shell: 'bash-sandbox',
 }
 
 function command(program, args, options = {}) {
@@ -141,7 +141,8 @@ async function main() {
   console.log('Web profile: dependencies={} and bundles=[@deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app]; other profiles and home cordis.patch stay untouched.')
   if (args.mode !== 'apply') return
   if (existsSync(backup)) throw new Error(`Backup exists: ${backup}`)
-  await mkdir(backup, { recursive: true })
+  await mkdir(dirname(backup), { recursive: true, mode: 0o700 })
+  await mkdir(backup, { mode: 0o700 })
   await cp(profile, join(backup, 'web'), { recursive: true })
   if (existsSync(workspacePath)) await cp(workspacePath, join(backup, 'pnpm-workspace.yaml'))
   if (settingsText !== null) await cp(settingsPath, join(backup, 'settings.yaml'))
