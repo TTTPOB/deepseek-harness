@@ -1,11 +1,12 @@
-# Agent preset standard-ptc: one `@deepseek-ai/dsh-agent-preset` declaration inserted
-# after the web patch. Edits saved from the Web editor override this row's
-# `config.plugins` by id from the profile patch.
+# Personal declarative preset mounted by the Web preset registry.
+# Profile patches may override this declaration by id.
 - insert:
     - id: preset-standard-ptc
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: standard-ptc
+        name: 标准+PTC
+        description: 功能完整的编码 Agent，支持文件编辑、Shell、网页检索、Skills、计划、子代理和工作流。
         order: 5
         plugins:
           - id: persona

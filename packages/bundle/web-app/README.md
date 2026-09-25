@@ -63,7 +63,7 @@ When you launch `dsh --profile web` over SSH, the URL line still prints but the 
 
 ### Per-session agent setup
 
-Each browser session selects a shipped preset (`standard-ptc` by default in this personal distribution). It keeps native and PTC tools, disables goals, enables Ralph for up to 64 rounds, and allows continuable spawn/fork delegation without `present` in children. The Agent presets settings page changes the default and edits preset child plugins; saves persist in `$DSH_HOME/profiles/web/cordis.patch.yml`. Creator's plugin-management tool is enabled only when the Host provides an editable profile.
+Each browser session selects a shipped preset (`standard-ptc` by default in this personal distribution). It keeps native and PTC tools, disables goals, enables Ralph for up to 64 rounds, and allows continuable spawn/fork delegation without `present` in children. The profile patch can change the default preset and override its declaration. The target preset registry exposes a read-only document API, so this distribution does not claim that the Web editor saves preset child plugins. Creator's plugin-management tool is enabled only when the Host provides an editable profile.
 
 -----
 

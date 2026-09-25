@@ -12,6 +12,8 @@
 - insert:
     - id: progressive-tools
       name: dsh-progressive-tools
+      config:
+        deferTools: mcp
 
     - id: workspace-registry
       name: dsh-workspace-overlay
