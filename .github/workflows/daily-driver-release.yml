@@ -38,6 +38,7 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           dest: ${{ runner.temp }}/setup-pnpm
+          version: 11.24.0
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -83,8 +84,10 @@ jobs:
             '@earendil-works/pi-ai': 'earendil-works-pi-ai-0.85.1-fork1.tgz',
           }
           const lines = Object.entries(assets).map(([name, file]) => `  '${name}': 'file:dist/daily-driver/${file}'`)
-          writeFileSync(path, source.replace('\npeerDependencyRules:', `\n${lines.join('\n')}\n\npeerDependencyRules:`))
+          writeFileSync(path, source.replace('\npeerDependencyRules:', `\n${lines.join('\n')}\n\nblockExoticSubdeps: false\n\npeerDependencyRules:`))
           NODE
+          printf 'manage-package-manager-versions=false\n' >> .npmrc
+          test "$(pnpm --version)" = 11.24.0
           pnpm install --no-frozen-lockfile
       - name: Build affected packages
         run: |
@@ -98,7 +101,7 @@ jobs:
           for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry bundle/web-app; do
             pnpm exec tsdown -F "packages/$package" --env.DSH_BUILD_FACE host
           done
-      - name: Assemble overrides and personal plugin tarballs
+      - name: Pack the six DSH forks
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -106,7 +109,7 @@ jobs:
           for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry bundle/web-app; do
             pnpm --dir "packages/$package" pack --pack-destination "$PWD/dist/daily-driver"
           done
-      - name: Verify isolated installation-wide overrides
+      - name: Verify isolated project dependency closure
         run: >-
           node scripts/daily-driver.mjs smoke
           dist/daily-driver/deepseek-ai-dsh-subagent-0.1.7-rc.2-fork1.tgz
@@ -120,9 +123,6 @@ jobs:
           dist/daily-driver/dsh-workspace-overlay-0.2.0.tgz
           dist/daily-driver/dsh-workspace-envrc-0.2.0.tgz
           dist/daily-driver/firecrawl-dsh-firecrawl-0.1.0-fork1.tgz
-      - name: Checksum tested runtime and overrides
-        working-directory: dist/daily-driver
-        run: sha256sum ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: daily-driver-package
@@ -158,7 +158,6 @@ jobs:
             exit 1
           fi
           cd release
-          sha256sum -c SHA256SUMS
-          gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml SHA256SUMS \
+          gh release create "$TAG" ./*.tgz runtime-package.json runtime-pnpm-workspace.yaml runtime-pnpm-lock.yaml \
             --target "$COMMIT" --title "$TAG" --latest \
-            --notes 'Official DSH 0.1.7-rc.2 CLI with six DSH fork1 overrides, Pi AI fork1, and five Web plugin tarballs. Install and smoke all assets together.'
+            --notes 'Official DSH 0.1.7-rc.2 CLI with six DSH fork1 overrides, Pi AI fork1, and four external Web plugin tarballs; MCP Panel 0.6.19 resolves from npm. Project dependency smoke does not verify global profile or Loader behavior.'

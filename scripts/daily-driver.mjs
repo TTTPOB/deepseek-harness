@@ -1,4 +1,4 @@
-/** Fixed-baseline package checks and an isolated installation-wide override smoke. */
+/** Fixed-baseline checks and an isolated project dependency-closure smoke. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
@@ -82,8 +82,9 @@ async function smoke(tarballs) {
       dependencies: { '@deepseek-ai/dsh': baseVersion },
     }, null, 2) + '\n')
     const overrideLines = Object.entries(overrides).map(([name, spec]) => `  ${JSON.stringify(name)}: ${JSON.stringify(spec)}`)
-    await writeFile(join(runtime, 'pnpm-workspace.yaml'), `packages:\n  - .\noverrides:\n${overrideLines.join('\n')}\n`)
-    run('corepack', ['pnpm@11.24.0', 'install', '--ignore-scripts'], { cwd: runtime })
+    await writeFile(join(runtime, 'pnpm-workspace.yaml'), `packages:\n  - .\nblockExoticSubdeps: false\noverrides:\n${overrideLines.join('\n')}\n`)
+    assert.equal(run('pnpm', ['--version'], { cwd: runtime, encoding: 'utf8', stdio: 'pipe' }).trim(), '11.24.0')
+    run('pnpm', ['install', '--ignore-scripts'], { cwd: runtime })
     const runtimeRequire = createRequire(join(runtime, 'package.json'))
     const cliPath = runtimeRequire.resolve('@deepseek-ai/dsh/package.json')
     assert.equal((await manifest(cliPath)).version, baseVersion)
@@ -99,8 +100,10 @@ async function smoke(tarballs) {
       const path = anchor.resolve(`${name}/package.json`)
       assert.equal((await manifest(path)).version, index < forks.length ? forkVersion : index === forks.length ? piVersion : pluginVersions[index - forks.length - 1], name)
       if (plugins.includes(name)) {
-        const entry = anchor.resolve(name)
-        await import(pathToFileURL(entry).href)
+        const entries = name === 'dsh-workspace-overlay' ? [name, `${name}/mcp/manager`, `${name}/integration-plugin`]
+          : name === 'dsh-workspace-envrc' ? [name, `${name}/integration-plugin`]
+          : name === '@firecrawl/dsh-firecrawl' ? [`${name}/fetch`] : [name]
+        for (const specifier of entries) await import(pathToFileURL(anchor.resolve(specifier)).href)
       }
     }
     const panelPath = webRequire.resolve('dsh-mcp-panel/package.json')
@@ -115,7 +118,7 @@ async function smoke(tarballs) {
     await writeFile(join(dirname(resolve(tarballs[0])), 'runtime-package.json'), await readFile(join(runtime, 'package.json')))
     await writeFile(join(dirname(resolve(tarballs[0])), 'runtime-pnpm-workspace.yaml'), await readFile(join(runtime, 'pnpm-workspace.yaml')))
     await writeFile(join(dirname(resolve(tarballs[0])), 'runtime-pnpm-lock.yaml'), await readFile(join(runtime, 'pnpm-lock.yaml')))
-    console.log(`daily-driver: isolated official ${baseVersion} CLI resolves Web plugin runtime rows`)
+    console.log(`daily-driver: project install of official ${baseVersion} CLI resolves Web plugin dependencies; global profile and Loader remain untested`)
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
