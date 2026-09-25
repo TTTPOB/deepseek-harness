@@ -2,7 +2,7 @@
 
 English | [中文](installing-and-maintaining-daily-driver.zh.md)
 
-This Linux/WSL procedure upgrades the official top-level `@deepseek-ai/dsh` CLI to `0.1.7-rc.2` with eleven existing fork tarballs in `../artifacts/daily-driver-v0.1.7-rc.2-fork1` (relative to this repository). Node 24 and pnpm 11.24 are prerequisites; the script does not install the source repository's dependencies or fetch new release assets. Keep the tarballs in this persistent location while the global installation uses them. The profile migration applies only to `web`; `paper-chew`, `headless`, the home-level `cordis.patch.yml`, and the legacy `.agent-presets` directory stay unchanged.
+The source checkout can already be at 0.1.7 while the daily global installation and running Host remain at 0.1.5; only a later, external-terminal `--apply` upgrades that daily installation. This Linux/WSL procedure upgrades the official top-level `@deepseek-ai/dsh` CLI to `0.1.7-rc.2` with eleven existing fork tarballs in `../artifacts/daily-driver-v0.1.7-rc.2-fork1` (relative to this repository). Node 24 and pnpm 11.24 are prerequisites; the script does not install the source repository's dependencies or fetch new release assets. Keep the tarballs in this persistent location while the global installation uses them. The profile migration applies only to `web`; `paper-chew`, `headless`, the home-level `cordis.patch.yml`, and the legacy `.agent-presets` directory stay unchanged.
 
 ## 1. Stop the old Host and preview
 

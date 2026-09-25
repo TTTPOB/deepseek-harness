@@ -2,7 +2,7 @@
 
 [English](installing-and-maintaining-daily-driver.md) | 中文
 
-这套 Linux/WSL 操作把官方顶层 `@deepseek-ai/dsh` CLI 升到 `0.1.7-rc.2`，使用源码仓库旁 `../artifacts/daily-driver-v0.1.7-rc.2-fork1` 中已有的 11 个 fork tarball。前提是 Node 24 与 pnpm 11.24；脚本不安装整个源码仓库依赖，也不抓取新的 Release 资产。全局安装仍依赖这些 tarball，应长期保留该目录。迁移只针对 `web` profile；`paper-chew`、`headless`、home 级 `cordis.patch.yml` 和旧 `.agent-presets` 目录保持不变。
+源码 checkout 可以已处于 0.1.7，而日用 global 安装和当前 Host 仍保持 0.1.5；只有用户以后在外部终端执行 `--apply` 才升级日用安装。这套 Linux/WSL 操作把官方顶层 `@deepseek-ai/dsh` CLI 升到 `0.1.7-rc.2`，使用源码仓库旁 `../artifacts/daily-driver-v0.1.7-rc.2-fork1` 中已有的 11 个 fork tarball。前提是 Node 24 与 pnpm 11.24；脚本不安装整个源码仓库依赖，也不抓取新的 Release 资产。全局安装仍依赖这些 tarball，应长期保留该目录。迁移只针对 `web` profile；`paper-chew`、`headless`、home 级 `cordis.patch.yml` 和旧 `.agent-presets` 目录保持不变。
 
 ## 1. 停旧 Host，预览
 
