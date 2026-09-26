@@ -97,9 +97,13 @@ jobs:
           if (!source.includes(marker)) throw new Error('Missing workspace override insertion point')
           writeFileSync(path, source.replace(marker, "\n  '@earendil-works/pi-ai': 'file:dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz'\n\nblockExoticSubdeps: false\n" + marker)
             .replace("  '@earendil-works/pi-ai@0.85.1': patches/@earendil-works__pi-ai@0.85.1.patch\n", ''))
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+          manifest.packageManager = 'pnpm@11.24.0'
+          writeFileSync('package.json', JSON.stringify(manifest, null, 2) + '\n')
           NODE
-          printf 'manage-package-manager-versions=false\n' >> .npmrc
-          test "$(pnpm --version)" = 11.24.0
+          actual_pnpm=$(pnpm --version)
+          echo "Release pnpm: $actual_pnpm"
+          test "$actual_pnpm" = 11.24.0
           pnpm install --no-frozen-lockfile
       - name: Run focused continuation regression
         run: |
