@@ -271,7 +271,7 @@ export class SubagentContinuationManager {
     return this.deliverToChild(parent, childId, content, { source, signal, delivery: 'steer' })
   }
 
-  /** Route one parent-originated delivery through residency and cold resume. */
+  /** Authorize a resident direct child before holding ownership; cold children authorize from persisted lineage. */
   private async deliverToChild(
     parent: Agent,
     childId: SessionId,
@@ -279,6 +279,10 @@ export class SubagentContinuationManager {
     options: ChildDeliveryOptions,
   ): Promise<MessageId> {
     this.activations.assertAdmitting(parent)
+    const resident = this.activations.get(childId)
+    if (resident !== undefined) {
+      this.activations.authorizeLineage(parent, childId, resident.handle.agent.session.header.parentSession)
+    }
     const releaseHold = this.activations.holdOwnership(parent, childId)
     try {
       return await this.deliverFollowup(parent, childId, content, options)
