@@ -33,7 +33,120 @@ env:
   PI_RELEASE: daily-driver-v0.1.5-rc.2-fork1
 
 jobs:
+  subagent-fork2:
+    if: github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork2'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          version: 11.24.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify subagent-only release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork2
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          const version = path => JSON.parse(readFileSync(path, 'utf8')).version
+          assert.equal(version('apps/cli/package.json'), '0.1.7-rc.2')
+          assert.equal(version('packages/bundle/web-app/package.json'), '0.1.7-rc.2')
+          for (const [path, expected] of [
+            ['subagent/subagent', '0.1.7-rc.2-fork2'],
+            ['llm/llm-pi-ai', '0.1.7-rc.2-fork1'],
+            ['mcp/mcp-client', '0.1.7-rc.2-fork1'],
+            ['core/agent', '0.1.7-rc.2-fork1'],
+            ['preset/agent-preset-registry', '0.1.7-rc.2-fork1'],
+          ]) assert.equal(version(`packages/${path}/package.json`), expected, path)
+          NODE
+          git merge-base --is-ancestor 477b4f420553e8a52c2fbccc464d7561b239c443 HEAD
+      - name: Install source with pinned Pi fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/daily-driver
+          gh release download "$PI_RELEASE" --repo TTTPOB/deepseek-harness \
+            --pattern 'earendil-works-pi-ai-0.85.1-fork1.tgz' --dir dist/daily-driver
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const path = 'pnpm-workspace.yaml'
+          const source = readFileSync(path, 'utf8')
+          const marker = '\npeerDependencyRules:'
+          if (!source.includes(marker)) throw new Error('Missing workspace override insertion point')
+          writeFileSync(path, source.replace(marker, "\n  '@earendil-works/pi-ai': 'file:dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz'\n\nblockExoticSubdeps: false\n" + marker))
+          NODE
+          printf 'manage-package-manager-versions=false\n' >> .npmrc
+          test "$(pnpm --version)" = 11.24.0
+          pnpm install --no-frozen-lockfile
+      - name: Run focused continuation regression
+        run: pnpm exec vitest run packages/subagent/subagent/tests/continuation.spec.ts
+      - name: Build and pack only subagent
+        run: |
+          pnpm exec tsc -b packages/typert/generator/tsconfig.json packages/subagent/subagent/tsconfig.json
+          pnpm exec tsdown -F '@deepseek-ai/dsh-subagent' --env.DSH_BUILD_FACE host
+          pnpm --dir packages/subagent/subagent pack --pack-destination "$PWD/dist/daily-driver"
+      - name: Smoke installed tarball and record checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="$PWD/dist/daily-driver/deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz"
+          test -s "$asset"
+          runtime=$(mktemp -d)
+          trap 'rm -rf "$runtime"' EXIT
+          cp "$asset" "$runtime/"
+          printf '{"name":"subagent-fork2-smoke","private":true,"type":"module","packageManager":"pnpm@11.24.0","dependencies":{"@deepseek-ai/dsh":"0.1.7-rc.2"}}\n' > "$runtime/package.json"
+          printf "packages:\n  - .\nblockExoticSubdeps: false\noverrides:\n  '@deepseek-ai/dsh-subagent': 'file:./%s'\n" "$(basename "$asset")" > "$runtime/pnpm-workspace.yaml"
+          (cd "$runtime" && pnpm install --ignore-scripts)
+          SMOKE_RUNTIME="$runtime" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync, realpathSync } from 'node:fs'
+          import { createRequire } from 'node:module'
+          import { join } from 'node:path'
+          import { pathToFileURL } from 'node:url'
+          const runtime = process.env.SMOKE_RUNTIME
+          const require = createRequire(join(runtime, 'package.json'))
+          const cli = createRequire(require.resolve('@deepseek-ai/dsh/package.json'))
+          const base = createRequire(cli.resolve('@deepseek-ai/dsh-base/package.json'))
+          const manifest = base.resolve('@deepseek-ai/dsh-subagent/package.json')
+          assert.match(realpathSync(manifest), /file\+/)
+          assert.equal(JSON.parse(readFileSync(manifest, 'utf8')).version, '0.1.7-rc.2-fork2')
+          const loaded = await import(pathToFileURL(base.resolve('@deepseek-ai/dsh-subagent')).href)
+          assert(Object.keys(loaded).length > 0, 'Installed built entry has exports')
+          console.log(`Resolved ${realpathSync(manifest)} and imported built entry`)
+          NODE
+          (cd dist/daily-driver && sha256sum deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz > SHA256SUMS)
+      - name: Publish immutable subagent-only release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=daily-driver-v0.1.7-rc.2-fork2
+          current=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')
+          test "$current" = "$(git rev-parse HEAD)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; immutable releases are never overwritten." >&2
+            exit 1
+          fi
+          cd dist/daily-driver
+          gh release create "$tag" deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz SHA256SUMS \
+            --target "$current" --title "$tag" --latest \
+            --notes 'Only @deepseek-ai/dsh-subagent advances to 0.1.7-rc.2-fork2. Keep the four other DSH fork1 overrides, Pi AI fork1, official CLI/Web, and existing independent plugins unchanged. Replace only the @deepseek-ai/dsh-subagent pnpm global override with this tarball, then run pnpm global add for @deepseek-ai/dsh@0.1.7-rc.2 using the existing installation procedure. The isolated smoke checks installed dependency resolution and built-entry import, not Loader activation. This release contains no other package tarballs.'
   build:
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2'
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -152,6 +265,7 @@ jobs:
           path: dist/daily-driver/*
           if-no-files-found: error
   publish:
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

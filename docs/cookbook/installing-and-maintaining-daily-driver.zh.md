@@ -37,4 +37,4 @@ node scripts/upgrade-daily-driver.mjs --rollback /absolute/path/to/backup
 
 非 Web profile 加上 `--profile OTHER_EXISTING_PROFILE`；apply 若显式指定了 `--home`、`--global-dir`、`--global-bin-dir`，回滚时保持一致。回滚恢复该 profile、home patch、全局 workspace 和原有 settings，并重装记录的顶层 CLI 版本。它**不会**用旧 sessions/storages 快照覆盖新数据：之后可能已有新会话。快照只能单独人工审查后恢复。
 
-[Release workflow](../../.github/workflows/daily-driver-release.yml) 打包五个 DSH fork、Pi AI 与四个独立插件。其 CLI/profile lockfile 对应两套不同安装；项目依赖 smoke 检查兼容性和解析，不等于 Loader 激活。隔离 Host 组合已有独立验收，本操作不重复 LLM 调用，也不表示已修改真实日用安装。
+[Release workflow](../../.github/workflows/daily-driver-release.yml) 保留 fork1 的五包路线，并为 `daily-driver-v0.1.7-rc.2-fork2` tag 单独发布 subagent。fork2 Release 只有 `deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz` 和 `SHA256SUMS`：校验 checksum 后仅替换全局 `@deepseek-ai/dsh-subagent` override，其余四个 DSH fork1 override、Pi AI fork1、CLI/Web 与独立插件均不变。上面的升级脚本仍针对完整 fork1 资产，不能用于仅含 subagent 的 Release。fork2 job 运行 continuation 回归，在隔离 CLI 项目安装 tarball，检查构建入口 import 和实际 override 解析；这不等于 Loader 激活或已修改真实 Host 安装。
