@@ -1104,11 +1104,11 @@ describe('compat switches', () => {
   })
 
   it('keeps explicit Responses tool-search and instructions settings after schema validation', async () => {
-    const gateway: LlmPiAi.PiAiProviderProfile = {
+    const gateway = {
       api: 'openai-responses', baseURL: 'https://gateway.test/v1',
       compat: { supportsToolSearch: true, systemPromptFormat: 'instructions' },
       models: [{ id: 'model' }],
-    }
+    } satisfies LlmPiAi.PiAiProviderProfile
     const ctx = await bootWithSettings({})
     await configurations.get(ctx)!.update({ providers: { gateway } })
     const model = resolveProfiles({ gateway }).get('gateway')?.piProvider?.getModels()[0]
