@@ -6,17 +6,22 @@ on:
       - 'daily-driver-v*-fork*'
   workflow_dispatch:
     inputs:
+      subagent_only:
+        description: Publish only the pinned fork2 subagent from its existing immutable tag
+        required: false
+        default: false
+        type: boolean
       firecrawl_tarball_url:
         description: Immutable URL of the adapted Firecrawl fork1 tarball
-        required: true
+        required: false
         type: string
       overlay_ref:
         description: Exact tested source commit for workspace overlay
-        required: true
+        required: false
         type: string
       envrc_ref:
         description: Exact tested source commit for workspace envrc
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -34,19 +39,21 @@ env:
 
 jobs:
   subagent-fork2:
-    if: github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork2'
+    if: (github.event_name == 'push' && github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork2') || (github.event_name == 'workflow_dispatch' && inputs.subagent_only)
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: daily-driver-v0.1.7-rc.2-fork2
           fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           dest: ${{ runner.temp }}/setup-pnpm
           version: 11.24.0
+          package_json_file: packages/subagent/subagent/package.json
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -54,7 +61,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork2
+          if [[ "${{ github.event_name }}" = push ]]; then
+            test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork2
+          fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/tags/daily-driver-v0.1.7-rc.2-fork2)"
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict'
           import { readFileSync } from 'node:fs'
@@ -185,7 +195,7 @@ jobs:
             --target "$current" --title "$tag" --latest \
             --notes 'Only @deepseek-ai/dsh-subagent advances to 0.1.7-rc.2-fork2. Keep the four other DSH fork1 overrides, Pi AI fork1, official CLI/Web, and existing independent plugins unchanged. Replace only the @deepseek-ai/dsh-subagent pnpm global override with this tarball, then run pnpm global add for @deepseek-ai/dsh@0.1.7-rc.2 using the existing installation procedure. The isolated smoke checks installed dependency resolution, built-entry import, and rejected cross-sibling messages without orphaned ownership; it does not verify Loader activation. This release contains no other package tarballs.'
   build:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2'
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -304,7 +314,7 @@ jobs:
           path: dist/daily-driver/*
           if-no-files-found: error
   publish:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2'
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     needs: build
     runs-on: ubuntu-24.04
     permissions:
