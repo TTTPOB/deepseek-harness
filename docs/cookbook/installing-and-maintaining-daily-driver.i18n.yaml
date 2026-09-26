@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for installing-and-maintaining-daily-driver.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/cookbook/installing-and-maintaining-daily-driver.md
+/maintain-the-shared-plugin-daily-driver-installation:
+  en: 8bf818be0e8ffa8b
+  zh: fa4fa47772281747
+/maintain-the-shared-plugin-daily-driver-installation/1-preview-the-existing-web-profile:
+  en: cf304867a430475e
+  zh: e789b71bc07da518
+/maintain-the-shared-plugin-daily-driver-installation/2-apply-when-ready-then-install-another-consumer-if-needed:
+  en: 4886159853b54bb0
+  zh: 4c594a4fa28da858
+/maintain-the-shared-plugin-daily-driver-installation/3-roll-back-the-selected-profile-if-needed:
+  en: 716fd5348ab33549
+  zh: 24e01bf25d8c6b4b

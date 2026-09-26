@@ -92,7 +92,9 @@ jobs:
           test "$(pnpm --version)" = 11.24.0
           pnpm install --no-frozen-lockfile
       - name: Run focused continuation regression
-        run: pnpm exec vitest run packages/subagent/subagent/tests/continuation.spec.ts
+        run: |
+          pnpm run build:native-system
+          pnpm exec vitest run packages/subagent/subagent/tests/continuation.spec.ts
       - name: Build and pack only subagent
         run: |
           pnpm exec tsc -b packages/typert/generator/tsconfig.json packages/subagent/subagent/tsconfig.json
