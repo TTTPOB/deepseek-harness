@@ -85,7 +85,8 @@ jobs:
           const source = readFileSync(path, 'utf8')
           const marker = '\npeerDependencyRules:'
           if (!source.includes(marker)) throw new Error('Missing workspace override insertion point')
-          writeFileSync(path, source.replace(marker, "\n  '@earendil-works/pi-ai': 'file:dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz'\n\nblockExoticSubdeps: false\n" + marker))
+          writeFileSync(path, source.replace(marker, "\n  '@earendil-works/pi-ai': 'file:dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz'\n\nblockExoticSubdeps: false\n" + marker)
+            .replace("  '@earendil-works/pi-ai@0.85.1': patches/@earendil-works__pi-ai@0.85.1.patch\n", ''))
           NODE
           printf 'manage-package-manager-versions=false\n' >> .npmrc
           test "$(pnpm --version)" = 11.24.0
