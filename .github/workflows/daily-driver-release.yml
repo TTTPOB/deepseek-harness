@@ -180,6 +180,14 @@ jobs:
           console.log(`Resolved ${realpathSync(manifest)}; imported built entry; rejected sibling messages without orphaned holds`)
           NODE
           (cd dist/daily-driver && sha256sum deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz > SHA256SUMS)
+      - name: Preserve verified subagent release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: subagent-fork2-release
+          path: |
+            dist/daily-driver/deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz
+            dist/daily-driver/SHA256SUMS
+          if-no-files-found: error
       - name: Publish immutable subagent-only release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -196,7 +204,7 @@ jobs:
           fi
           cd dist/daily-driver
           gh release create "$tag" deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz SHA256SUMS \
-            --target "$current" --title "$tag" --latest \
+            --verify-tag --title "$tag" --latest \
             --notes 'Only @deepseek-ai/dsh-subagent advances to 0.1.7-rc.2-fork2. Keep the four other DSH fork1 overrides, Pi AI fork1, official CLI/Web, and existing independent plugins unchanged. Replace only the @deepseek-ai/dsh-subagent pnpm global override with this tarball, then run pnpm global add for @deepseek-ai/dsh@0.1.7-rc.2 using the existing installation procedure. The isolated smoke checks installed dependency resolution, built-entry import, and rejected cross-sibling messages without orphaned ownership; it does not verify Loader activation. This release contains no other package tarballs.'
   build:
     if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
