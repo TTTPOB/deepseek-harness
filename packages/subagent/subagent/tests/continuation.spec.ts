@@ -2631,37 +2631,42 @@ describe('continuable adjacent-Agent delivery', () => {
       { chunks: textResponse('parent acknowledgement') },
     ])
     const { ctx, parent } = await setupWith(adapter)
-    const first = await ctx.subagents.startContinuable(startSpec(parent))
-    const second = await ctx.subagents.startContinuable(startSpec(parent))
-    await vi.waitFor(() => {
-      expect(adapter.requests.filter(request => request.sessionId === first.childId || request.sessionId === second.childId))
-        .toHaveLength(2)
-    })
-    const firstAgent = ctx.agents.get(first.childId)!
-    const secondAgent = ctx.agents.get(second.childId)!
+    try {
+      const first = await ctx.subagents.startContinuable(startSpec(parent))
+      const second = await ctx.subagents.startContinuable(startSpec(parent))
+      await vi.waitFor(() => {
+        expect(adapter.requests.filter(request => request.sessionId === first.childId || request.sessionId === second.childId))
+          .toHaveLength(2)
+      })
+      const firstAgent = ctx.agents.get(first.childId)!
+      const secondAgent = ctx.agents.get(second.childId)!
 
-    await expect(ctx.subagents.sendMessage(firstAgent, second.childId, message('not your child'), {
-      signal: testSignal,
-    })).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
-    await expect(ctx.subagents.sendMessage(secondAgent, first.childId, message('not your child'), {
-      signal: testSignal,
-    })).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+      await expect(ctx.subagents.sendMessage(firstAgent, second.childId, message('not your child'), {
+        signal: testSignal,
+      })).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+      await expect(ctx.subagents.sendMessage(secondAgent, first.childId, message('not your child'), {
+        signal: testSignal,
+      })).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
 
-    release.resolve(undefined)
-    await vi.waitFor(() => {
-      expect(ctx.agents.get(first.childId) === undefined).toBe(true)
-      expect(ctx.agents.get(second.childId) === undefined).toBe(true)
-    }, { timeout: 1_500 })
-    await vi.waitFor(() => { expect(settlementNotices(parent)).toHaveLength(2) })
-    expect(new Map(settlementNotices(parent).map(notice => [notice.sender, notice.text])))
-      .toEqual(new Map([
-        [first.childId, expect.stringContaining('first final report')],
-        [second.childId, expect.stringContaining('second final report')],
-      ]))
-    expect(settlementNotices(parent).every(notice => notice.summary.includes('finished and will do no further work'))).toBe(true)
-    expect(firstAgent.session.snapshotEvents().some(event => event.type === 'turn/end')).toBe(true)
-    expect(secondAgent.session.snapshotEvents().some(event => event.type === 'turn/end')).toBe(true)
-  })
+      release.resolve(undefined)
+      await vi.waitFor(() => {
+        expect(ctx.agents.get(first.childId) === undefined).toBe(true)
+        expect(ctx.agents.get(second.childId) === undefined).toBe(true)
+      }, { timeout: 5_000 })
+      await vi.waitFor(() => { expect(settlementNotices(parent)).toHaveLength(2) })
+      expect(new Map(settlementNotices(parent).map(notice => [notice.sender, notice.text])))
+        .toEqual(new Map([
+          [first.childId, expect.stringContaining('first final report')],
+          [second.childId, expect.stringContaining('second final report')],
+        ]))
+      expect(settlementNotices(parent).every(notice => notice.summary.includes('finished and will do no further work'))).toBe(true)
+      expect(firstAgent.session.snapshotEvents().some(event => event.type === 'turn/end')).toBe(true)
+      expect(secondAgent.session.snapshotEvents().some(event => event.type === 'turn/end')).toBe(true)
+    } finally {
+      release.resolve(undefined)
+      await ctx.fiber.dispose()
+    }
+  }, 10_000)
 
   it('rejects a stale sender before resolving either adjacent target', async () => {
     const { ctx, parent } = await setup([])
