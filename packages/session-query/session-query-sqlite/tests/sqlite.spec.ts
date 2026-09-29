@@ -2019,6 +2019,97 @@ describe('SQLite bounded index build', () => {
     expect(liveGeneration()).toBeGreaterThan(first)
   })
 
+  it('evicts a previously indexed session whose stored log crosses the bound, then rebuilds it', async () => {
+    const growing = header('growing-session')
+    const stable = header('stable-session')
+    TestPersistence.reset([
+      { meta: growing, events: messageEvents('grow needle') },
+      { meta: stable, events: messageEvents('stable needle') },
+    ])
+    TestPersistence.sizes.set(growing.id, 16)
+    TestPersistence.sizes.set(stable.id, 16)
+    const ctx = await liveContext({ path: ':memory:', maxIndexedSessionBytes: 64 })
+    await ctx.plugin(TestPersistence)
+    const db = (ctx.sessionQuery as unknown as { _db: DatabaseSync })._db
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
+    const indexedIds = (): string[] =>
+      (db.prepare('SELECT id FROM persisted_sessions ORDER BY id').all() as Array<{ id: string }>)
+        .map(row => row.id)
+    const generation = (): number => (
+      db.prepare('SELECT global_generation FROM search_state WHERE singleton = 1').get() as { global_generation: number }
+    ).global_generation
+
+    const first = await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 1 })
+    expect(first.items).toHaveLength(1)
+    const cursor = first.nextCursor
+    if (cursor === undefined) throw new Error('expected a cursor')
+    expect(indexedIds()).toEqual([growing.id, stable.id])
+    const generationBefore = generation()
+
+    // The stored artifact crosses the bound and the stored revision keeps moving.
+    TestPersistence.sizes.set(growing.id, 4096)
+    TestPersistence.set({ meta: growing, events: messageEvents('grow needle') })
+
+    const evicted = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect(evicted.items.map(item => item.header.id)).toEqual([stable.id])
+    expect(indexedIds()).toEqual([stable.id])
+    expect(generation()).toBeGreaterThan(generationBefore)
+    // The oversized log is never read, and its stale row can no longer answer pages.
+    expect(TestPersistence.reads.get(growing.id)).toBe(1)
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle', limit: 1, cursor }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_STALE_CURSOR'))
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    // Dropping back under the bound indexes it again.
+    TestPersistence.sizes.set(growing.id, 16)
+    const rebuilt = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect([...rebuilt.items.map(item => item.header.id)].sort()).toEqual([growing.id, stable.id].sort())
+    expect(indexedIds()).toEqual([growing.id, stable.id])
+    warn.mockRestore()
+  })
+
+  it('drops a session a discarded attempt committed when the stable observation no longer lists it', async () => {
+    const vanishing = header('vanishing-session')
+    TestPersistence.reset([{ meta: vanishing, events: messageEvents('vanish needle') }])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    TestPersistence.readEffect = () => { TestPersistence.entries.delete(vanishing.id) }
+
+    const page = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect(page.items).toEqual([])
+    const db = (ctx.sessionQuery as unknown as { _db: DatabaseSync })._db
+    expect(db.prepare('SELECT id FROM persisted_sessions').all()).toEqual([])
+  })
+
+  it('keeps sessions committed before an abort and reports the abort', async () => {
+    const first = header('abort-first')
+    const second = header('abort-second')
+    TestPersistence.reset([
+      { meta: first, events: messageEvents('first needle') },
+      { meta: second, events: messageEvents('second needle') },
+    ])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const controller = new AbortController()
+    let listCalls = 0
+    TestPersistence.listEffect = () => {
+      listCalls += 1
+      if (listCalls === 2) controller.abort()
+    }
+
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }, { signal: controller.signal }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_ABORTED'))
+    expect(TestPersistence.reads.get(first.id)).toBe(1)
+    expect(TestPersistence.reads.get(second.id)).toBe(1)
+
+    TestPersistence.listEffect = undefined
+    const page = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect([...page.items.map(item => item.header.id)].sort()).toEqual([first.id, second.id].sort())
+    // Both rows committed before the abort are reused rather than re-read.
+    expect(TestPersistence.reads.get(first.id)).toBe(1)
+    expect(TestPersistence.reads.get(second.id)).toBe(1)
+  })
+
   it('builds a live fingerprint without serializing the whole session log into one string', async () => {
     TestPersistence.reset([{ meta: header('persisted-serialization'), events: messageEvents('persisted needle') }])
     const ctx = await liveContext()

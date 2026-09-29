@@ -167,6 +167,8 @@ interface Observation {
   persistenceBinding: PersistenceBinding
   persisted: Map<SessionId, ObservedPersistedSession>
   live: Map<SessionId, ObservedLiveSession>
+  /** Stored sessions left out of the index because their artifact exceeded the configured bound. */
+  skipped: Set<SessionId>
 }
 
 interface IndexedPersistedRow {
@@ -258,7 +260,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private _closed = false
   private _closePromise: Promise<void> | undefined
   private readonly _optionalPersistenceFiber: Fiber
-  private readonly _warnedSkips = new Set<SessionId>()
+  private readonly _warnedSkips = new Set<string>()
 
   constructor(ctx: Context, config: Config) {
     // The assignment expression resolves before the base constructor can
@@ -450,11 +452,13 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     // build over a large history never retains every extracted document at once.
     // All of them carry the same advanced generation, so a build that stops early
     // still invalidates cursors taken over the older corpus.
+    const committed = new Set<SessionId>()
     const commitPersisted = (entry: ObservedPersistedSession, observed: ObservedSession): void => {
       if (staged.commits === 0) staged.generation = baseGeneration + 1
       this._commitPersistedSession(observed, entry.revision, staged.generation)
       staged.commits += 1
       staged.wrote = true
+      committed.add(entry.header.id)
     }
     let observation: Observation
     try {
@@ -464,9 +468,15 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       throw error
     }
     assertNotAborted(signal)
+    // The durable index must never keep serving a row the stable observation
+    // dropped: either the stored session is gone, its artifact crossed the
+    // bound, or a discarded attempt committed it and the stable attempt no
+    // longer lists it.
+    const indexedIds = new Set<SessionId>(persistedRows.map(row => row.id as SessionId))
+    for (const id of committed) indexedIds.add(id)
     const persistentDeletes = observation.persistenceBinding.service === undefined
       ? []
-      : persistedRows.filter(row => !observation.persisted.has(row.id as SessionId))
+      : [...indexedIds].filter(id => !observation.persisted.has(id) || observation.skipped.has(id))
     if (staged.commits > 0) durableGeneration = staged.generation
     if (persistentDeletes.length > 0) {
       staged.generation = Math.max(staged.generation, baseGeneration + 1)
@@ -500,7 +510,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       try {
         db.exec('BEGIN IMMEDIATE')
         began = true
-        for (const row of persistentDeletes) this._deleteSession('persisted', row.id as SessionId)
+        for (const id of persistentDeletes) this._deleteSession('persisted', id)
         if (persistentDeletes.length > 0) {
           db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(staged.generation)
         }
@@ -557,6 +567,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       const persistence = persistenceBinding.service
       const initiallyLive = new Set(this.ctx.sessions.list().map(session => session.id))
       let persisted = new Map<SessionId, ObservedPersistedSession>()
+      const skipped = new Set<SessionId>()
       if (persistence !== undefined) {
         try {
           const canReuseIndexed = this._lastPersistenceIdentity === undefined
@@ -566,17 +577,20 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
           assertNotAborted(signal)
           persisted = materializePersistenceSnapshots(before)
           for (const entry of persisted.values()) {
-            if (canReuseIndexed && indexed.get(entry.header.id)?.revision === entry.revision) continue
             // Skip work already shadowed by a live owner. The cold read is
             // non-mutating (interrupted turns are balanced in memory only), so
             // an owner attaching after this check cannot cause side effects;
             // the live-membership retry below makes the returned observation
             // live-preferred.
             if (initiallyLive.has(entry.header.id) || this.ctx.sessions.get(entry.header.id) !== undefined) continue
+            // The bound applies before the revision, so raising a session above
+            // it also evicts a row indexed while it was under it.
             if (entry.sizeBytes !== undefined && entry.sizeBytes > this.config.maxIndexedSessionBytes) {
               this._noteSkippedSession(entry, entry.sizeBytes)
+              skipped.add(entry.header.id)
               continue
             }
+            if (canReuseIndexed && indexed.get(entry.header.id)?.revision === entry.revision) continue
             assertNotAborted(signal)
             const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
             assertNotAborted(signal)
@@ -612,7 +626,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         live.set(session.id, observed)
       }
       if (!sameSessionIds(initiallyLive, live)) continue
-      return { persistenceBinding, persisted, live }
+      return { persistenceBinding, persisted, live, skipped }
     }
     throw new SessionQueryError(
       'session-search persistence observation did not stabilize after one retry',
@@ -749,8 +763,9 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
 
   /** Report and remember one oversized session, so it is never held out of search silently. */
   private _noteSkippedSession(entry: ObservedPersistedSession, sizeBytes: number): void {
-    if (this._warnedSkips.has(entry.header.id)) return
-    this._warnedSkips.add(entry.header.id)
+    const observed = `${entry.header.id}:${entry.revision}`
+    if (this._warnedSkips.has(observed)) return
+    this._warnedSkips.add(observed)
     this.ctx.logger.warn(
       `session search: session "${entry.header.id}" stores ${String(sizeBytes)} bytes, above maxIndexedSessionBytes (${String(this.config.maxIndexedSessionBytes)}); its history stays out of full-text search until the limit is raised`,
     )
