@@ -249,7 +249,7 @@ jobs:
             ['preset/agent-preset-registry', '0.1.7-rc.2-fork1'],
           ]) assert.equal(version(`packages/${path}/package.json`), expected, path)
           NODE
-          git merge-base --is-ancestor 977a51a32e2c0f8d56c00aed9757b26248967f92 HEAD
+          git merge-base --is-ancestor refs/tags/daily-driver-v0.1.7-rc.2-fork2 HEAD
       - name: Install source with pinned Pi fork
         env:
           GH_TOKEN: ${{ github.token }}
