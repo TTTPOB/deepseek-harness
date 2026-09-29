@@ -24,6 +24,7 @@ import type {
 } from '@deepseek-ai/dsh-session-persistence'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SqliteSessionQueryEngine, {
+  SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES,
   SESSION_QUERY_SQLITE_SCHEMA_VERSION,
 } from '@deepseek-ai/dsh-session-query-sqlite'
 import {
@@ -131,6 +132,7 @@ class TestHandle implements SessionHandle {
 class TestPersistence extends SessionPersistence {
   static entries = new Map<SessionIdType, { meta: SessionHeader; events: SessionEvent[] }>()
   static revisions = new Map<SessionIdType, number>()
+  static sizes = new Map<SessionIdType, number>()
   static nextRevision = 0
   static reads = new Map<SessionIdType, number>()
   static readSignals: Array<AbortSignal | undefined> = []
@@ -148,6 +150,7 @@ class TestPersistence extends SessionPersistence {
   static reset(entries: readonly { meta: SessionHeader; events: SessionEvent[] }[] = []): void {
     this.entries = new Map()
     this.revisions = new Map()
+    this.sizes = new Map()
     this.reads = new Map()
     this.readSignals = []
     this.listSignals = []
@@ -194,10 +197,14 @@ class TestPersistence extends SessionPersistence {
     await TestPersistence.listGate
     if (TestPersistence.failure !== undefined) throw TestPersistence.failure
     const snapshots = TestPersistence.listOverride?.()
-      ?? [...TestPersistence.entries.values()].map(entry => ({
-        header: structuredClone(entry.meta),
-        revision: SessionPersistenceRevision(`test:${TestPersistence.revisions.get(entry.meta.id)}`),
-      }))
+      ?? [...TestPersistence.entries.values()].map((entry) => {
+        const sizeBytes = TestPersistence.sizes.get(entry.meta.id)
+        return {
+          header: structuredClone(entry.meta),
+          revision: SessionPersistenceRevision(`test:${TestPersistence.revisions.get(entry.meta.id)}`),
+          ...sizeBytes === undefined ? {} : { sizeBytes },
+        }
+      })
     await TestPersistence.listEffect?.(options?.signal)
     return snapshots
   }
@@ -229,6 +236,16 @@ describe('SQLite session search', () => {
     const configuredCtx = await liveContext(configured)
     expect((configuredCtx.sessionQuery as SqliteSessionQueryEngine).config.persistedReadConcurrency)
       .toBe(configuredValue)
+    expect((defaultCtx.sessionQuery as SqliteSessionQueryEngine).config.maxIndexedSessionBytes)
+      .toBe(SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES)
+    expect(new SqliteSessionQueryEngine.Config({ path: ':memory:', maxIndexedSessionBytes: 7 })
+      .maxIndexedSessionBytes).toBe(7)
+    for (const maxIndexedSessionBytes of [0, -1, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => new SqliteSessionQueryEngine.Config({
+        path: ':memory:',
+        maxIndexedSessionBytes,
+      })).toThrow()
+    }
 
     for (const persistedReadConcurrency of [0, Number.MAX_SAFE_INTEGER + 1]) {
       expect(() => new SqliteSessionQueryEngine.Config({
@@ -714,6 +731,8 @@ describe('SQLite session search', () => {
       { path: ':memory:', persistedReadConcurrency: Number.MAX_SAFE_INTEGER + 1 },
       { path: ':memory:', preparedSessionCacheSize: 0 },
       { path: ':memory:', preparedSessionCacheSize: Number.MAX_SAFE_INTEGER + 1 },
+      { path: ':memory:', maxIndexedSessionBytes: 0 },
+      { path: ':memory:', maxIndexedSessionBytes: Number.MAX_SAFE_INTEGER + 1 },
       { path: ':memory:', defaultLimit: 3, maxLimit: 2 },
       { path: ':memory:', openAt: 'later' },
       { path: ':memory:', journalMode: 'memory' },
@@ -1876,5 +1895,146 @@ describe('SQLite schema, cancellation, and real persistence integration', () => 
     expect(openB).toHaveBeenCalledTimes(1)
     await searchB.dispose()
     await persistenceB.dispose()
+  })
+})
+
+describe('SQLite bounded index build', () => {
+  it('skips a persisted session above maxIndexedSessionBytes, warns once, and indexes the rest', async () => {
+    const oversized = header('oversized-session')
+    const indexed = header('indexed-session')
+    TestPersistence.reset([
+      { meta: oversized, events: messageEvents('oversized needle') },
+      { meta: indexed, events: messageEvents('indexed needle') },
+    ])
+    TestPersistence.sizes.set(oversized.id, 4096)
+    TestPersistence.sizes.set(indexed.id, 16)
+    const ctx = await liveContext({ path: ':memory:', maxIndexedSessionBytes: 64 })
+    await ctx.plugin(TestPersistence)
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
+
+    const first = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect(first.items.map(item => item.header.id)).toEqual([indexed.id])
+    expect(TestPersistence.reads.get(oversized.id)).toBeUndefined()
+    expect(TestPersistence.reads.get(indexed.id)).toBe(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toContain(oversized.id)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('maxIndexedSessionBytes')
+
+    await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(TestPersistence.reads.get(oversized.id)).toBeUndefined()
+    expect(TestPersistence.reads.get(indexed.id)).toBe(1)
+    warn.mockRestore()
+  })
+
+  it('keeps the sessions committed before a later observation failure', async () => {
+    const committed = header('committed-session')
+    const failing = header('failing-session')
+    TestPersistence.reset([
+      { meta: committed, events: messageEvents('committed needle') },
+      { meta: failing, events: messageEvents('failing needle') },
+    ])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    TestPersistence.readEffect = (entry) => {
+      if (entry.meta.id === committed.id) TestPersistence.failure = new Error('second read failed')
+    }
+
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
+    expect(TestPersistence.reads.get(committed.id)).toBe(1)
+    expect(TestPersistence.reads.get(failing.id)).toBe(1)
+
+    TestPersistence.failure = undefined
+    const page = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect([...page.items.map(item => item.header.id)].sort()).toEqual([committed.id, failing.id].sort())
+    // The committed row was not read again; only the session that failed before was.
+    expect(TestPersistence.reads.get(committed.id)).toBe(1)
+    expect(TestPersistence.reads.get(failing.id)).toBe(2)
+  })
+
+  it('reports a failed persisted session commit as an index failure and indexes it on retry', async () => {
+    TestPersistence.reset()
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const db = (ctx.sessionQuery as unknown as { _db: DatabaseSync })._db
+    TestPersistence.set({ meta: header('commit-failure'), events: messageEvents('commit needle') })
+    db.exec('PRAGMA query_only = ON')
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_INDEX_FAILED'))
+    db.exec('PRAGMA query_only = OFF')
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+      .resolves.toMatchObject({ items: [{ header: { id: 'commit-failure' } }] })
+  })
+
+  it('keeps a committed persisted session after a later live write fails', async () => {
+    TestPersistence.reset()
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const live = ctx.sessions.create(SessionId('live-after-commit'), { seed: messageEvents('live needle') })
+    await ctx.sessionQuery.searchEvents({ sessionId: live.id, query: 'needle' })
+    const db = (ctx.sessionQuery as unknown as { _db: DatabaseSync })._db
+
+    const durable = header('persisted-then-live')
+    TestPersistence.set({ meta: durable, events: messageEvents('persisted needle') })
+    live.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'appended needle' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    let listCalls = 0
+    TestPersistence.listEffect = () => {
+      listCalls += 1
+      if (listCalls === 2) db.exec('PRAGMA query_only = ON')
+    }
+
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_INDEX_FAILED'))
+
+    TestPersistence.listEffect = undefined
+    db.exec('PRAGMA query_only = OFF')
+    const recovered = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect(recovered.items.map(item => item.header.id)).toContain(durable.id)
+    // The session committed before the failed live write was not read again.
+    expect(TestPersistence.reads.get(durable.id)).toBe(1)
+  })
+
+  it('reuses one live index row while a live session is unchanged and refreshes it after an append', async () => {
+    TestPersistence.reset()
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const live = ctx.sessions.create(SessionId('live-fingerprint'), { seed: messageEvents('alpha needle') })
+    const db = (ctx.sessionQuery as unknown as { _db: DatabaseSync })._db
+    const liveGeneration = (): number => (
+      db.prepare('SELECT generation FROM temp.live_sessions WHERE id = ?').get(live.id) as { generation: number }
+    ).generation
+
+    await ctx.sessionQuery.searchEvents({ sessionId: live.id, query: 'needle' })
+    const first = liveGeneration()
+    await ctx.sessionQuery.searchEvents({ sessionId: live.id, query: 'needle' })
+    expect(liveGeneration()).toBe(first)
+
+    live.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'beta needle' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    await ctx.sessionQuery.searchEvents({ sessionId: live.id, query: 'needle' })
+    expect(liveGeneration()).toBeGreaterThan(first)
+  })
+
+  it('builds a live fingerprint without serializing the whole session log into one string', async () => {
+    TestPersistence.reset([{ meta: header('persisted-serialization'), events: messageEvents('persisted needle') }])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    ctx.sessions.create(SessionId('live-serialization'), { seed: messageEvents('live needle') })
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    } finally {
+      stringify.mockRestore()
+    }
+    const wholeLogCalls = stringify.mock.calls.filter(([value]) => {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+      const record = value as Record<string, unknown>
+      return 'header' in record && Array.isArray(record.events)
+    })
+    expect(wholeLogCalls).toEqual([])
   })
 })

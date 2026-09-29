@@ -81,6 +81,8 @@ export const SESSION_QUERY_SQLITE_DEFAULT_LIMIT = 20
 export const SESSION_QUERY_SQLITE_MAX_LIMIT = 100
 /** Default maximum snippet length in Unicode code points. */
 export const SESSION_QUERY_SQLITE_SNIPPET_CHARS = 240
+/** Default largest persisted log artifact, in bytes, that one index build reads. */
+export const SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES = 32 * 1024 * 1024
 
 // One transient source change gets a retry; repeated churn fails rather than monopolizing the queue.
 const STABLE_OBSERVATION_ATTEMPTS = 2
@@ -116,6 +118,14 @@ export interface Config extends SessionQueryConfig {
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
   preparedSessionCacheSize?: number
+  /**
+   * Largest persisted log artifact, in bytes, this index reads into memory.
+   * Sessions above it stay out of full-text search and are reported once
+   * through `ctx.logger.warn`; a backend that omits
+   * `SessionPersistenceSnapshot.sizeBytes` is indexed without this bound.
+   * Defaults to 32 MiB.
+   */
+  maxIndexedSessionBytes?: number
 }
 
 interface ResolvedConfig {
@@ -128,19 +138,24 @@ interface ResolvedConfig {
   readWindowMax: number
   persistedReadConcurrency: number
   preparedSessionCacheSize: number
+  maxIndexedSessionBytes: number
 }
 
 interface ObservedSession {
   header: SessionHeader
   inheritedEventCount: SessionLogOffset
   documents: SessionEventSearchDocument[]
+}
+
+interface ObservedLiveSession extends ObservedSession {
   fingerprint: string
 }
 
 interface ObservedPersistedSession {
   header: SessionHeader
   revision: SessionPersistenceRevision
-  loaded?: ObservedSession
+  /** Physical artifact size the persistence snapshot reported, when the backend provides it. */
+  sizeBytes?: number
 }
 
 interface PersistenceBinding {
@@ -151,7 +166,7 @@ interface PersistenceBinding {
 interface Observation {
   persistenceBinding: PersistenceBinding
   persisted: Map<SessionId, ObservedPersistedSession>
-  live: Map<SessionId, ObservedSession>
+  live: Map<SessionId, ObservedLiveSession>
 }
 
 interface IndexedPersistedRow {
@@ -221,6 +236,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       .min(1)
       .max(Number.MAX_SAFE_INTEGER)
       .default(SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE),
+    maxIndexedSessionBytes: z.number()
+      .step(1)
+      .min(1)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES),
   })
 
   /** Validated and defaulted backend configuration. */
@@ -238,6 +258,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private _closed = false
   private _closePromise: Promise<void> | undefined
   private readonly _optionalPersistenceFiber: Fiber
+  private readonly _warnedSkips = new Set<SessionId>()
 
   constructor(ctx: Context, config: Config) {
     // The assignment expression resolves before the base constructor can
@@ -415,14 +436,43 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     ).all() as unknown as IndexedLiveRow[]
     const persistedById = new Map(persistedRows.map(row => [row.id as SessionId, row]))
     const liveById = new Map(liveRows.map(row => [row.id as SessionId, row]))
-    const observation = await this._observeStable(persistedById, signal)
+
+    const baseGeneration = this._mainGeneration()
+    // The commit callback runs inside `_observeStable`, so the state it advances
+    // is held on one mutable object the caller can still read afterwards.
+    const staged: { generation: number; commits: number; wrote: boolean } = {
+      generation: baseGeneration,
+      commits: 0,
+      wrote: false,
+    }
+    let durableGeneration = 0
+    // Every changed persisted session commits in its own transaction, so a first
+    // build over a large history never retains every extracted document at once.
+    // All of them carry the same advanced generation, so a build that stops early
+    // still invalidates cursors taken over the older corpus.
+    const commitPersisted = (entry: ObservedPersistedSession, observed: ObservedSession): void => {
+      if (staged.commits === 0) staged.generation = baseGeneration + 1
+      this._commitPersistedSession(observed, entry.revision, staged.generation)
+      staged.commits += 1
+      staged.wrote = true
+    }
+    let observation: Observation
+    try {
+      observation = await this._observeStable(persistedById, signal, commitPersisted)
+    } catch (error: unknown) {
+      if (staged.wrote) this._retireGeneration(staged.generation)
+      throw error
+    }
     assertNotAborted(signal)
-    const persistentChanges = observation.persistenceBinding.service === undefined
-      ? []
-      : [...observation.persisted.values()].filter(entry => entry.loaded !== undefined)
     const persistentDeletes = observation.persistenceBinding.service === undefined
       ? []
       : persistedRows.filter(row => !observation.persisted.has(row.id as SessionId))
+    if (staged.commits > 0) durableGeneration = staged.generation
+    if (persistentDeletes.length > 0) {
+      staged.generation = Math.max(staged.generation, baseGeneration + 1)
+      durableGeneration = Math.max(durableGeneration, staged.generation)
+      staged.wrote = true
+    }
     const liveChanges = [...observation.live.values()].filter((entry) => {
       const indexed = liveById.get(entry.header.id)
       const persisted = observation.persisted.has(entry.header.id) ? 1 : 0
@@ -431,16 +481,10 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const liveDeletes = liveRows.filter(row => !observation.live.has(row.id as SessionId))
     const pointerChanged = this._lastPersistenceIdentity !== undefined
       && this._lastPersistenceIdentity !== observation.persistenceBinding.identity
-    const hasWrites = persistentChanges.length > 0
-      || persistentDeletes.length > 0
-      || liveChanges.length > 0
-      || liveDeletes.length > 0
 
-    let nextMainGeneration = this._mainGeneration()
     let nextLocalGeneration = this._localGeneration
-    if (persistentChanges.length > 0 || persistentDeletes.length > 0) nextMainGeneration += 1
     const liveReplacements = liveChanges.map((entry) => {
-      nextLocalGeneration = Math.max(nextLocalGeneration, nextMainGeneration) + 1
+      nextLocalGeneration = Math.max(nextLocalGeneration, staged.generation) + 1
       return {
         entry,
         generation: nextLocalGeneration,
@@ -448,25 +492,25 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       }
     })
 
+    const hasWrites = persistentDeletes.length > 0
+      || liveChanges.length > 0
+      || liveDeletes.length > 0
     if (hasWrites) {
       let began = false
       try {
         db.exec('BEGIN IMMEDIATE')
         began = true
         for (const row of persistentDeletes) this._deleteSession('persisted', row.id as SessionId)
-        for (const entry of persistentChanges) {
-          /* v8 ignore next -- observation loads every entry whose revision differs */
-          if (entry.loaded === undefined) throw new Error(`missing loaded revision for session "${entry.header.id}"`)
-          this._replacePersistedSession(entry.loaded, entry.revision, nextMainGeneration)
-        }
-        if (persistentChanges.length > 0 || persistentDeletes.length > 0) {
-          db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(nextMainGeneration)
+        if (persistentDeletes.length > 0) {
+          db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(staged.generation)
         }
         for (const row of liveDeletes) this._deleteSession('live', row.id as SessionId)
         for (const { entry, generation, persisted } of liveReplacements) {
           this._replaceLiveSession(entry, generation, persisted)
         }
         db.exec('COMMIT')
+        durableGeneration = Math.max(durableGeneration, staged.generation)
+        staged.wrote = true
       } catch (error: unknown) {
         /* v8 ignore next -- a BEGIN failure has no transaction to roll back; the common wrapper still reports it. */
         if (began) {
@@ -477,6 +521,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
             // The original SQLite failure remains the actionable cause.
           }
         }
+        if (staged.wrote) this._retireGeneration(durableGeneration)
         throw new SessionQueryError(
           `session-search reconciliation failed: ${errorMessage(error)}`,
           'SESSION_QUERY_INDEX_FAILED',
@@ -485,16 +530,26 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       }
     }
 
-    if (hasWrites || pointerChanged) this._globalGeneration += 1
+    if (staged.wrote || pointerChanged) this._retireGeneration(durableGeneration)
     if (pointerChanged) this._persistenceEpoch += 1
     this._localGeneration = nextLocalGeneration
     this._lastPersistenceIdentity = observation.persistenceBinding.identity
     return observation.persistenceBinding
   }
 
+  /**
+   * Observe one stable live-preferred corpus snapshot, handing each changed
+   * persisted session to `commit` as soon as its log is read so a large first
+   * build never retains every changed session's documents at once.
+   * @param indexed - indexed persisted rows read before this observation.
+   * @param signal - optional cancellation observed between steps.
+   * @param commit - writes one observed persisted session under its revision.
+   * @returns the stable persistence binding, listed persisted snapshots, and live observations.
+   */
   private async _observeStable(
     indexed: ReadonlyMap<SessionId, IndexedPersistedRow>,
     signal: AbortSignal | undefined,
+    commit: (entry: ObservedPersistedSession, observed: ObservedSession) => void,
   ): Promise<Observation> {
     for (let attempt = 0; attempt < STABLE_OBSERVATION_ATTEMPTS; attempt += 1) {
       assertNotAborted(signal)
@@ -518,11 +573,15 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
             // the live-membership retry below makes the returned observation
             // live-preferred.
             if (initiallyLive.has(entry.header.id) || this.ctx.sessions.get(entry.header.id) !== undefined) continue
+            if (entry.sizeBytes !== undefined && entry.sizeBytes > this.config.maxIndexedSessionBytes) {
+              this._noteSkippedSession(entry, entry.sizeBytes)
+              continue
+            }
             assertNotAborted(signal)
             const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
             assertNotAborted(signal)
             assertSessionHeadersCompatible(entry.header, loaded.header)
-            entry.loaded = observeSession(loaded.header, loaded.inheritedEventCount, loaded.events)
+            commit(entry, observeSession(loaded.header, loaded.inheritedEventCount, loaded.events))
           }
           assertNotAborted(signal)
           const afterSnapshots = await persistence.list(listOptions)
@@ -545,7 +604,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
           )
         }
       }
-      const live = new Map<SessionId, ObservedSession>()
+      const live = new Map<SessionId, ObservedLiveSession>()
       for (const session of this.ctx.sessions.list()) {
         const observed = observeLive(session)
         const durable = persisted.get(session.id)
@@ -613,7 +672,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
   }
 
-  private _replaceLiveSession(entry: ObservedSession, generation: number, persisted: boolean): void {
+  private _replaceLiveSession(entry: ObservedLiveSession, generation: number, persisted: boolean): void {
     this._deleteSession('live', entry.header.id)
     const db = this._requireDb()
     db.prepare(`
@@ -642,6 +701,59 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         Array.from(text).length,
       )
     }
+  }
+
+  /**
+   * Commit one changed persisted session together with the main generation it
+   * advanced to, so a large first build keeps durable progress instead of one
+   * all-or-nothing transaction.
+   * @param entry - the observed session to index.
+   * @param revision - the persistence revision the observation came from.
+   * @param generation - the main generation the committed corpus claims.
+   */
+  private _commitPersistedSession(
+    entry: ObservedSession,
+    revision: SessionPersistenceRevision,
+    generation: number,
+  ): void {
+    const db = this._requireDb()
+    let began = false
+    try {
+      db.exec('BEGIN IMMEDIATE')
+      began = true
+      this._replacePersistedSession(entry, revision, generation)
+      db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(generation)
+      db.exec('COMMIT')
+    } catch (error: unknown) {
+      /* v8 ignore next -- a BEGIN failure has no transaction to roll back; the common wrapper still reports it. */
+      if (began) {
+        /* v8 ignore next 5 -- ROLLBACK failure requires a SQLite double fault; the original failure remains actionable. */
+        try {
+          db.exec('ROLLBACK')
+        } catch {
+          // The original SQLite failure remains the actionable cause.
+        }
+      }
+      throw new SessionQueryError(
+        `session-search reconciliation failed: ${errorMessage(error)}`,
+        'SESSION_QUERY_INDEX_FAILED',
+        { cause: error },
+      )
+    }
+  }
+
+  /** Advance the in-memory cursor generation past a durable write, even when reconciliation then fails. */
+  private _retireGeneration(generation: number): void {
+    this._globalGeneration = Math.max(this._globalGeneration + 1, generation)
+  }
+
+  /** Report and remember one oversized session, so it is never held out of search silently. */
+  private _noteSkippedSession(entry: ObservedPersistedSession, sizeBytes: number): void {
+    if (this._warnedSkips.has(entry.header.id)) return
+    this._warnedSkips.add(entry.header.id)
+    this.ctx.logger.warn(
+      `session search: session "${entry.header.id}" stores ${String(sizeBytes)} bytes, above maxIndexedSessionBytes (${String(this.config.maxIndexedSessionBytes)}); its history stays out of full-text search until the limit is raised`,
+    )
   }
 
   private _querySessions(
@@ -868,26 +980,53 @@ function selectedDocumentsParams(query: string, persistenceVisible: boolean): Ar
   ]
 }
 
-function observeLive(session: Session): ObservedSession {
+function observeLive(session: Session): ObservedLiveSession {
   // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-  return observeSession(session.header, session.inheritedEventCount, session.snapshotEvents())
+  const observed = observeSession(session.header, session.inheritedEventCount, session.snapshotEvents())
+  return { ...observed, fingerprint: fingerprintObservedSession(observed) }
 }
 
+/**
+ * Project one complete event log into a detached header and its searchable
+ * documents. Event values are read here and never retained, so the caller's
+ * array needs no defensive copy; the header is cloned because callers keep it
+ * past the read handle that produced it.
+ * @param header - the session header to detach.
+ * @param inheritedEventCount - exact fork-inherited event count paired with `header`.
+ * @param events - complete contiguous event log.
+ * @returns the observation shared by live and persisted sources.
+ */
 function observeSession(
   header: SessionHeader,
   inheritedEventCount: SessionLogOffset,
   events: readonly SessionEvent[],
 ): ObservedSession {
   const detachedHeader = structuredClone(header)
-  const detachedEvents = events.map(event => structuredClone(event))
   return {
     header: detachedHeader,
     inheritedEventCount,
-    documents: buildSessionEventSearchDocuments(detachedHeader.id, detachedEvents),
-    fingerprint: createHash('sha256')
-      .update(JSON.stringify({ header: detachedHeader, inheritedEventCount, events: detachedEvents }))
-      .digest('base64url'),
+    documents: buildSessionEventSearchDocuments(detachedHeader.id, events),
   }
+}
+
+/**
+ * Hash the searchable projection of one live observation in bounded memory.
+ * One `JSON.stringify` over a long session's whole log can exceed the engine's
+ * maximum string length, and only derived documents and header fields can
+ * change what the index searches.
+ * @param observed - the observation to fingerprint.
+ * @returns a digest that changes whenever that session's indexed corpus would.
+ */
+function fingerprintObservedSession(observed: ObservedSession): string {
+  const hash = createHash('sha256')
+  hash.update(JSON.stringify(observed.header))
+  hash.update(`\u0000${observed.inheritedEventCount}\u0000`)
+  for (const document of observed.documents) {
+    hash.update(
+      `${document.seq}\u0000${document.type}\u0000${document.time}\u0000${document.surface}\u0000${document.text}\u0000`,
+    )
+  }
+  return hash.digest('base64url')
 }
 
 function materializePersistenceSnapshots(
@@ -903,7 +1042,9 @@ function materializePersistenceSnapshots(
     if (result.has(header.id)) {
       throw new Error(`persistence listed duplicate session "${header.id}"`)
     }
-    result.set(header.id, { header, revision: snapshot.revision })
+    result.set(header.id, snapshot.sizeBytes === undefined
+      ? { header, revision: snapshot.revision }
+      : { header, revision: snapshot.revision, sizeBytes: snapshot.sizeBytes })
   }
   return result
 }
@@ -1030,6 +1171,8 @@ function resolveConfig(config: Config): ResolvedConfig {
       ?? SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY,
     preparedSessionCacheSize: config.preparedSessionCacheSize
       ?? SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE,
+    maxIndexedSessionBytes: config.maxIndexedSessionBytes
+      ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES,
   }
   if (typeof resolved.path !== 'string' || resolved.path.trim().length === 0) {
     throw invalidConfig('path must not be blank')
@@ -1053,6 +1196,12 @@ function resolveConfig(config: Config): ResolvedConfig {
     || resolved.preparedSessionCacheSize < 1
   ) {
     throw invalidConfig('preparedSessionCacheSize must be a positive safe integer')
+  }
+  if (
+    !Number.isSafeInteger(resolved.maxIndexedSessionBytes)
+    || resolved.maxIndexedSessionBytes < 1
+  ) {
+    throw invalidConfig('maxIndexedSessionBytes must be a positive safe integer')
   }
   if (resolved.defaultLimit > resolved.maxLimit) {
     throw invalidConfig('defaultLimit must be less than or equal to maxLimit')

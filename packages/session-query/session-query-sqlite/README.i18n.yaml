@@ -21,8 +21,8 @@
   en: d77054a6e8023089
   zh: d44f9a5cd54dd43a
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/minimal-configuration:
-  en: 1c9d4d7e60b93c65
-  zh: b55bc598768398d3
+  en: e08367e2ef19c624
+  zh: 3a0427a9c942be70
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/search-behavior:
   en: 746bd842a7b9c157
   zh: 2515443f5d3f6656
@@ -36,14 +36,14 @@
   en: 1b4ba96f994a361d
   zh: 50148b7af190aa0c
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/design-philosophy:
-  en: 97d8f71fda5ed9b6
-  zh: fe1d0bd886dc2437
+  en: 952e4f7cfb275c24
+  zh: 3234715e81b7664a
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/source-map:
   en: 49f5cc363a886430
   zh: f0e035cc2dc8d513
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/index-lifecycle:
-  en: 3a99cf9f8f64ec0e
-  zh: 40585b4764282881
+  en: fcc543163f3d0057
+  zh: 3102adc620a6e92e
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/schema-ownership:
   en: cb1e6861a47a618c
   zh: 18863cdd4986f4b7
@@ -57,8 +57,8 @@
   en: ca75c51c89c2c9b0
   zh: f57cc48a1b5cbfa9
 /deepseek-ai-dsh-session-query-sqlite/known-limitations-and-deferred-work:
-  en: 9be1b4a66f06c413
-  zh: 39b29034f3cc08b1
+  en: d1eea4fc07f45527
+  zh: b6c22f5b3c88a02c
 /deepseek-ai-dsh-session-query-sqlite/known-limitations-and-deferred-work/dev-note:
   en: d2f0d68fe29fb750
   zh: 323d21ee73a9e3f6
