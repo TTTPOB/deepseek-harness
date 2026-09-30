@@ -343,8 +343,129 @@ jobs:
           gh release create "$tag" deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork1.tgz SHA256SUMS \
             --verify-tag --title "$tag" --latest \
             --notes 'Only @deepseek-ai/dsh-session-query-sqlite advances to 0.1.7-rc.2-fork1. Keep the five existing DSH fork overrides, Pi AI fork1, official CLI/Web, and existing independent plugins unchanged. Replace only the @deepseek-ai/dsh-session-query-sqlite pnpm global override with this tarball, then run pnpm global add for @deepseek-ai/dsh@0.1.7-rc.2 using the existing installation procedure. This fork bounds a first index build with ctx.logger.warn reporting any stored session above maxIndexedSessionBytes instead of failing the build, and evicts a row once its stored log crosses that bound. The isolated smoke checks installed dependency resolution, built-entry import, the configured default bound, and schema rejection of an out-of-range bound; it does not verify Loader activation. This release contains no other package tarballs.'
+  session-index-fork4:
+    if: github.event_name == 'push' && github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork4'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: daily-driver-v0.1.7-rc.2-fork4
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          version: 11.24.0
+          package_json_file: packages/session-query/session-query-sqlite/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify session-index release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" = push ]]; then
+            test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork4
+          fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/tags/daily-driver-v0.1.7-rc.2-fork4)"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          const version = path => JSON.parse(readFileSync(path, 'utf8')).version
+          assert.equal(version('apps/cli/package.json'), '0.1.7-rc.2')
+          assert.equal(version('packages/bundle/web-app/package.json'), '0.1.7-rc.2')
+          for (const [path, expected] of [
+            ['session-query/session-query-sqlite', '0.1.7-rc.2-fork2'],
+            ['session/session-persistence-jsonl', '0.1.7-rc.2-fork1'],
+            ['session/session-persistence', '0.1.7-rc.2'],
+            ['core/session', '0.1.7-rc.2'],
+            ['session-query/session-query', '0.1.7-rc.2'],
+            ['subagent/subagent', '0.1.7-rc.2-fork2'],
+            ['llm/llm-pi-ai', '0.1.7-rc.2-fork1'],
+            ['mcp/mcp-client', '0.1.7-rc.2-fork1'],
+            ['core/agent', '0.1.7-rc.2-fork1'],
+            ['preset/agent-preset-registry', '0.1.7-rc.2-fork1'],
+          ]) assert.equal(version(`packages/${path}/package.json`), expected, path)
+          NODE
+          git merge-base --is-ancestor refs/tags/daily-driver-v0.1.7-rc.2-fork3 HEAD
+      - name: Install source with pinned Pi fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/daily-driver
+          gh release download "$PI_RELEASE" --repo TTTPOB/deepseek-harness \
+            --pattern 'earendil-works-pi-ai-0.85.1-fork1.tgz' --dir dist/daily-driver
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const path = 'pnpm-workspace.yaml'
+          const source = readFileSync(path, 'utf8')
+          const marker = '\npeerDependencyRules:'
+          if (!source.includes(marker)) throw new Error('Missing workspace override insertion point')
+          writeFileSync(path, source.replace(marker, "\n  '@earendil-works/pi-ai': 'file:dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz'\n\nblockExoticSubdeps: false\n" + marker)
+            .replace("  '@earendil-works/pi-ai@0.85.1': patches/@earendil-works__pi-ai@0.85.1.patch\n", ''))
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+          manifest.packageManager = 'pnpm@11.24.0'
+          writeFileSync('package.json', JSON.stringify(manifest, null, 2) + '\n')
+          NODE
+          actual_pnpm=$(pnpm --version)
+          echo "Release pnpm: $actual_pnpm"
+          test "$actual_pnpm" = 11.24.0
+          pnpm install --no-frozen-lockfile
+      - name: Run focused session-index regression
+        run: |
+          pnpm run build:native-system
+          pnpm exec vitest run packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts packages/session/session-persistence-jsonl/tests/jsonl.spec.ts packages/session-query
+      - name: Build and pack only the two session-index packages
+        run: |
+          pnpm exec tsc -b packages/typert/generator/tsconfig.json packages/session/session-persistence-jsonl/tsconfig.json packages/session-query/session-query-sqlite/tsconfig.json
+          for package in dsh-session-persistence-jsonl dsh-session-query-sqlite; do
+            pnpm exec tsdown -F "@deepseek-ai/$package" --env.DSH_BUILD_FACE host
+          done
+          pnpm --dir packages/session/session-persistence-jsonl pack --pack-destination "$PWD/dist/daily-driver"
+          pnpm --dir packages/session-query/session-query-sqlite pack --pack-destination "$PWD/dist/daily-driver"
+      - name: Smoke installed tarballs and record checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/smoke-session-index-fork4.mjs \
+            dist/daily-driver/deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz \
+            dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz
+          (cd dist/daily-driver && sha256sum \
+            deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz \
+            deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz > SHA256SUMS)
+      - name: Preserve verified session-index release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-index-fork4-release
+          path: |
+            dist/daily-driver/deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz
+            dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz
+            dist/daily-driver/SHA256SUMS
+          if-no-files-found: error
+      - name: Publish immutable session-index release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=daily-driver-v0.1.7-rc.2-fork4
+          current=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')
+          test "$current" = "$(git rev-parse HEAD)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; immutable releases are never overwritten." >&2
+            exit 1
+          fi
+          cd dist/daily-driver
+          gh release create "$tag" deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz SHA256SUMS \
+            --verify-tag --title "$tag" --latest \
+            --notes 'Only @deepseek-ai/dsh-session-persistence-jsonl advances to 0.1.7-rc.2-fork1 and @deepseek-ai/dsh-session-query-sqlite to 0.1.7-rc.2-fork2. Keep official CLI/Web, Session and persistence/query definitions, the other DSH/Pi overrides, and independent plugins unchanged. The paired forks use related-child stat revisions and lifecycle-dirty document reconciliation while retaining the index size bound. External persisted-file edits are discovered after query-service restart or source replacement, not in real time. Verify SHA256SUMS before replacing these two global overrides in a later maintenance window; this release does not apply them to the running Host. The isolated official-CLI smoke verifies actual resolution, built imports, shared Session/Cordis identity, unchanged search, and durable closing tails without launching a Host. This release contains only these two package tarballs and SHA256SUMS.'
   build:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -463,7 +584,7 @@ jobs:
           path: dist/daily-driver/*
           if-no-files-found: error
   publish:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     needs: build
     runs-on: ubuntu-24.04
     permissions:

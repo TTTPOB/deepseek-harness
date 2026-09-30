@@ -40,3 +40,17 @@ node scripts/upgrade-daily-driver.mjs --rollback /absolute/path/to/backup
 [Release workflow](../../.github/workflows/daily-driver-release.yml) 保留 fork1 的五包路线，并为 `daily-driver-v0.1.7-rc.2-fork2` tag 单独发布 subagent。fork2 Release 只有 `deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz` 和 `SHA256SUMS`：校验 checksum 后仅替换全局 `@deepseek-ai/dsh-subagent` override，其余四个 DSH fork1 override、Pi AI fork1、CLI/Web 与独立插件均不变。上面的升级脚本仍针对完整 fork1 资产，不能用于仅含 subagent 的 Release。fork2 job 运行 continuation 回归，在隔离 CLI 项目安装 tarball，检查构建入口 import 和实际 override 解析；这不等于 Loader 激活或已修改真实 Host 安装。
 
 Release workflow 还会为 `daily-driver-v0.1.7-rc.2-fork3` tag 单独发布 session-query。该 Release 只有 `deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork1.tgz` 和 `SHA256SUMS`：校验 checksum 后仅替换全局 `@deepseek-ai/dsh-session-query-sqlite` override，五个 DSH fork override、Pi AI fork1、CLI/Web 与独立插件均不变。它的 job 运行 `packages/session-query` 回归，在隔离 CLI 项目安装 tarball 检查构建入口 import 与实际 override 解析，并断言 `maxIndexedSessionBytes` 默认值与 schema 对越界值的拒绝；这不等于 Loader 激活或已修改真实 Host 安装。`build` 与 `publish` job 会跳过 fork2 与 fork3 两个 tag。产物超过 `maxIndexedSessionBytes` 的会话不进入全文搜索，并通过插件的 `ctx.logger.warn` 报告一次。
+
+## 4. 验证 fork4 Release，不应用到本机
+
+`daily-driver-v0.1.7-rc.2-fork4` 专用 job 只发布 `deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz`、`deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz` 与 `SHA256SUMS`；通用 `build` 与 `publish` job 跳过该 tag，fork2 与 fork3 路线不变。两个 fork 配合直属子来源的 stat 修订与生命周期 dirty 文档增量对账，保留索引大小上限；其他进程修改持久化文件不会实时触发发现，查询服务重启或持久化服务换源后才重新扫描元数据。官方 CLI/Web、会话与持久化/查询定义包、其他 overrides 和独立插件不变。
+
+下载并校验两个 tarball 后，在源码 checkout 运行可复用的[隔离 smoke](../../scripts/smoke-session-index-fork4.mjs)：
+
+```sh
+node scripts/smoke-session-index-fork4.mjs \
+  dist/daily-driver/deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz \
+  dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz
+```
+
+smoke 在临时安装副本中通过 pnpm overrides 搭配官方 `dsh@0.1.7-rc.2`，检查实际模块解析、构建入口、官方定义包与 Cordis 的共享身份、不变搜索及关闭末尾落盘，并清理副本；它不启动 Host，不改真实安装、profile 或会话。fork4 发布验证不应用到当前本机；日后明确维护窗口中仅替换这两个全局 overrides，不对该两包 Release 运行完整 fork1 升级脚本。

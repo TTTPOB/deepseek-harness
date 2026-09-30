@@ -40,3 +40,17 @@ For a non-Web profile include `--profile OTHER_EXISTING_PROFILE`; repeat any exp
 The [release workflow](../../.github/workflows/daily-driver-release.yml) retains the five-fork fork1 route and separately publishes a subagent-only `daily-driver-v0.1.7-rc.2-fork2` tag. The fork2 release contains only `deepseek-ai-dsh-subagent-0.1.7-rc.2-fork2.tgz` and `SHA256SUMS`: replace only the `@deepseek-ai/dsh-subagent` global override after verifying its checksum, leaving the other four DSH fork1 overrides, Pi AI fork1, CLI/Web, and independent plugins unchanged. The upgrade script above remains for the complete fork1 asset set; do not apply it to a subagent-only release. The fork2 job tests the continuation regression and installs the tarball in an isolated CLI project to verify built-entry import and actual override resolution, not Loader activation or a live Host installation.
 
 The workflow also publishes a session-query-only `daily-driver-v0.1.7-rc.2-fork3` tag. That release contains only `deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork1.tgz` and `SHA256SUMS`: verify the checksum, then replace only the `@deepseek-ai/dsh-session-query-sqlite` global override, leaving the five DSH fork overrides, Pi AI fork1, CLI/Web, and independent plugins unchanged. Its job runs the `packages/session-query` regression, installs the tarball in an isolated CLI project to check built-entry import and actual override resolution, and asserts the `maxIndexedSessionBytes` default plus schema rejection of an out-of-range bound. It does not verify Loader activation or a real Host installation, and the `build` and `publish` jobs skip both the fork2 and fork3 tags. Sessions whose stored log exceeds `maxIndexedSessionBytes` stay out of full-text search and are reported once through the plugin's `ctx.logger.warn`.
+
+## 4. Verify the fork4 release without applying it
+
+The dedicated `daily-driver-v0.1.7-rc.2-fork4` job publishes only `deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz`, `deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz`, and `SHA256SUMS`. Generic `build` and `publish` skip this tag; the fork2 and fork3 routes remain unchanged. The paired forks combine direct-child stat revisions with lifecycle-dirty document reconciliation while retaining the index size bound. Another process editing persisted files is not discovered in real time; query-service restart or persistence-source replacement rescans metadata. Official CLI/Web, Session and persistence/query definitions, other overrides, and independent plugins stay unchanged.
+
+After downloading and verifying both tarballs, run the reusable [isolated smoke](../../scripts/smoke-session-index-fork4.mjs) from the source checkout:
+
+```sh
+node scripts/smoke-session-index-fork4.mjs \
+  dist/daily-driver/deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz \
+  dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz
+```
+
+The smoke installs the overrides alongside official `dsh@0.1.7-rc.2` in a temporary project, checks actual module resolution, built imports, shared official definitions and Cordis identity, unchanged search, and durable closing tails, then removes that project. It does not launch a Host or change the real installation, profiles, or sessions. Fork4 release validation does not apply the artifacts to this machine; replace only these two global overrides in a later explicit maintenance window, and do not run the complete fork1 upgrade script against this two-package release.
