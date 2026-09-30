@@ -4,7 +4,7 @@
  * @module @deepseek-ai/dsh-session-query-sqlite
  */
 
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { DatabaseSync } from 'node:sqlite'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
@@ -84,8 +84,8 @@ export const SESSION_QUERY_SQLITE_SNIPPET_CHARS = 240
 /** Default largest persisted log artifact, in bytes, that one index build reads. */
 export const SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES = 32 * 1024 * 1024
 
-// One transient source change gets a retry; repeated churn fails rather than monopolizing the queue.
-const STABLE_OBSERVATION_ATTEMPTS = 2
+// One transient source replacement gets a retry; a flapping service fails rather than monopolizing the queue.
+const SOURCE_REPLACEMENT_ATTEMPTS = 2
 
 /** SQLite module/handle opening phase; `never` disables full-text search entirely. */
 export type OpenAt = 'startup' | 'first-search' | 'never'
@@ -165,10 +165,21 @@ interface PersistenceBinding {
 
 interface Observation {
   persistenceBinding: PersistenceBinding
+  /** Stored snapshots observed this round; also the header source for live/durable checks. */
   persisted: Map<SessionId, ObservedPersistedSession>
+  /** Stored sessions the index may serve after this round. */
+  members: Set<SessionId>
+  /** Persisted rows this round proved gone from storage or excluded by the size bound. */
+  removed: Set<SessionId>
+  /** Live projections applied this round. */
   live: Map<SessionId, ObservedLiveSession>
-  /** Stored sessions left out of the index because their artifact exceeded the configured bound. */
-  skipped: Set<SessionId>
+  /** Session ids that must keep a live row after this round. */
+  livePresent: Set<SessionId>
+  /** Dirty epochs captured when this observation started. */
+  liveEpochs: Map<SessionId, number>
+  storedEpochs: Map<SessionId, number>
+  /** Closing sessions whose live rows this round retires. */
+  closed: Set<SessionId>
 }
 
 interface IndexedPersistedRow {
@@ -216,7 +227,10 @@ interface CursorPayload {
   offset: number
 }
 
-/** Concrete SQLite owner of the combined `ctx.sessionQuery` service. */
+/**
+ * SQLite owner of `ctx.sessionQuery`, refreshed by local session lifecycle notifications.
+ * External persisted-file edits are discovered on the first search after service restart or source replacement.
+ */
 export class SqliteSessionQueryEngine extends SessionQueryEngine {
   static override inject = ['sessions']
 
@@ -261,6 +275,15 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private _closePromise: Promise<void> | undefined
   private readonly _optionalPersistenceFiber: Fiber
   private readonly _warnedSkips = new Set<string>()
+  /** Live sessions whose projection may be stale: every lifecycle notification bumps its epoch. */
+  private readonly _dirtyLive = new Map<SessionId, number>()
+  /** Stored sessions needing re-observation: their own handoff or a related child's change. */
+  private readonly _dirtyStored = new Map<SessionId, number>()
+  /** Final in-memory projections of disposed sessions whose stored handoff is still pending. */
+  private readonly _closing = new Map<SessionId, ObservedLiveSession>()
+  /** Whether routed session events may still be draining into storage behind us. */
+  private _writesPending = false
+  private _lifecycleEpoch = 0
 
   constructor(ctx: Context, config: Config) {
     // The assignment expression resolves before the base constructor can
@@ -280,6 +303,22 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     ctx.effect(() => {
       return () => this._optionalPersistenceFiber.dispose()
     }, 'sessionQuerySqlite.optionalPersistence')
+    // Dirty tracking observes the session lifecycle in place of per-search
+    // corpus enumeration; `never` deployments observe nothing at all.
+    if (this.config.openAt !== 'never') {
+      ctx.on('session/created', (session: Session) => {
+        this._noteLifecycle(session, false)
+      }, { global: true })
+      ctx.on('session/event', (session: Session) => {
+        this._noteLifecycle(session, true)
+      }, { global: true })
+      ctx.on('session/flush', (session: Session) => {
+        this._noteLifecycle(session, true)
+      }, { global: true })
+      ctx.on('session/disposed', (session: Session) => {
+        this._noteSessionDisposed(session)
+      }, { global: true })
+    }
     ctx.effect(() => async () => this.close(), 'sessionQuerySqlite.close')
   }
 
@@ -440,7 +479,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const liveById = new Map(liveRows.map(row => [row.id as SessionId, row]))
 
     const baseGeneration = this._mainGeneration()
-    // The commit callback runs inside `_observeStable`, so the state it advances
+    // The commit callback runs inside observation, so the state it advances
     // is held on one mutable object the caller can still read afterwards.
     const staged: { generation: number; commits: number; wrote: boolean } = {
       generation: baseGeneration,
@@ -462,21 +501,18 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
     let observation: Observation
     try {
-      observation = await this._observeStable(persistedById, signal, commitPersisted)
+      observation = await this._observeDirty(persistedById, signal, commitPersisted)
     } catch (error: unknown) {
       if (staged.wrote) this._retireGeneration(staged.generation)
       throw error
     }
     assertNotAborted(signal)
-    // The durable index must never keep serving a row the stable observation
-    // dropped: either the stored session is gone, its artifact crossed the
-    // bound, or a discarded attempt committed it and the stable attempt no
-    // longer lists it.
+    // Removed and oversized sessions cannot retain stale searchable rows.
     const indexedIds = new Set<SessionId>(persistedRows.map(row => row.id as SessionId))
     for (const id of committed) indexedIds.add(id)
     const persistentDeletes = observation.persistenceBinding.service === undefined
       ? []
-      : [...indexedIds].filter(id => !observation.persisted.has(id) || observation.skipped.has(id))
+      : [...indexedIds].filter(id => observation.removed.has(id))
     if (staged.commits > 0) durableGeneration = staged.generation
     if (persistentDeletes.length > 0) {
       staged.generation = Math.max(staged.generation, baseGeneration + 1)
@@ -485,10 +521,10 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
     const liveChanges = [...observation.live.values()].filter((entry) => {
       const indexed = liveById.get(entry.header.id)
-      const persisted = observation.persisted.has(entry.header.id) ? 1 : 0
+      const persisted = observation.members.has(entry.header.id) ? 1 : 0
       return indexed?.fingerprint !== entry.fingerprint || indexed.persisted !== persisted
     })
-    const liveDeletes = liveRows.filter(row => !observation.live.has(row.id as SessionId))
+    const liveDeletes = liveRows.filter(row => !observation.livePresent.has(row.id as SessionId))
     const pointerChanged = this._lastPersistenceIdentity !== undefined
       && this._lastPersistenceIdentity !== observation.persistenceBinding.identity
 
@@ -498,7 +534,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       return {
         entry,
         generation: nextLocalGeneration,
-        persisted: observation.persisted.has(entry.header.id),
+        persisted: observation.members.has(entry.header.id),
       }
     })
 
@@ -544,94 +580,137 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     if (pointerChanged) this._persistenceEpoch += 1
     this._localGeneration = nextLocalGeneration
     this._lastPersistenceIdentity = observation.persistenceBinding.identity
+    // Dirty entries survive unless this accepted round saw them unchanged: a
+    // notification during observation re-dirties the id for the next search.
+    for (const [id, epoch] of observation.liveEpochs) {
+      if (this._dirtyLive.get(id) === epoch) this._dirtyLive.delete(id)
+    }
+    for (const [id, epoch] of observation.storedEpochs) {
+      if (this._dirtyStored.get(id) === epoch) this._dirtyStored.delete(id)
+    }
+    for (const id of observation.closed) {
+      if (!this._dirtyLive.has(id)) this._closing.delete(id)
+    }
     return observation.persistenceBinding
   }
 
-  /**
-   * Observe one stable live-preferred corpus snapshot, handing each changed
-   * persisted session to `commit` as soon as its log is read so a large first
-   * build never retains every changed session's documents at once.
-   * @param indexed - indexed persisted rows read before this observation.
-   * @param signal - optional cancellation observed between steps.
-   * @param commit - writes one observed persisted session under its revision.
-   * @returns the stable persistence binding, listed persisted snapshots, and live observations.
-   */
-  private async _observeStable(
+  private _bumpDirty(target: Map<SessionId, number>, id: SessionId): void {
+    target.set(id, ++this._lifecycleEpoch)
+  }
+
+  private _noteLifecycle(session: Session, writes: boolean): void {
+    this._bumpDirty(this._dirtyLive, session.id)
+    this._bumpDirty(this._dirtyStored, session.id)
+    if (session.header.origin === 'subagent' && session.header.parentSession !== undefined) {
+      this._bumpDirty(this._dirtyStored, session.header.parentSession)
+    }
+    this._writesPending ||= writes
+  }
+
+  private _noteSessionDisposed(session: Session): void {
+    this._noteLifecycle(session, true)
+    if (this._persistenceBinding.service !== undefined) {
+      this._closing.set(session.id, observeLive(session, this._lifecycleEpoch))
+    }
+  }
+
+  /** Observe startup membership once, then only lifecycle-dirty sessions. */
+  private async _observeDirty(
     indexed: ReadonlyMap<SessionId, IndexedPersistedRow>,
     signal: AbortSignal | undefined,
     commit: (entry: ObservedPersistedSession, observed: ObservedSession) => void,
   ): Promise<Observation> {
-    for (let attempt = 0; attempt < STABLE_OBSERVATION_ATTEMPTS; attempt += 1) {
-      assertNotAborted(signal)
+    for (let attempt = 0; attempt < SOURCE_REPLACEMENT_ATTEMPTS; attempt += 1) {
       const persistenceBinding = this._persistenceBinding
       const persistence = persistenceBinding.service
-      const initiallyLive = new Set(this.ctx.sessions.list().map(session => session.id))
+      const full = this._lastPersistenceIdentity !== persistenceBinding.identity
+      const liveEpochs = new Map(this._dirtyLive)
+      const storedEpochs = new Map(this._dirtyStored)
+      const members = new Set(indexed.keys())
+      const removed = new Set<SessionId>()
+      const closed = new Set<SessionId>()
       let persisted = new Map<SessionId, ObservedPersistedSession>()
-      const skipped = new Set<SessionId>()
-      if (persistence !== undefined) {
-        try {
-          const canReuseIndexed = this._lastPersistenceIdentity === undefined
-            || this._lastPersistenceIdentity === persistenceBinding.identity
-          const listOptions = signal === undefined ? undefined : { signal }
-          const before = await persistence.list(listOptions)
-          assertNotAborted(signal)
-          persisted = materializePersistenceSnapshots(before)
+      try {
+        if (persistence !== undefined) {
+          if (this._writesPending) {
+            this._writesPending = false
+            try { await persistence.flush() } catch (error) {
+              this._writesPending = true
+              throw error
+            }
+          }
+          const options = signal === undefined ? undefined : { signal }
+          if (full) {
+            persisted = materializePersistenceSnapshots(await persistence.list(options))
+            for (const id of indexed.keys()) {
+              if (!persisted.has(id)) { members.delete(id); removed.add(id) }
+            }
+          } else {
+            for (const id of storedEpochs.keys()) {
+              assertNotAborted(signal)
+              const snapshot = await persistence.stat(id, options)
+              if (snapshot === undefined) { members.delete(id); removed.add(id) }
+              else {
+                for (const [key, entry] of materializePersistenceSnapshots([snapshot])) persisted.set(key, entry)
+              }
+            }
+          }
           for (const entry of persisted.values()) {
-            // Skip work already shadowed by a live owner. The cold read is
-            // non-mutating (interrupted turns are balanced in memory only), so
-            // an owner attaching after this check cannot cause side effects;
-            // the live-membership retry below makes the returned observation
-            // live-preferred.
-            if (initiallyLive.has(entry.header.id) || this.ctx.sessions.get(entry.header.id) !== undefined) continue
-            // The bound applies before the revision, so raising a session above
-            // it also evicts a row indexed while it was under it.
+            assertNotAborted(signal)
+            const id = entry.header.id
+            members.add(id)
+            if (this.ctx.sessions.get(id) !== undefined) continue
             if (entry.sizeBytes !== undefined && entry.sizeBytes > this.config.maxIndexedSessionBytes) {
               this._noteSkippedSession(entry, entry.sizeBytes)
-              skipped.add(entry.header.id)
+              members.delete(id)
+              removed.add(id)
+              closed.add(id)
               continue
             }
-            if (canReuseIndexed && indexed.get(entry.header.id)?.revision === entry.revision) continue
-            assertNotAborted(signal)
-            const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
-            assertNotAborted(signal)
-            assertSessionHeadersCompatible(entry.header, loaded.header)
-            commit(entry, observeSession(loaded.header, loaded.inheritedEventCount, loaded.events))
+            const reuse = (this._lastPersistenceIdentity === undefined && attempt === 0)
+              || this._lastPersistenceIdentity === persistenceBinding.identity
+            if (!reuse || indexed.get(id)?.revision !== entry.revision) {
+              const loaded = await readColdSessionLog(persistence, id, signal)
+              assertNotAborted(signal)
+              assertSessionHeadersCompatible(entry.header, loaded.header)
+              commit(entry, observeSession(loaded.header, loaded.inheritedEventCount, loaded.events))
+            }
+            closed.add(id)
           }
-          assertNotAborted(signal)
-          const afterSnapshots = await persistence.list(listOptions)
-          assertNotAborted(signal)
-          const after = materializePersistenceSnapshots(afterSnapshots)
-          if (!samePersistenceSnapshots(persisted, after)) continue
-          if (this._persistenceBinding !== persistenceBinding) continue
-        } catch (error: unknown) {
-          if (isAbort(error) || signal?.aborted) {
-            throw new SessionQueryError('session-search aborted', 'SESSION_QUERY_ABORTED', {
-              cause: error,
-            })
-          }
-          if (this._persistenceBinding !== persistenceBinding) continue
-          if (error instanceof SessionQueryError) throw error
-          throw new SessionQueryError(
-            `session-search persistence observation failed: ${errorMessage(error)}`,
-            'SESSION_QUERY_PERSISTENCE_FAILED',
-            { cause: error },
-          )
         }
+        assertNotAborted(signal)
+        if (this._persistenceBinding !== persistenceBinding) continue
+        const live = new Map<SessionId, ObservedLiveSession>()
+        const livePresent = new Set<SessionId>()
+        for (const session of this.ctx.sessions.list()) {
+          livePresent.add(session.id)
+          if (full || liveEpochs.has(session.id)) {
+            const observed = observeLive(session, liveEpochs.get(session.id) ?? 0)
+            const durable = persisted.get(session.id)
+            if (durable !== undefined) assertSessionHeadersCompatible(observed.header, durable.header)
+            live.set(session.id, observed)
+          }
+        }
+        for (const [id, observed] of this._closing) {
+          if (livePresent.has(id)) continue
+          if (closed.has(id) || removed.has(id)) { closed.add(id); continue }
+          livePresent.add(id)
+          live.set(id, observed)
+        }
+        if (this._persistenceBinding !== persistenceBinding) continue
+        return { persistenceBinding, persisted, members, removed, live, livePresent,
+          liveEpochs, storedEpochs, closed }
+      } catch (error: unknown) {
+        if (isAbort(error) || signal?.aborted) throw new SessionQueryError(
+          'session-search aborted', 'SESSION_QUERY_ABORTED', { cause: error })
+        if (this._persistenceBinding !== persistenceBinding) continue
+        if (error instanceof SessionQueryError) throw error
+        throw new SessionQueryError(
+          `session-search persistence observation failed: ${errorMessage(error)}`, 'SESSION_QUERY_PERSISTENCE_FAILED', { cause: error })
       }
-      const live = new Map<SessionId, ObservedLiveSession>()
-      for (const session of this.ctx.sessions.list()) {
-        const observed = observeLive(session)
-        const durable = persisted.get(session.id)
-        if (durable !== undefined) assertSessionHeadersCompatible(observed.header, durable.header)
-        live.set(session.id, observed)
-      }
-      if (!sameSessionIds(initiallyLive, live)) continue
-      return { persistenceBinding, persisted, live, skipped }
     }
-    throw new SessionQueryError(
-      'session-search persistence observation did not stabilize after one retry',
-      'SESSION_QUERY_PERSISTENCE_FAILED',
-    )
+    throw new SessionQueryError('session-search persistence source changed after one retry',
+      'SESSION_QUERY_PERSISTENCE_FAILED')
   }
 
   private _mainGeneration(): number {
@@ -657,64 +736,73 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     revision: SessionPersistenceRevision,
     generation: number,
   ): void {
-    this._deleteSession('persisted', entry.header.id)
     const db = this._requireDb()
     db.prepare(`
       INSERT INTO persisted_sessions
         (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, revision, generation)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET version=excluded.version, created_at=excluded.created_at,
+        cwd=excluded.cwd, parent_session=excluded.parent_session, seed_length=excluded.seed_length,
+        delegation_depth=excluded.delegation_depth, agent_preset=excluded.agent_preset,
+        revision=excluded.revision, generation=excluded.generation
     `).run(
       ...headerBindings(entry.header, entry.inheritedEventCount),
       revision,
       generation,
     )
-    const insert = db.prepare(`
-      INSERT INTO persisted_docs (text, session_id, seq, type, time, surface, codepoint_length)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `)
-    for (const document of entry.documents) {
-      const text = sanitizeFtsText(document.text)
-      insert.run(
-        text,
-        document.sessionId,
-        document.seq,
-        document.type,
-        document.time,
-        document.surface,
-        Array.from(text).length,
-      )
-    }
+    this._upsertDocuments('persisted', entry)
   }
 
   private _replaceLiveSession(entry: ObservedLiveSession, generation: number, persisted: boolean): void {
-    this._deleteSession('live', entry.header.id)
     const db = this._requireDb()
     db.prepare(`
       INSERT INTO temp.live_sessions
         (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, fingerprint, persisted, generation)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET version=excluded.version, created_at=excluded.created_at,
+        cwd=excluded.cwd, parent_session=excluded.parent_session, seed_length=excluded.seed_length,
+        delegation_depth=excluded.delegation_depth, agent_preset=excluded.agent_preset,
+        fingerprint=excluded.fingerprint, persisted=excluded.persisted, generation=excluded.generation
     `).run(
       ...headerBindings(entry.header, entry.inheritedEventCount),
       entry.fingerprint,
       persisted ? 1 : 0,
       generation,
     )
-    const insert = db.prepare(`
-      INSERT INTO temp.live_docs (text, session_id, seq, type, time, surface, codepoint_length)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `)
+    this._upsertDocuments('live', entry)
+  }
+
+  private _upsertDocuments(source: 'persisted' | 'live', entry: ObservedSession): void {
+    const db = this._requireDb()
+    const table = source === 'live' ? 'temp.live_docs' : 'persisted_docs'
+    const rows = db.prepare('SELECT rowid, seq, text, type, time, surface FROM ' + table
+      + ' WHERE session_id = ?').all(entry.header.id) as Array<{
+      rowid: number
+      seq: number
+      text: string
+      type: string
+      time: number
+      surface: string
+    }>
+    const existing = new Map(rows.map(row => [row.seq, row]))
+    const insert = db.prepare('INSERT INTO ' + table
+      + ' (text, session_id, seq, type, time, surface, codepoint_length) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    const update = db.prepare('UPDATE ' + table
+      + ' SET text=?, type=?, time=?, surface=?, codepoint_length=? WHERE rowid=?')
+    const remove = db.prepare('DELETE FROM ' + table + ' WHERE rowid=?')
     for (const document of entry.documents) {
       const text = sanitizeFtsText(document.text)
-      insert.run(
-        text,
-        document.sessionId,
-        document.seq,
-        document.type,
-        document.time,
-        document.surface,
-        Array.from(text).length,
-      )
+      const row = existing.get(document.seq)
+      existing.delete(document.seq)
+      if (row === undefined) {
+        insert.run(text, document.sessionId, document.seq, document.type,
+          document.time, document.surface, Array.from(text).length)
+      } else if (row.text !== text || row.type !== document.type
+        || row.time !== document.time || row.surface !== document.surface) {
+        update.run(text, document.type, document.time, document.surface, Array.from(text).length, row.rowid)
+      }
     }
+    for (const row of existing.values()) remove.run(row.rowid)
   }
 
   /**
@@ -995,10 +1083,10 @@ function selectedDocumentsParams(query: string, persistenceVisible: boolean): Ar
   ]
 }
 
-function observeLive(session: Session): ObservedLiveSession {
+function observeLive(session: Session, epoch: number): ObservedLiveSession {
   // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
   const observed = observeSession(session.header, session.inheritedEventCount, session.snapshotEvents())
-  return { ...observed, fingerprint: fingerprintObservedSession(observed) }
+  return { ...observed, fingerprint: String(epoch) }
 }
 
 /**
@@ -1024,26 +1112,6 @@ function observeSession(
   }
 }
 
-/**
- * Hash the searchable projection of one live observation in bounded memory.
- * One `JSON.stringify` over a long session's whole log can exceed the engine's
- * maximum string length, and only derived documents and header fields can
- * change what the index searches.
- * @param observed - the observation to fingerprint.
- * @returns a digest that changes whenever that session's indexed corpus would.
- */
-function fingerprintObservedSession(observed: ObservedSession): string {
-  const hash = createHash('sha256')
-  hash.update(JSON.stringify(observed.header))
-  hash.update(`\u0000${observed.inheritedEventCount}\u0000`)
-  for (const document of observed.documents) {
-    hash.update(
-      `${document.seq}\u0000${document.type}\u0000${document.time}\u0000${document.surface}\u0000${document.text}\u0000`,
-    )
-  }
-  return hash.digest('base64url')
-}
-
 function materializePersistenceSnapshots(
   snapshots: readonly SessionPersistenceSnapshot[],
 ): Map<SessionId, ObservedPersistedSession> {
@@ -1062,43 +1130,6 @@ function materializePersistenceSnapshots(
       : { header, revision: snapshot.revision, sizeBytes: snapshot.sizeBytes })
   }
   return result
-}
-
-function samePersistenceSnapshots(
-  before: ReadonlyMap<SessionId, ObservedPersistedSession>,
-  after: ReadonlyMap<SessionId, ObservedPersistedSession>,
-): boolean {
-  if (before.size !== after.size) return false
-  for (const [id, first] of before) {
-    const second = after.get(id)
-    if (
-      second === undefined
-      || first.revision !== second.revision
-      || !sameHeader(first.header, second.header)
-    ) return false
-  }
-  return true
-}
-
-function sameSessionIds(
-  before: ReadonlySet<SessionId>,
-  after: ReadonlyMap<SessionId, ObservedSession>,
-): boolean {
-  if (before.size !== after.size) return false
-  for (const id of before) {
-    if (!after.has(id)) return false
-  }
-  return true
-}
-
-function sameHeader(a: SessionHeader, b: SessionHeader): boolean {
-  return a.id === b.id
-    && a.createdAt === b.createdAt
-    && a.cwd === b.cwd
-    && a.parentSession === b.parentSession
-    && a.isSeeded === b.isSeeded
-    && (a.delegationDepth ?? 0) === (b.delegationDepth ?? 0)
-    && a.agentPreset === b.agentPreset
 }
 
 function rowHeader(row: SessionHeaderRow): SessionHeader {

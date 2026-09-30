@@ -1211,9 +1211,9 @@ describe('JsonlSessionPersistence: immutable format generations', () => {
       .rejects.toThrow(/released v0 physical header lacks required member "type"/)
   })
 
-  it('tracks a disappearing corpus member and propagates its storage faults in historical revisions', async () => {
+  it('tracks a disappearing related child and propagates its storage faults in historical revisions', async () => {
     const parent = meta('corpus-revision-parent', '/work')
-    const child = meta('corpus-revision-child', '/work')
+    const child = { ...meta('corpus-revision-child', '/work'), origin: 'subagent' as const, parentSession: parent.id }
     for (const header of [parent, child]) {
       const path = historicalLogPath(root, header.cwd, header.id)
       await mkdir(dirname(path), { recursive: true })

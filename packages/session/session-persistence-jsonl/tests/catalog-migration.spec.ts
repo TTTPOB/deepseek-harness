@@ -102,6 +102,15 @@ describe.each(['none', 'zstd'] as const)('historical catalog publication (%s)', 
     expect(await revision()).not.toBe(added)
   })
 
+  it('keeps historical revisions unchanged for unrelated session additions and appends', async () => {
+    const f = await fixture()
+    const revision = (await f.ctx.sessionPersistence.stat(f.parent))!.revision
+    await f.write('unrelated', [])
+    expect((await f.ctx.sessionPersistence.stat(f.parent))!.revision).toBe(revision)
+    await f.write('unrelated', [{ type: 'feedback/record', seq: 0, time: 3, data: {} }])
+    expect((await f.ctx.sessionPersistence.list()).find(row => row.header.id === f.parent)?.revision).toBe(revision)
+  })
+
   it('reports malformed native catalog data without migration terminology', async () => {
     const f = await fixture()
     await f.write(f.parent, [{ type: 'subagent/catalog', seq: 0, time: 1,

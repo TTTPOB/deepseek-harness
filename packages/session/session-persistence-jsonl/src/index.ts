@@ -170,6 +170,13 @@ interface ResolvedJsonlGeneration {
   readonly currentPath: string
 }
 
+/** One header-indexed Session directory carried by the shared directory catalog. */
+interface CatalogEntry {
+  readonly id: SessionId
+  readonly header: SessionHeader
+  readonly dir: string
+}
+
 /** One backend-owned historical preparation shared by its current callers. */
 interface MigrationPreparation {
   readonly sourcePath: string
@@ -266,6 +273,13 @@ class JsonlSessionPersistence extends SessionPersistence {
   private readonly coldLogMemo = new Map<SessionId, StoredLog>()
   /** One joinable decode/migration operation per selected historical Session file revision. */
   private readonly migrationPreparations = new Map<SessionId, MigrationPreparation>()
+  /**
+   * Shared directory catalog: one entry per discoverable Session directory,
+   * keyed by that directory. Historical related-source lookups reuse it across
+   * sessions instead of re-listing the corpus per old log.
+   */
+  private readonly artifactCatalog = new Map<string, CatalogEntry>()
+  private readonly catalogProjects = new Map<string, { revision: PersistenceRevision; dirs: string[] }>()
 
   constructor(ctx: Context, public config: Config) {
     super(ctx)
@@ -455,7 +469,7 @@ class JsonlSessionPersistence extends SessionPersistence {
       return {
         header,
         revision: selected.sourceVersion < SESSION_FORMAT_VERSION
-          ? SessionPersistenceRevision(`${fileRevision(identity)}:${await this.historicalCorpusRevision(options?.signal)}`)
+          ? SessionPersistenceRevision(`${fileRevision(identity)}:${await this.historicalChildrenRevision(id, options?.signal)}`)
           : fileRevision(identity),
         sizeBytes: Number(identity.size),
       }
@@ -481,8 +495,6 @@ class JsonlSessionPersistence extends SessionPersistence {
     // predate the scan), so create-to-list visibility never has a hole.
     const pending = [...this.tracker.pendingEntries()]
     const artifacts = await this.listArtifacts(signal)
-    const corpusRevision = artifacts.some(artifact => artifact.sourceVersion < SESSION_FORMAT_VERSION)
-      ? await this.historicalCorpusRevision(signal) : undefined
     for (const artifact of artifacts) {
       signal?.throwIfAborted()
       try {
@@ -492,7 +504,7 @@ class JsonlSessionPersistence extends SessionPersistence {
         snapshots.push({
           header: artifact.header,
           revision: artifact.sourceVersion < SESSION_FORMAT_VERSION
-            ? SessionPersistenceRevision(`${fileRevision(identity)}:${corpusRevision}`)
+            ? SessionPersistenceRevision(`${fileRevision(identity)}:${await this.historicalChildrenRevision(artifact.header.id, signal)}`)
             : fileRevision(identity),
           sizeBytes: Number(identity.size),
         })
@@ -629,8 +641,7 @@ class JsonlSessionPersistence extends SessionPersistence {
     let prepared: Awaited<ReturnType<typeof prepareJsonlMigration>>
     let validateRelatedSources: () => Promise<void>
     try {
-      const children = async () => (await this.listArtifacts(signal))
-        .filter(source => source.header.origin === 'subagent' && source.header.parentSession === id)
+      const children = async () => this.relatedChildSources(id, signal)
       const sources = await children()
       const related = await prepareCatalogFacts(id, sources, this.compression, signal)
       for (const failure of related.failures) {
@@ -1034,23 +1045,161 @@ class JsonlSessionPersistence extends SessionPersistence {
     return sources
   }
 
-  /** Historical logical events depend on the corpus, including members with unreadable headers. */
-  private async historicalCorpusRevision(signal?: AbortSignal): Promise<string> {
-    const paths = (await this.listGenerations(signal)).map(source => source.sourcePath).sort()
-    const hash = createHash('sha256')
-    for (const path of paths) {
-      signal?.throwIfAborted()
-      let revision: string
-      try {
-        revision = fileRevision(await stat(path, { bigint: true }))
-      } catch (error: unknown) {
-        if (!isENOENT(error)) throw error
-        revision = 'missing'
+  /**
+   * Revision token of one historical session's related-source dependencies:
+   * the physical generations stored in each direct subagent child's Session
+   * directory. The incoming migration of a historical log consumes exactly
+   * these children (see {@link relatedChildSources}), so unrelated sessions
+   * never move this token while any real child change does.
+   * @param parentId - historical session whose related sources are witnessed.
+   * @param signal - optional cancellation observed between directory reads.
+   * @returns a digest over sorted `[path, fileRevision]` child-generation entries.
+   */
+  private async historicalChildrenRevision(parentId: SessionId, signal?: AbortSignal): Promise<string> {
+    const entries: Array<[string, string]> = []
+    for (const child of await this.relatedChildren(parentId, signal)) {
+      for (const generation of await this.generationIdentities(child.dir, signal)) {
+        entries.push([generation.path, fileRevision(generation.identity)])
       }
-      hash.update(JSON.stringify([path, revision]))
+    }
+    entries.sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0)
+    const hash = createHash('sha256')
+    for (const entry of entries) {
+      signal?.throwIfAborted()
+      hash.update(JSON.stringify(entry))
     }
     signal?.throwIfAborted()
     return hash.digest('hex')
+  }
+
+  /**
+   * Resolve the header-indexed direct children of one parent through the
+   * shared directory catalog. This is the exact related-source set the
+   * historical migration consumes: subagent sessions whose stored header names
+   * the parent, discovered once per corpus change instead of per old session.
+   * @param parentId - parent whose related children are requested.
+   * @param signal - optional cancellation observed between directory reads.
+   * @returns catalog entries for every direct child, in no promised order.
+   */
+  private async relatedChildren(parentId: SessionId, signal?: AbortSignal): Promise<CatalogEntry[]> {
+    await this.refreshRelatedCatalog(signal)
+    const children: CatalogEntry[] = []
+    for (const entry of this.artifactCatalog.values()) {
+      if (entry.header.origin === 'subagent' && entry.header.parentSession === parentId) children.push(entry)
+    }
+    return children
+  }
+
+  /**
+   * Build the migration inputs for one parent's direct children: each child's
+   * currently selected generation paired with its own readable header. A child
+   * whose selected generation is missing or unreadable is left out exactly as
+   * the artifact listing leaves it out, so preparation and revision agree.
+   * @param parentId - parent whose related sources are requested.
+   * @param signal - optional cancellation forwarded through header reads.
+   * @returns header-indexed child sources for `prepareCatalogFacts`.
+   */
+  private async relatedChildSources(
+    parentId: SessionId,
+    signal?: AbortSignal,
+  ): Promise<Array<{ header: SessionHeader; path: string }>> {
+    const sources: Array<{ header: SessionHeader; path: string }> = []
+    for (const child of await this.relatedChildren(parentId, signal)) {
+      signal?.throwIfAborted()
+      const selected = await this.resolveGenerationInDirectory(child.dir, signal)
+      if (selected === undefined) continue
+      let header: SessionHeader | undefined
+      try {
+        header = await this.readGenerationHeader(selected, undefined, signal)
+      } catch (error: unknown) {
+        if (error instanceof SessionFormatUnsupportedError || error instanceof SessionPersistenceCorruptionError) continue
+        throw error
+      }
+      if (header === undefined) continue
+      if (header.id !== child.id
+        || header.origin !== 'subagent'
+        || header.parentSession !== parentId) continue
+      sources.push({ header, path: selected.sourcePath })
+    }
+    return sources
+  }
+
+  /**
+   * Stat every canonical generation file in one Session directory.
+   * @param dir - the Session directory to witness.
+   * @param signal - optional cancellation observed between stats.
+   * @returns each generation path with the physical identity the digest uses.
+   */
+  private async generationIdentities(
+    dir: string,
+    signal?: AbortSignal,
+  ): Promise<Array<{ path: string; identity: JsonlPhysicalIdentity }>> {
+    signal?.throwIfAborted()
+    let entries: Dirent[]
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch (error: unknown) {
+      if (isENOENT(error)) return []
+      throw error
+    }
+    const generations: Array<{ path: string; identity: JsonlPhysicalIdentity }> = []
+    for (const entry of entries) {
+      if (parseGenerationLogFilename(entry.name, this.oppositeCompression()) !== undefined) {
+        throw this.encodingMismatch(join(dir, entry.name))
+      }
+      if (parseGenerationLogFilename(entry.name, this.compression) === undefined) continue
+      const path = join(dir, entry.name)
+      try {
+        generations.push({ path, identity: await stat(path, { bigint: true }) })
+      } catch (error: unknown) {
+        if (!isENOENT(error)) throw error
+      }
+      signal?.throwIfAborted()
+    }
+    return generations
+  }
+
+  /**
+   * Bring the shared directory catalog up to date with Session directories
+   * created or removed since the last scan. Only newly discovered directories
+   * pay a header read, so one observation round serves every historical
+   * session's related-source lookups.
+   * @param signal - optional cancellation observed between directory reads.
+   */
+  private async refreshRelatedCatalog(signal?: AbortSignal): Promise<void> {
+    const seen = new Set<string>()
+    for (const project of await this.listProjectDirs(signal)) {
+      const revision = fileRevision(await stat(project, { bigint: true }))
+      let cached = this.catalogProjects.get(project)
+      if (cached?.revision !== revision) {
+        cached = { revision, dirs: await this.listSessionDirs(project, signal) }
+        this.catalogProjects.set(project, cached)
+      }
+      for (const dir of cached.dirs) {
+        signal?.throwIfAborted()
+        seen.add(dir)
+        if (this.artifactCatalog.has(dir)) continue
+        const selected = await this.resolveGenerationInDirectory(dir, signal)
+        if (selected === undefined) continue
+        let header: SessionHeader | undefined
+        try {
+          header = await this.readGenerationHeader(selected, undefined, signal)
+        } catch (error: unknown) {
+          if (error instanceof SessionFormatUnsupportedError || error instanceof SessionPersistenceCorruptionError) continue
+          throw error
+        }
+        if (header === undefined) continue
+        for (const existing of this.artifactCatalog.values()) {
+          if (existing.id === header.id) {
+            throw new Error(`duplicate JSONL session id "${header.id}" appears in multiple project directories`)
+          }
+        }
+        this.artifactCatalog.set(dir, { id: header.id, header, dir })
+      }
+    }
+    for (const dir of [...this.artifactCatalog.keys()]) {
+      if (!seen.has(dir)) this.artifactCatalog.delete(dir)
+    }
   }
 
   private async listArtifacts(
@@ -1078,6 +1227,13 @@ class JsonlSessionPersistence extends SessionPersistence {
       }
       ids.add(header.id)
       artifacts.push({ header, path: selected.sourcePath, sourceVersion: selected.sourceVersion })
+    }
+    // This listing is one complete directory observation: publish it as the
+    // catalog so related-source lookups reuse it instead of rescanning.
+    // Retain known child identities when an opaque successor hides its header.
+    await this.refreshRelatedCatalog(signal)
+    for (const artifact of artifacts) {
+      this.artifactCatalog.set(dirname(artifact.path), { id: artifact.header.id, header: artifact.header, dir: dirname(artifact.path) })
     }
     signal?.throwIfAborted()
     return artifacts
