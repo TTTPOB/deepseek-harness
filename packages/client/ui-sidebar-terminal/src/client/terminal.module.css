@@ -1,4 +1,4 @@
-.root { display: flex; flex: 1; flex-direction: column; box-sizing: border-box; height: 100%; min-height: 0; padding-top: 8px; color: var(--dsw-alias-label-primary); font-size: 13px; }
+.root { display: flex; flex: 1; flex-direction: column; box-sizing: border-box; height: 100%; min-height: 0; min-width: 0; padding-top: 8px; color: var(--dsw-alias-label-primary); font-size: 13px; }
 .screen { flex: 1; min-height: 0; min-width: 0; overflow: hidden; padding: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); }
 .screen :global(.xterm) { height: 100%; }
 .screen :global(.xterm-viewport) { background: var(--dsw-alias-bg-base); }
@@ -7,6 +7,13 @@
 .empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 16px; min-height: 0; padding: 24px; overflow: auto; text-align: center; }
 .emptyMessage { max-width: 28ch; margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
 .actionIcon { display: flex; }
+.surface { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.keys { display: none; flex-shrink: 0; gap: 6px; padding: 4px 8px; overflow-x: auto; touch-action: pan-x; }
+.key { flex-shrink: 0; min-width: 44px; height: 44px; padding: 0 10px; }
+.key[aria-pressed="true"] { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
+@media (max-width: 1023px) and (pointer: coarse) {
+  :global([data-sidebar-right-panel="fullscreen"]) .keys { display: flex; }
+}
 
 /* Cursor colors depend on its cell, so they must not update xterm's shared ANSI theme. */
 .screen :global(.xterm-cursor) { opacity: 1; }

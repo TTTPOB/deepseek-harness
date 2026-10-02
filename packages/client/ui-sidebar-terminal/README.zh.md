@@ -35,6 +35,8 @@ kind: "package-reference"
 
 刷新后，[侧栏恢复布局](../../client/ui-sidebar-right/README.zh.md#state)，各终端在原标签页中重连保存的 Host 身份。折叠和非当前标签不会产生重复的恢复标签，也不改变选中项。保存布局之外的 Host 终端不会自动打开，也没有 UI 恢复入口；它们仍由 controller 的无人持有空闲回收及 Session/Host 卸载清理管理。保存的进程已消失时，显示本地化的不可用提示和 **新建终端**。点击后在原位置用全新终端替换失效标签；恢复过程不会自动创建替代进程。
 
+以触摸为主的手机上，可见的全屏终端提供可横向滚动的按键栏。Ctrl 与 Alt 一次性作用于下一次提交的 ASCII 字符或扩展键；Ctrl 后按 A 发送字节 1，后续字符仍为普通输入。Esc、Tab、适配当前光标模式的方向键、Ctrl+C 与 Ctrl+D 使用当前连接。粘贴、协议回复和组合输入更新不被改写；多字符或非 ASCII 提交原样传递并清除修饰锁。已有输入法组合需确认后才能使用按键栏。隐藏视图、失去控制权或替换模拟器都会清锁。按键栏保留 textarea 焦点，不重新唤起已关闭的键盘。终端表面先跟随 VisualViewport 可见区域，再测量行数；导航留白与按键栏通过实际盒子只计一次。调整尺寸保留 xterm 的历史阅读位置，不强制滚到底部。
+
 终端背景、默认文字、光标和选区跟随 DSH 主题，包括系统偏好和主题令牌覆盖。切换主题会保留运行中的 shell、输出和应用通过 OSC 设置的颜色。颜色重置命令恢复到当前 DSH 默认值。xterm 将文字对比度调整到 4.5:1；光标与所在单元格背景保持至少 3:1 的对比度，包括 Vim 配色方案。
 
 <a id="understand-the-implementation"></a>
@@ -43,7 +45,7 @@ kind: "package-reference"
 <details>
 <summary>实现细节</summary>
 
-插件向右侧栏注册 `terminal` 类型及正文和标题 seat。开始页入口复用插件页面的蓝色终端图标，页签标题使用线条图标。无 React 依赖的终端模型属于 `api-terminal-controller`，通过框架 keyed hooks 暴露状态。`ui-primitives` 的 Menu 与 Button 提供 shell 选择和启动控件，支持键盘导航与选中标记。正文在 terminal 视图挂载时加载包内 `client.terminal.js` chunk，使 xterm.js 与 FitAddon 不进入启动 `client.js`；加载后由它们负责屏幕渲染和视口测量。正文在面板高度内为页签条下方预留 8px 间距。输入原样传到 PTY，包括 Tab 和控制字符。
+插件向右侧栏注册 `terminal` 类型及正文和标题 seat。开始页入口复用插件页面的蓝色终端图标，页签标题使用线条图标。无 React 依赖的终端模型属于 `api-terminal-controller`，通过框架 keyed hooks 暴露状态。`ui-primitives` 的 Menu 与 Button 提供 shell 选择和启动控件，支持键盘导航与选中标记。正文在 terminal 视图挂载时加载包内 `client.terminal.js` chunk，使 xterm.js 与 FitAddon 不进入启动 `client.js`；加载后由它们负责屏幕渲染和视口测量。正文在面板高度内为页签条下方预留 8px 间距。编码后的输入通过终端 controller 的既有通道传到 PTY，包括 Tab 和控制字符。
 
 终端 controller 独立保存每个全局唯一内容身份与 Host 的关联，并负责内容恢复；侧栏负责布局持久化。恢复视图不能分配替代进程。侧栏关闭 handler 通过[终端 controller](../../api/terminal-controller/README.zh.md#understand-the-implementation)安排清理并同步返回。浏览器组件清理和 tab 的 abort signal 只停止浏览器工作。
 
@@ -75,6 +77,7 @@ kind: "package-reference"
 - 补全菜单和内联建议取决于 shell 配置，Web UI 不提供独立补全引擎。
 - 应用的 OSC 颜色覆盖由已挂载的渲染器保留；新打开的渲染器无法从 Host 屏幕快照恢复这些颜色。
 - 终端历史有上限。此功能不向 Agent 发送终端输出，不在单个标签页内拆分终端，也不在 Host 重启后恢复进程。
+- 一次性修饰键覆盖 ASCII 终端控制，不等同于系统级快捷键或 CJK 控制映射。双指缩放与非全屏分栏保留原尺寸策略；真实手机输入法行为仍取决于浏览器。
 - Terminal chunk 加载失败后需要刷新页面，因为 React 会在页面生命周期内缓存被拒绝的 lazy import。
 
 <a id="dev-note"></a>

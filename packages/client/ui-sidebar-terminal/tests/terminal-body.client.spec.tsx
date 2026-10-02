@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /** Terminal startup, title editing and xterm's screen lifetime. */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { ITheme } from '@xterm/xterm'
 import type { ThemeSnapshot } from '@deepseek-ai/dsh-client-ui-theme/client'
@@ -28,6 +28,7 @@ class FakeTerminal {
     this.renderFrame = listener
     return { dispose: this.disposeRender }
   })
+  readonly modes = { applicationCursorKeysMode: false }
   readonly resize = vi.fn()
   readonly reset = vi.fn()
   readonly focus = vi.fn()
@@ -69,17 +70,17 @@ const titleSurfaces = [
     wrap: (title: ReactNode) => <header data-dockkit-float-grip="pane"><div data-dockkit-float-title><span>{title}</span></div></header>,
   },
 ]
-function mount(initial: TerminalViewState | undefined = idle, dictionary = en) {
+function mount(initial: TerminalViewState | undefined = idle, dictionary = en, fullscreen = false) {
   let state: TerminalViewState | undefined = initial
   let visible = true
   let theme: ThemeSnapshot = { preference: 'light', fontSize: 14, active: { id: 'light', colorScheme: 'light', tokens: {} }, themes: [], revision: 0 }
   const detach = vi.fn()
-  const model = {
+  let model = {
     mount: vi.fn(() => detach), refresh: vi.fn(async () => {}),
     rename: vi.fn(async () => {}), connect: vi.fn(), write: vi.fn(), resize: vi.fn(), acknowledge: vi.fn(),
   }
   const openTab = vi.fn()
-  const tab = () => ({ tab: { id: 'tab', title: 'Terminal', visible, actions: { openTab } } })
+  const tab = () => ({ sidebar: { fullscreen }, tab: { id: 'tab', title: 'Terminal', visible, actions: { openTab } } })
   // The test supplies the owner and model hooks consumed here; the remaining slot props are framework-owned.
   const props = {
     view: () => model,
@@ -90,6 +91,7 @@ function mount(initial: TerminalViewState | undefined = idle, dictionary = en) {
   const view = render(<TerminalBody {...props} />)
   return {
     view, props, model, detach, openTab,
+    replaceModel() { model = { ...model, write: vi.fn() }; view.rerender(<TerminalBody {...props} />); return model },
     changeTheme() { theme = { ...theme, revision: theme.revision + 1 }; view.rerender(<TerminalBody {...props} />) },
     update(next: TerminalViewState | undefined, shown = visible) {
       state = next; visible = shown; view.rerender(<TerminalBody {...props} />)
@@ -358,6 +360,46 @@ it.each(titleSurfaces)('removes the native $name listener when its title unmount
   fireEvent.doubleClick(chip)
   expect(outer).toHaveBeenCalledOnce()
   expect(h.model.rename).not.toHaveBeenCalled()
+})
+
+it('uses the owner model for one-shot keys without refocusing and clears locks on hidden or readonly views', () => {
+  const state: TerminalViewState = { ...idle, info, phase: 'connected', writable: true }
+  const h = mount(state, en, true)
+  const terminal = fake.terminals[0]!
+  const ctrl = () => h.view.getByRole('button', { name: en.keyCtrl })
+  fireEvent.pointerDown(ctrl())
+  fireEvent.click(ctrl())
+  expect(ctrl().getAttribute('aria-pressed')).toBe('true')
+  fireEvent.input(terminal.textarea!, { data: 'a', inputType: 'insertText' })
+  act(() => { terminal.input?.('a') })
+  fireEvent.input(terminal.textarea!, { data: 'x', inputType: 'insertText' })
+  act(() => { terminal.input?.('x') })
+  expect(h.model.write.mock.calls).toEqual([['\x01'], ['x']])
+  expect(ctrl().getAttribute('aria-pressed')).toBe('false')
+  terminal.modes.applicationCursorKeysMode = true
+  fireEvent.click(h.view.getByRole('button', { name: en.keyUp }))
+  expect(h.model.write).toHaveBeenLastCalledWith('\x1bOA')
+  fireEvent.click(h.view.getByRole('button', { name: en.keyInterrupt }))
+  expect(h.model.write).toHaveBeenLastCalledWith('\x03')
+  fireEvent.click(ctrl()); h.update(state, false); h.update(state, true)
+  expect(ctrl().getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(ctrl()); h.update({ ...state, writable: false })
+  expect(ctrl().getAttribute('aria-pressed')).toBe('false')
+  expect((ctrl() as HTMLButtonElement).disabled).toBe(true)
+  expect(terminal.focus).toHaveBeenCalledTimes(2)
+  h.update(state)
+  fireEvent.compositionStart(terminal.textarea!)
+  expect((ctrl() as HTMLButtonElement).disabled).toBe(true)
+  h.update({ ...state, phase: 'disconnected', writable: false }); h.update(state)
+  expect((ctrl() as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(ctrl())
+  const next = h.replaceModel()
+  expect(ctrl().getAttribute('aria-pressed')).toBe('false')
+  const nextTerminal = fake.terminals.at(-1)!
+  fireEvent.input(nextTerminal.textarea!, { data: 'a', inputType: 'insertText' })
+  act(() => { nextTerminal.input?.('a') })
+  expect(next.write).toHaveBeenLastCalledWith('a')
+  expect(terminal.dispose).toHaveBeenCalledOnce()
 })
 
 it('starts a recovered screen with no local history when environment discovery is unavailable', () => {

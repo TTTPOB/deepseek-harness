@@ -10,6 +10,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Simplified Chinese terminal copy. */
 export const zh = {
   'shortcut.noSession': '请先选择会话',
+  keys: '终端按键', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   recoveryFailed: '恢复终端失败：{message}', retryRecovery: '重试恢复终端',
   shell: '选择 Shell', shellLoading: '正在读取 Shell…', shellEmpty: '没有可用的 Shell', description: '在会话工作区运行命令',
   title: '终端', new: '新建终端', loading: '正在读取终端环境…', creating: '正在启动…',
@@ -28,6 +30,8 @@ export const zh = {
 /** English terminal copy. */
 export const en = {
   'shortcut.noSession': 'Select a session first',
+  keys: 'Terminal keys', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   recoveryFailed: 'Terminal recovery failed: {message}', retryRecovery: 'Retry terminal recovery',
   shell: 'Choose shell', shellLoading: 'Loading shells…', shellEmpty: 'No shells available', description: 'Run commands in the Session workspace',
   title: 'Terminal', new: 'New terminal', loading: 'Reading terminal environment…', creating: 'Starting…',
