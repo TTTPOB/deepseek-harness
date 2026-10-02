@@ -21,8 +21,8 @@ import {
   StateDot, Switch, Tag, TerminalBlock, Toast, useAnchoredPosition, useDismissOnOutsidePointer,
   type IconProps, type StateDotState, type TerminalBlockLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import type { createNavigationStore } from './navigation-store.ts'
+import type { FactoryComponentPropsOf } from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from './ManagerEntry.tsx'
 import { rowConfigKey, type OfficialItem } from './config-ledger.ts'
 import type { PluginManagerLocaleKey } from './locales.ts'
 import {
@@ -35,16 +35,8 @@ import type { PluginPackageRef, PluginRowRef, PluginsSubject } from './slot-cont
 import type { ConfigPageForm } from './slot-contract.ts'
 import css from './PluginManagerPage.module.css'
 
-/** Full component props assembled by the main slot renderer. */
-export type PluginManagerPageProps =
-  PropsRuntime<'main'>
-  & PropsLocale<'pluginManager'>
-  & PropsRenderSlots<
-    | 'plugins.item' | 'plugins.bundle.config' | 'plugins.row.config' | 'plugins.bundle.activation'
-    | 'plugins.detail.actions' | 'plugins.detail.badge' | 'plugins.detail.section'
-  >
-  & InjectFace<PluginManagerFace>
-  & PropsStore<ReturnType<typeof createNavigationStore>>
+/** Full component props assembled by the shared manager Factory renderer. */
+export type PluginManagerPageProps = FactoryComponentPropsOf<'plugins.manager'>
 
 /** The page's slot renderer, narrowed to the configuration slots. */
 type RenderConfig = PluginManagerPageProps['renderSlot']

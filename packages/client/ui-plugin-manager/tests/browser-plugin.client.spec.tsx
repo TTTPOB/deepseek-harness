@@ -12,6 +12,7 @@ import { TestRemote, usePinnedBrowserLanguages } from '@deepseek-ai/dsh-client-t
 import * as settings from '@deepseek-ai/dsh-client-ui-settings/client'
 import { apply, inject, NS, PANEL_ID } from '../src/client/index.ts'
 import { PluginManagerPage } from '../src/client/PluginManagerPage.tsx'
+import { ManagerMain } from '../src/client/ManagerEntry.tsx'
 import { PluginsPanelIcon } from '../src/client/PluginsPanelIcon.tsx'
 import type { PluginManagerFace } from '../src/client/manager-store.ts'
 
@@ -54,6 +55,7 @@ function declare(slots: SlotRegistry): () => void {
     name: 'root',
     children: {
       'main': { kind: 'keyed', scope: 'root' },
+      'shell.overlay': { kind: 'list', scope: 'root' },
       'sidebar.panellist': { kind: 'list', scope: 'root' },
     },
   } as never, () => null)
@@ -69,15 +71,15 @@ describe('ui-plugin-manager browser plugin', () => {
     const navigation = entry.store.create()
     b.ctx.pluginNavigation.openBundle('dsh-navigation-test')
     expect(b.panelInfo.getSnapshot().activePanelId).toBe(PANEL_ID)
-    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'package', name: 'dsh-navigation-test' } })
+    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'package', name: 'dsh-navigation-test' }, modalOpen: false })
     b.selectPanel(null)
-    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'list' } })
+    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'list' }, modalOpen: false })
     b.selectPanel(PANEL_ID)
-    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'list' } })
+    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'list' }, modalOpen: false })
     b.ctx.pluginNavigation.openBundle('dsh-navigation-test')
     removeRoot()
     b.selectPanel(null)
-    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'package', name: 'dsh-navigation-test' } })
+    expect(navigation.getSnapshot()).toEqual({ view: { kind: 'package', name: 'dsh-navigation-test' }, modalOpen: false })
   })
 
   it('declares only the services the page and its Remote methods use', () => {
@@ -87,6 +89,7 @@ describe('ui-plugin-manager browser plugin', () => {
   it('registers the sidebar entry and its page, which reads the Host only once rendered and follows Host changes', async () => {
     const b = await bench()
     declare(b.slots)
+    const registerFactory = vi.spyOn(b.slots, 'registerFactory')
     const fiber = b.ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
 
@@ -94,10 +97,11 @@ describe('ui-plugin-manager browser plugin', () => {
     expect(b.selectPanel).toHaveBeenCalledWith(PANEL_ID)
     const entry = b.slots.entries('main')[0]!
     assert(entry.store && 'create' in entry.store)
-    expect(entry.store.create().getSnapshot()).toEqual({ view: { kind: 'package', name: 'dsh-navigation-test' } })
-    expect(entry.component).toBe(PluginManagerPage)
+    expect(entry.store.create().getSnapshot()).toEqual({ view: { kind: 'package', name: 'dsh-navigation-test' }, modalOpen: false })
+    expect(entry.component).toBe(ManagerMain)
+    expect(registerFactory.mock.calls[0]?.[1]).toBe(PluginManagerPage)
     expect(entry.options).toMatchObject({ key: PANEL_ID })
-    expect(entry.locale).toBe(NS)
+    expect(registerFactory.mock.calls[0]?.[0].locale).toBe(NS)
     // The sidebar entry addresses the page by the same id and speaks the dictionary.
     const icon = b.slots.entries('sidebar.panellist')[0]!
     expect(icon.component).toBe(PluginsPanelIcon)
@@ -116,7 +120,9 @@ describe('ui-plugin-manager browser plugin', () => {
     for (const name of ['plugins.detail.actions', 'plugins.detail.badge', 'plugins.detail.section'] as const) {
       expect(b.slots.spec(name)).toMatchObject({ kind: 'list', scope: 'root' })
     }
-    const face = (entry.inject as unknown as () => PluginManagerFace)()
+    const factoryOptions = registerFactory.mock.calls[0]![0]
+    assert(factoryOptions.name === 'plugins.manager' && factoryOptions.inject)
+    const face = (factoryOptions.inject as () => PluginManagerFace)()
     const text = { en: 'Local tools', zh: '本地工具' }
     expect(face.resolveText(text)).toBe('本地工具')
     b.locale.setLocale('en')
@@ -147,6 +153,8 @@ describe('ui-plugin-manager browser plugin', () => {
     expect(b.ctx.get('pluginNavigation')).toBeUndefined()
     expect(b.slots.entries('main')).toHaveLength(0)
     expect(b.slots.entries('sidebar.panellist')).toHaveLength(0)
+    expect(b.slots.entries('shell.overlay')).toHaveLength(0)
+    expect(b.slots.spec('plugins.item')).toBeUndefined()
     b.remote.emit('plugin-manager/changed', [{ reason: 'install' }])
     await Promise.resolve()
     expect(b.list).toHaveBeenCalledTimes(3)

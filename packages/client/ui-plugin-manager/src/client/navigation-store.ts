@@ -8,8 +8,12 @@ type View =
   | { readonly kind: 'item'; readonly id: string }
   | { readonly kind: 'row'; readonly name: string; readonly rowId: string }
 
-type NavigationState = { view: View }
-type NavigationActions = { setView: (draft: NavigationState, view: View) => void }
+type NavigationState = { view: View; modalOpen: boolean }
+type NavigationActions = {
+  setView: (draft: NavigationState, view: View) => void
+  openModal: (draft: NavigationState) => void
+  closeModal: (draft: NavigationState) => void
+}
 
 /**
  * Create plugin page selection before the first page render.
@@ -17,9 +21,18 @@ type NavigationActions = { setView: (draft: NavigationState, view: View) => void
  */
 export function createNavigationStore(): EngineStoreHandle<NavigationState, NavigationActions> {
   return defineStore({
-    init: (): NavigationState => ({ view: { kind: 'list' } }),
+    init: (): NavigationState => ({ view: { kind: 'list' }, modalOpen: false }),
     actions: {
       setView: (draft, view: View) => { draft.view = view },
+      openModal: (draft) => {
+        if (draft.modalOpen) return
+        draft.view = { kind: 'list' }
+        draft.modalOpen = true
+      },
+      closeModal: (draft) => {
+        draft.modalOpen = false
+        draft.view = { kind: 'list' }
+      },
     },
   })
 }

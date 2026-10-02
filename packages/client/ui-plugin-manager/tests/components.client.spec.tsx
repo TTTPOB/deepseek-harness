@@ -137,6 +137,8 @@ function renderTab(
     useStore: bindSnapshotSelector(navigation), actions: navigation.actions,
     ...standard,
     t,
+    renderFactorySlot: () => null,
+    useFactorySlot: () => { throw new Error('The manager declares no local Factory positions') },
     resolveText,
     ...actions,
     usePluginManager: bindSnapshotSelector(store),

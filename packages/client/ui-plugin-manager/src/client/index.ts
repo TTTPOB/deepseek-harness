@@ -22,6 +22,7 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-plugin-manager/types'
 import { PluginManagerPage } from './PluginManagerPage.tsx'
 import { PluginsPanelIcon } from './PluginsPanelIcon.tsx'
+import { ManagerMain, ManagerModal } from './ManagerEntry.tsx'
 import { configLedgerSource } from './config-ledger.ts'
 import { PluginManagerController } from './manager-store.ts'
 import { en, zh, type PluginManagerLocaleKey } from './locales.ts'
@@ -30,14 +31,21 @@ import type {} from './slot-contract.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Cross-plugin navigation to the Plugins panel. */
+    /** Cross-plugin navigation to the Plugins panel or its owner-managed modal. */
     pluginNavigation: {
       /**
        * Open a bundle's details without changing the current Session.
-       * An absent bundle displays the plugin list after loading.
+       * An absent bundle displays the plugin list after loading. While the modal
+       * is open, details stay there; otherwise this selects the Plugins panel.
        * @param packageName - npm package name of the bundle.
        */
       openBundle(packageName: string): void
+      /**
+       * Open the plugin list over the current page without selecting a panel or Session.
+       * Repeated calls preserve the open modal's selected detail. Native Modal owns
+       * closing, Escape, and focus restoration; a new opening starts at the list.
+       */
+      openModal(): void
     }
   }
 }
@@ -97,12 +105,12 @@ export function apply(ctx: ClientContext): void {
   // the page's own; a plugin's configuration arrives through the slots the
   // page declares here, so the page never names a configurable plugin.
   const configLedger = configLedgerSource(ctx)
-  ctx.slots.inject('main', function* () {
+  ctx.slots.inject('main', () => ctx.slots.inject('shell.overlay', function* () {
     const handle = createNavigationStore(), instance = handle.create()
     const store: typeof handle = { ...handle, create: () => instance }
-    yield ctx.slots.register({
-      name: 'main',
-      key: PANEL_ID,
+    yield ctx.slots.registerFactory({
+      name: 'plugins.manager',
+      scope: 'root',
       locale: NS,
       store,
       inject: () => controller.inject(configLedger, text => ctx.locale.resolveText(text)),
@@ -116,17 +124,22 @@ export function apply(ctx: ClientContext): void {
         'plugins.detail.section': { kind: 'list', scope: 'root' },
       },
     }, PluginManagerPage)
+    yield ctx.slots.register({ name: 'main', key: PANEL_ID, store }, ManagerMain)
+    yield ctx.slots.register({ name: 'shell.overlay', id: 'plugins.manager', locale: NS, store }, ManagerModal)
     yield ctx.layout.panelInfo.subscribe(() => {
-      if (ctx.layout.panelInfo.getSnapshot().activePanelId !== PANEL_ID) instance.actions.setView({ kind: 'list' })
+      if (!instance.getSnapshot().modalOpen && ctx.layout.panelInfo.getSnapshot().activePanelId !== PANEL_ID) {
+        instance.actions.setView({ kind: 'list' })
+      }
     })
     const disposeNavigation = ctx.reflect.provide('pluginNavigation', {
       openBundle: (packageName: string) => {
-        ctx.layout.selectPanel(PANEL_ID)
+        if (!instance.getSnapshot().modalOpen) ctx.layout.selectPanel(PANEL_ID)
         instance.actions.setView({ kind: 'package', name: packageName })
       },
+      openModal: () => { instance.actions.openModal() },
     })
     yield () => { void disposeNavigation() }
-  })
+  }))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',
     id: PANEL_ID,
