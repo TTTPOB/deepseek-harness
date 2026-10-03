@@ -72,4 +72,14 @@ node scripts/daily-driver-source.mjs build packages/session/session-persistence-
 
 ## 6. 发布 Access 配套包
 
-`daily-driver-v0.1.7-rc.2-fork5` 发布 job 只发布四个配套的 `0.1.7-rc.2-fork1` 包：`dsh-client-connection`、`dsh-host-frontend-static`、`dsh-api-gateway` 和 `dsh-client-ui-settings`。它复用 frozen 源码准备与全局 store 缓存，运行对应认证及设置回归，构建两端，再运行[隔离实装 smoke](../../scripts/smoke-cloudflare-access-fork5.mjs)，最后创建不可变 Release。四包作为全局 overrides 一起安装，保留官方 CLI/Web 与无关 overrides。按 [Connection 配置](../../packages/client/connection/README.zh.md)设置 Access，并移除只调用同步认证接口的旧根页登录插件。安装包不会重新加载现有 Host；在另行授权的维护窗口激活。
+`daily-driver-v0.1.7-rc.2-fork6` job 只发布 `0.1.7-rc.2-fork2` 的 `dsh-client-connection`、`dsh-host-frontend-static`、`dsh-api-gateway` 三包和 `SHA256SUMS`。三个全局 overrides 配套使用，保留不可变 fork5 的 `dsh-client-ui-settings@0.1.7-rc.2-fork1`、官方 CLI/Web 和无关 overrides。历史 fork1–fork5 job 保持不变；通用 build/publish 跳过 fork6。该 job 复用 frozen 源码准备、全局 store 缓存、聚焦回归和双端构建；UI settings 仅下载并校验 checksum 后用于 smoke，不重新发布。
+
+1. 校验三个新 tarball 的 checksum 和 fork5 沿用的 UI settings checksum。按 connection、frontend-static、gateway、UI settings tarball 顺序运行[官方 CLI 冷启动 smoke](../../scripts/smoke-access-navigation-fork6.mjs)。它在 `dist/smoke` 下安装官方 rc.2 与四个 overrides，核对实际版本、共享 peers 和全部四包的兼容性判断，在隔离 home 中用官方 CLI 授予所需精确豁免，再启动真实 Web profile。只 mock 外部 Access JWKS fetch。验收覆盖不依赖 DSH Cookie 的跨站 Access 文档导航、localhost Cookie 回退、管理权限、实际提供的 gateway/controller graph、未放宽的 API 跨站 fence 和假 JWT 拒绝；不声称完成真实 Cloudflare 浏览器验收。
+2. 按 [Connection 配置](../../packages/client/connection/README.zh.md)设置 Access，并移除只调用同步认证接口的旧根页登录插件。官方 rc.2 checker 对照 rc.2 runtime 版本时，会拒绝 frontend-static 和 gateway fork2 的精确 Connection peer 要求。明确接受此精确组合可能崩溃或损坏数据的风险后，在另行授权的维护窗口授予这两个 profile 本地豁免：
+
+```sh
+dsh plugin --profile web allow-version @deepseek-ai/dsh-host-frontend-static@0.1.7-rc.2-fork2 --dsh-version 0.1.7-rc.2 --accept-risk
+dsh plugin --profile web allow-version @deepseek-ai/dsh-api-gateway@0.1.7-rc.2-fork2 --dsh-version 0.1.7-rc.2 --accept-risk
+```
+
+3. 仅在该维护窗口停止 Host、安装三个配套 overrides 并重新启动。只安装不会激活成品。豁免仅授权精确 package/runtime 组合，任一版本变化都需重新评估；见[兼容性与豁免](../../packages/boot/plugin-manager/README.zh.md#version-compatibility-and-exemptions)。不要对这个三包 Release 使用完整 fork1 升级脚本。
