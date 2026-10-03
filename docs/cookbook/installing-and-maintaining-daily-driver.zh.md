@@ -54,3 +54,18 @@ node scripts/smoke-session-index-fork4.mjs \
 ```
 
 smoke 在临时安装副本中通过 pnpm overrides 搭配官方 `dsh@0.1.7-rc.2`，检查实际模块解析、构建入口、官方定义包与 Cordis 的共享身份、不变搜索及关闭末尾落盘，并清理副本；它不启动 Host，不改真实安装、profile 或会话。fork4 发布验证不应用到当前本机；日后明确维护窗口中仅替换这两个全局 overrides，不对该两包 Release 运行完整 fork1 升级脚本。
+
+## 5. 不发布，只验证源码
+
+在干净 worktree 中使用 Node 24 和 pnpm 11.24.0。已提交的 workspace override 将 `llm-pi-ai` 使用的 `@earendil-works/pi-ai@0.85.1-fork1` 固定到既有不可变 Release URL；官方 0.85.1 patch 不适用。修改依赖组合时用 `pnpm install --lockfile-only --ignore-scripts` 正规生成源码 lockfile，再使用 frozen 准备入口：
+
+```sh
+CI=true node scripts/daily-driver-source.mjs install packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+pnpm --config.verify-deps-before-run=false run build:native-system
+pnpm --config.verify-deps-before-run=false exec vitest run packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts packages/session/session-persistence-jsonl/tests/jsonl.spec.ts packages/session-query/session-query/ packages/session-query/session-query-sqlite/ packages/session-query/tool-session-query/
+node scripts/daily-driver-source.mjs build packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+```
+
+打包后执行第 4 节的双包 tarball smoke。验证其他 Host 包时替换包目录，并明确选择对应聚焦测试和隔离 tarball smoke。安装只选择目标依赖 closure、native 构建工具、Typert 和 root 工具 importer，不选择 root 的 workspace 依赖 closure。后续源码命令关闭 pnpm `verify-deps-before-run`，避免它静默安装整个 workspace。构建将 tsdown workspace 发现限制到每个目标；仅用 `-F` 仍会加载无关包配置。仅客户端构建需遵循所属构建流程。所选 closure 之外的测试需要额外安装目标；默认选择不包括无关的 session-log-export UI 测试。
+
+[源码验证 workflow](../../.github/workflows/daily-driver-verify.yml) 由 `daily-driver` push 或手动 dispatch 触发，只有仓库只读权限，绝不发布。dispatch 接受空格分隔的 `packages`、`tests` 和仓库 Node `smoke` 脚本及参数；自定义包必须显式指定 tests 和 smoke。缓存只保存全局 pnpm store，以 runner OS、pnpm 版本和源码 lockfile 为 key，并使用同 OS/版本恢复前缀。审查后 push 默认分支播种后续 tag workflow 可读取的缓存，再 dispatch 同一 workflow 比较缓存复用。下一次子包发布 job 可复制其 store/cache 步骤和源码准备/构建命令，同时保留该 job 的不可变 tag 身份校验及针对性 smoke。既有 fork1/fork2/fork3/fork4 发布 job 保留旧准备逻辑作为历史路线；重跑固定旧 tag 不会应用本次优化。不要 dispatch 发布 workflow 来测安装性能。

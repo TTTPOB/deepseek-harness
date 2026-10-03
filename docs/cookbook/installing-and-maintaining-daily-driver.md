@@ -54,3 +54,18 @@ node scripts/smoke-session-index-fork4.mjs \
 ```
 
 The smoke installs the overrides alongside official `dsh@0.1.7-rc.2` in a temporary project, checks actual module resolution, built imports, shared official definitions and Cordis identity, unchanged search, and durable closing tails, then removes that project. It does not launch a Host or change the real installation, profiles, or sessions. Fork4 release validation does not apply the artifacts to this machine; replace only these two global overrides in a later explicit maintenance window, and do not run the complete fork1 upgrade script against this two-package release.
+
+## 5. Validate source without publishing
+
+Use Node 24 and pnpm 11.24.0 in a clean worktree. The committed workspace override pins `@earendil-works/pi-ai@0.85.1-fork1` to its existing immutable Release URL for `llm-pi-ai`; the official 0.85.1 patch does not apply. Regenerate the source lockfile with `pnpm install --lockfile-only --ignore-scripts` when changing this combination, then use the frozen preparation entry:
+
+```sh
+CI=true node scripts/daily-driver-source.mjs install packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+pnpm --config.verify-deps-before-run=false run build:native-system
+pnpm --config.verify-deps-before-run=false exec vitest run packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts packages/session/session-persistence-jsonl/tests/jsonl.spec.ts packages/session-query/session-query/ packages/session-query/session-query-sqlite/ packages/session-query/tool-session-query/
+node scripts/daily-driver-source.mjs build packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+```
+
+Run the paired tarball smoke from section 4 after packing. Replace the package directories for another Host target and select its focused tests and isolated tarball smoke explicitly. Installation selects target dependency closures, native build tools, Typert, and the root tool importer, not the root workspace dependency closure. Disable pnpm `verify-deps-before-run` on subsequent source commands so pnpm does not silently install the entire workspace. The build restricts tsdown workspace discovery to each target; `-F` alone still loads unrelated package configs. Client-only builds need their owning build procedure. Tests outside the selected closure need additional installation targets; the default selection excludes the unrelated session-log-export UI tests.
+
+The [source verification workflow](../../.github/workflows/daily-driver-verify.yml) runs on `daily-driver` pushes or manual dispatch with read-only repository permission and never publishes. Dispatch accepts space-separated `packages`, `tests`, and a repository Node `smoke` script plus arguments; custom packages require explicit tests and smoke. Its cache stores only the global pnpm store, keyed by runner OS, pnpm version, and source lockfile, with a same-OS/version restore prefix. Push the reviewed commit to the default branch to seed a cache that later tag workflows can read; dispatch the same workflow again to compare cache reuse. Copy its store/cache steps and source preparation/build commands into the next package release job, retaining that job's immutable-tag identity checks and targeted smoke. The existing fork1/fork2/fork3/fork4 release jobs remain historical routes with their old preparation logic; rerunning their fixed tags does not use this optimization. Do not dispatch the release workflow to measure installation performance.

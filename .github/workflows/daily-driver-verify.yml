@@ -1,0 +1,96 @@
+name: Daily-driver source verification
+
+on:
+  push:
+    branches: [daily-driver]
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: Space-separated workspace directories (Host packages)
+        type: string
+        default: packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+      tests:
+        description: Space-separated focused Vitest paths; required for a custom package selection
+        type: string
+      smoke:
+        description: Repository smoke script and arguments; required for a custom package selection
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-driver-verify-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  DSH_TELEMETRY_DISABLED: '1'
+  DEFAULT_PACKAGES: packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Locate global pnpm store
+        id: store
+        run: echo "path=$(pnpm --config.verify-deps-before-run=false store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-11.24.0-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-11.24.0-
+      - name: Select focused validation
+        env:
+          SELECTED_PACKAGES: ${{ inputs.packages }}
+          SELECTED_TESTS: ${{ inputs.tests }}
+          SELECTED_SMOKE: ${{ inputs.smoke }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=${SELECTED_PACKAGES:-$DEFAULT_PACKAGES}
+          tests=$SELECTED_TESTS
+          smoke=$SELECTED_SMOKE
+          if [[ "$packages" = "$DEFAULT_PACKAGES" ]]; then
+            tests=${tests:-'packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts packages/session/session-persistence-jsonl/tests/jsonl.spec.ts packages/session-query/session-query/ packages/session-query/session-query-sqlite/ packages/session-query/tool-session-query/'}
+            smoke=${smoke:-'scripts/smoke-session-index-fork4.mjs dist/daily-driver/deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz'}
+          fi
+          test -n "$tests" && test -n "$smoke"
+          printf 'PACKAGES=%s\nTESTS=%s\nSMOKE=%s\n' "$packages" "$tests" "$smoke" >> "$GITHUB_ENV"
+      - name: Source command regression
+        run: node --test scripts/daily-driver-source.test.mjs
+      - name: Install frozen target closure and build tools
+        shell: bash
+        run: |
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs install "${packages[@]}"
+      - name: Native addon and focused tests
+        shell: bash
+        run: |
+          pnpm --config.verify-deps-before-run=false run build:native-system
+          read -r -a tests <<< "$TESTS"
+          pnpm --config.verify-deps-before-run=false exec vitest run "${tests[@]}"
+      - name: Build and pack selected Host packages
+        shell: bash
+        run: |
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs build "${packages[@]}"
+      - name: Isolated tarball smoke
+        shell: bash
+        run: |
+          read -r -a smoke <<< "$SMOKE"
+          node "${smoke[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-driver-verified-packages
+          path: dist/daily-driver/*.tgz
+          if-no-files-found: error
