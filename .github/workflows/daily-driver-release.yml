@@ -464,8 +464,98 @@ jobs:
           gh release create "$tag" deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz SHA256SUMS \
             --verify-tag --title "$tag" --latest \
             --notes 'Only @deepseek-ai/dsh-session-persistence-jsonl advances to 0.1.7-rc.2-fork1 and @deepseek-ai/dsh-session-query-sqlite to 0.1.7-rc.2-fork2. Keep official CLI/Web, Session and persistence/query definitions, the other DSH/Pi overrides, and independent plugins unchanged. The paired forks use related-child stat revisions and lifecycle-dirty document reconciliation while retaining the index size bound. External persisted-file edits are discovered after query-service restart or source replacement, not in real time. Verify SHA256SUMS before replacing these two global overrides in a later maintenance window; this release does not apply them to the running Host. The isolated official-CLI smoke verifies actual resolution, built imports, shared Session/Cordis identity, unchanged search, and durable closing tails without launching a Host. This release contains only these two package tarballs and SHA256SUMS.'
+  cloudflare-access-fork5:
+    if: github.event_name == 'push' && github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork5'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      CI: 'true'
+      NODE_OPTIONS: --max-old-space-size=3072
+      PACKAGES: packages/client/connection packages/host/frontend-static packages/api/gateway packages/client/ui-settings
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify Access release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork5
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/tags/daily-driver-v0.1.7-rc.2-fork5)"
+          git merge-base --is-ancestor refs/tags/daily-driver-v0.1.7-rc.2-fork4 HEAD
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          const version = path => JSON.parse(readFileSync(path + '/package.json', 'utf8')).version
+          for (const path of process.env.PACKAGES.split(' ')) assert.equal(version(path), '0.1.7-rc.2-fork1', path)
+          for (const path of ['apps/cli', 'packages/bundle/web-app']) assert.equal(version(path), '0.1.7-rc.2', path)
+          NODE
+      - name: Locate global pnpm store
+        id: store
+        run: echo "path=$(pnpm --config.verify-deps-before-run=false store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-11.24.0-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-11.24.0-
+      - name: Install frozen target closure and build tools
+        run: |
+          node --test scripts/daily-driver-source.test.mjs
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs install "${packages[@]}"
+      - name: Run Access authentication and settings regressions
+        run: |
+          pnpm --config.verify-deps-before-run=false run build:native-system
+          pnpm --config.verify-deps-before-run=false exec vitest run --maxWorkers=2 packages/client/connection/tests packages/host/frontend-static/tests packages/api/gateway/tests packages/client/ui-settings/tests packages/client/ui-settings-models/tests/apply.client.spec.ts packages/client/ui-theme/tests/apply.client.spec.ts
+      - name: Generate Host Remote declarations before Client typechecking
+        run: |
+          pnpm --config.verify-deps-before-run=false exec tsc -b packages/typert/generator/tsconfig.json packages/host/frontend-static/tsconfig.json
+          pnpm --config.verify-deps-before-run=false exec tsdown --workspace vendor/cosmokit -F @deepseek-ai/cosmokit --env.DSH_BUILD_FACE host
+          pnpm --config.verify-deps-before-run=false exec tsdown --workspace packages/host/frontend-static -F @deepseek-ai/dsh-host-frontend-static --env.DSH_BUILD_FACE host
+      - name: Build and pack only the Access packages
+        run: |
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs build "${packages[@]}"
+      - name: Verify isolated installed artifacts
+        run: |
+          node scripts/smoke-cloudflare-access-fork5.mjs \
+            dist/daily-driver/deepseek-ai-dsh-client-connection-0.1.7-rc.2-fork1.tgz \
+            dist/daily-driver/deepseek-ai-dsh-host-frontend-static-0.1.7-rc.2-fork1.tgz \
+            dist/daily-driver/deepseek-ai-dsh-api-gateway-0.1.7-rc.2-fork1.tgz \
+            dist/daily-driver/deepseek-ai-dsh-client-ui-settings-0.1.7-rc.2-fork1.tgz
+          (cd dist/daily-driver && sha256sum *-0.1.7-rc.2-fork1.tgz > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-access-fork5-release
+          path: |
+            dist/daily-driver/*-0.1.7-rc.2-fork1.tgz
+            dist/daily-driver/SHA256SUMS
+          if-no-files-found: error
+      - name: Publish immutable Access release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag=daily-driver-v0.1.7-rc.2-fork5
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')" = "$(git rev-parse HEAD)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+          cd dist/daily-driver
+          gh release create "$tag" *-0.1.7-rc.2-fork1.tgz SHA256SUMS --verify-tag --title "$tag" --latest \
+            --notes 'Cloudflare Access opt-in authentication and trusted remote settings persistence. Four paired fork1 packages: client-connection, host-frontend-static, api-gateway, client-ui-settings. Keep official CLI/Web and all unrelated overrides. Verify checksums and install these four overrides together; configure the exact Access issuer and audience in the Web profile. Retain Host/Origin checks and loopback token login. Disable legacy root login plugins that do not use the asynchronous authentication entry. Package installation does not activate an existing Host: restart in a separate maintenance window. Source regression and isolated artifact smoke do not claim live Cloudflare-browser acceptance.'
   build:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -584,7 +674,7 @@ jobs:
           path: dist/daily-driver/*
           if-no-files-found: error
   publish:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     needs: build
     runs-on: ubuntu-24.04
     permissions:

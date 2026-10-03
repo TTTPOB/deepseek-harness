@@ -35,6 +35,17 @@ appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\
       'packages/session-query/session-query-sqlite', '-F', '@deepseek-ai/dsh-session-query-sqlite',
       '--env.DSH_BUILD_FACE', 'host'])
     assert(calls[3].includes('pack'))
+    await writeFile(log, '')
+    const client = spawnSync(process.execPath, [script, 'build', 'packages/client/connection'], {
+      env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, ARGV_LOG: log },
+      encoding: 'utf8', timeout: 30_000,
+    })
+    assert.equal(client.status, 0, client.stderr)
+    const clientCalls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    assert.equal(clientCalls.length, 3)
+    assert.deepEqual(clientCalls[1].slice(1), ['exec', 'tsdown', '--workspace',
+      'packages/client/connection'])
+    assert(clientCalls[2].includes('pack'))
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }

@@ -66,6 +66,10 @@ pnpm --config.verify-deps-before-run=false exec vitest run packages/session/sess
 node scripts/daily-driver-source.mjs build packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
 ```
 
-打包后执行第 4 节的双包 tarball smoke。验证其他 Host 包时替换包目录，并明确选择对应聚焦测试和隔离 tarball smoke。安装只选择目标依赖 closure、native 构建工具、Typert 和 root 工具 importer，不选择 root 的 workspace 依赖 closure。后续源码命令关闭 pnpm `verify-deps-before-run`，避免它静默安装整个 workspace。构建将 tsdown workspace 发现限制到每个目标；仅用 `-F` 仍会加载无关包配置。仅客户端构建需遵循所属构建流程。所选 closure 之外的测试需要额外安装目标；默认选择不包括无关的 session-log-export UI 测试。
+打包后执行第 4 节的双包 tarball smoke。验证其他 Host 包时替换包目录，并明确选择对应聚焦测试和隔离 tarball smoke。安装只选择目标依赖 closure、native 构建工具、Typert 和 root 工具 importer，不选择 root 的 workspace 依赖 closure。后续源码命令关闭 pnpm `verify-deps-before-run`，避免它静默安装整个 workspace。构建将 tsdown workspace 发现限制到每个目标；仅用 `-F` 仍会加载无关包配置。声明 `dsh.client` 的目标会在打包前同时构建 Host 和 Client 两端。所选 closure 之外的测试需要额外安装目标；默认选择不包括无关的 session-log-export UI 测试。
 
 [源码验证 workflow](../../.github/workflows/daily-driver-verify.yml) 由 `daily-driver` push 或手动 dispatch 触发，只有仓库只读权限，绝不发布。dispatch 接受空格分隔的 `packages`、`tests` 和仓库 Node `smoke` 脚本及参数；自定义包必须显式指定 tests 和 smoke。缓存只保存全局 pnpm store，以 runner OS、pnpm 版本和源码 lockfile 为 key，并使用同 OS/版本恢复前缀。审查后 push 默认分支播种后续 tag workflow 可读取的缓存，再 dispatch 同一 workflow 比较缓存复用。下一次子包发布 job 可复制其 store/cache 步骤和源码准备/构建命令，同时保留该 job 的不可变 tag 身份校验及针对性 smoke。既有 fork1/fork2/fork3/fork4 发布 job 保留旧准备逻辑作为历史路线；重跑固定旧 tag 不会应用本次优化。不要 dispatch 发布 workflow 来测安装性能。
+
+## 6. 发布 Access 配套包
+
+`daily-driver-v0.1.7-rc.2-fork5` 发布 job 只发布四个配套的 `0.1.7-rc.2-fork1` 包：`dsh-client-connection`、`dsh-host-frontend-static`、`dsh-api-gateway` 和 `dsh-client-ui-settings`。它复用 frozen 源码准备与全局 store 缓存，运行对应认证及设置回归，构建两端，再运行[隔离实装 smoke](../../scripts/smoke-cloudflare-access-fork5.mjs)，最后创建不可变 Release。四包作为全局 overrides 一起安装，保留官方 CLI/Web 与无关 overrides。按 [Connection 配置](../../packages/client/connection/README.zh.md)设置 Access，并移除只调用同步认证接口的旧根页登录插件。安装包不会重新加载现有 Host；在另行授权的维护窗口激活。

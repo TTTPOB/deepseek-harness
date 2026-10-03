@@ -1,4 +1,4 @@
-/** Frozen source installation and focused Host builds for explicitly selected workspace packages. */
+/** Frozen source installation and focused Host/Client builds for selected workspace packages. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync } from 'node:fs'
@@ -26,7 +26,9 @@ if (command === 'install') {
     ...targets.map(target => `${target.path}/tsconfig.json`)])
   mkdirSync(join(root, 'dist/daily-driver'), { recursive: true })
   for (const target of targets) {
-    run(['exec', 'tsdown', '--workspace', target.path, '-F', target.name, '--env.DSH_BUILD_FACE', 'host'])
+    // The unqualified Client preset emits both entries; its Host-only pass may intentionally be empty.
+    run(['exec', 'tsdown', '--workspace', target.path,
+      ...(target.dsh?.client ? [] : ['-F', target.name, '--env.DSH_BUILD_FACE', 'host'])])
     run(['--dir', target.path, 'pack', '--pack-destination', join(root, 'dist/daily-driver')])
   }
 }
