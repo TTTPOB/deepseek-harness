@@ -764,7 +764,7 @@ describe('plugin registration', () => {
     }
     ctx.provide('remote', {
       $on: () => () => {},
-      $host: { home: undefined, isLoopback: false },
+      $host: { home: undefined, isLoopback: false, canManageHost: false },
       session,
     } as never)
     ctx.provide('remote.session', session as never)

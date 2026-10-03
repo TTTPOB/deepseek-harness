@@ -13,6 +13,8 @@ import { bridge } from './http-bridge.ts'
 import { isTrustedApiRequest } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
+import type { CloudflareAccess } from './cloudflare-access.ts'
+import { isLoopbackHostname } from './loopback-hostname.ts'
 import { OperatorPeer } from './operator-peer.ts'
 import type {
   PeerAdmission,
@@ -63,6 +65,7 @@ declare module '@deepseek-ai/cordis' {
 export class HostConnectionService extends Service implements HostConnectionHandle {
   /** The operator Peer every admitted request speaks for. */
   readonly operator: PeerScope
+  private readonly accessExpiries = new WeakMap<ConnectionTrustRequest, number>()
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
   private readonly fetchRoutes = new Map<string, RegisteredFetchRoute>()
 
@@ -76,6 +79,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    private readonly access?: CloudflareAccess,
   ) {
     super(ctx, 'connection')
     this.operator = new OperatorPeer(ctx)
@@ -103,6 +107,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /** Apply the configured Host/Origin fence, then browser authentication. */
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
     if (!isTrustedApiRequest(request, this.trustedHosts)) return 403
+    if (this.access !== undefined && !this.isLocal(request)) return 401
     return this.browserAuth.isAuthenticated(request) ? undefined : 401
   }
 
@@ -112,9 +117,58 @@ export class HostConnectionService extends Service implements HostConnectionHand
     return rejection === undefined ? { peer: this.operator } : { rejection }
   }
 
+  /** Admit after asynchronous Access verification, retaining synchronous fallback locally. */
+  async admitAsync(request: ConnectionTrustRequest): Promise<PeerAdmission> {
+    if (!isTrustedApiRequest(request, this.trustedHosts)) return { rejection: 403 }
+    if (this.access === undefined || this.isLocal(request)) return this.admit(request)
+    const expiry = await this.access.verify(request)
+    if (expiry === undefined) return { rejection: 401 }
+    this.accessExpiries.set(request, expiry)
+    return { peer: this.operator }
+  }
+
+  /** Whether this authenticated request may persist Host settings. */
+  canManageHost(request: ConnectionTrustRequest): boolean {
+    if (!isTrustedApiRequest(request, this.trustedHosts)) return false
+    if (this.isLocal(request)) return this.browserAuth.isAuthenticated(request)
+    return (this.accessExpiries.get(request) ?? 0) > Date.now()
+  }
+
+  /** Access expiry used to terminate an admitted browser WebSocket. */
+  accessExpiresAt(request: ConnectionTrustRequest): number | undefined {
+    return this.accessExpiries.get(request)
+  }
+
+  private isLocal(request: ConnectionTrustRequest): boolean {
+    const host = request.headers instanceof Headers ? request.headers.get('host') : request.headers.host
+    if (typeof host !== 'string') return false
+    try {
+      return isLoopbackHostname(new URL('http://' + host).hostname)
+    } catch (_error) {
+      return false
+    }
+  }
+
   /** Authenticate an index request through the process-token exchange or cookie. */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
+    if (this.access !== undefined && !this.isLocal(request)) {
+      response.writeHead(401, { 'cache-control': 'no-store' })
+      response.end()
+      return false
+    }
     return this.browserAuth.authorizeIndex(request, response)
+  }
+
+  /** Authenticate the index through Access when enabled, otherwise preserve token login. */
+  async authorizeIndexAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean> {
+    if (this.access === undefined || this.isLocal(request)) return this.authorizeIndex(request, response)
+    const admission = await this.admitAsync(request)
+    if ('rejection' in admission) {
+      response.writeHead(admission.rejection, { 'cache-control': 'no-store' })
+      response.end()
+      return false
+    }
+    return this.browserAuth.authorizeAccessIndex(request, response)
   }
 
   /** Add this process's launch token to the clean application URL. */
@@ -179,7 +233,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
       kind: 'prefix',
       path: channel,
       handler: async (req, res) => {
-        const admission = this.admit(req)
+        const admission = await this.admitAsync(req)
         if ('rejection' in admission) {
           res.writeHead(admission.rejection)
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')

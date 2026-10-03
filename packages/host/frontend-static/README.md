@@ -43,7 +43,7 @@ Requests are served from the dist root (the directory containing `distIndex`). T
 
 The served HTML carries one document base, `<base href="./">`, ahead of every injected resource row, so it freezes the entry directory the page was loaded from: the shell's own app-directory-relative references and the Host's plugin-resource rows both resolve under the mount that served the page. The same index therefore serves the origin root and whatever mount a prefix-stripping proxy owns; this plugin renders it only for the dist root and the configured index path.
 
-Root and configured-index responses call `ctx.connection.authorizeIndex` before reading HTML. A valid process token receives a 303 redirect plus the persistent browser cookie; an existing valid cookie serves the index; every other index request receives the Connection-owned 401 response. Non-index files remain public static assets. Connection owns the token, cookie, expiry, and signing-record semantics.
+Root and configured-index responses call `ctx.connection.authorizeIndexAsync` before reading HTML. A valid process token receives a 303 redirect plus the persistent browser cookie; an existing valid cookie serves the index; every other index request receives the Connection-owned 401 response. Configured Access authentication is awaited before serving the index; the response includes the server-verified `__DSH_CAN_MANAGE_HOST__` boolean for settings persistence. Non-index files remain public static assets. [Connection](../../client/connection/README.md#browser-authentication-and-request-trust) owns authentication and cookie semantics.
 
 ### Observable failures
 

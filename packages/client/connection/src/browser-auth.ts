@@ -243,21 +243,11 @@ export class BrowserAuth {
       const authority = requestAuthority(req.headers)
       if (req.method === 'GET' && url.pathname === '/' && tokens.length === 1
         && authority !== undefined && tokenMatches(tokens.join(''), this.launchToken)) {
-        const issuedAt = Date.now()
-        const expiresAt = issuedAt + this.maxAgeMilliseconds
-        const value = encodeCookie({
-          version: COOKIE_PAYLOAD_VERSION,
-          authority,
-          issuedAt,
-          expiresAt,
-        }, this.secret)
         res.writeHead(303, {
           'cache-control': 'no-store',
           'location': './',
           'referrer-policy': 'no-referrer',
-          'set-cookie': sessionCookie(
-            cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
-          ),
+          'set-cookie': this.newSessionCookie(authority),
         })
         res.end()
         return false
@@ -280,6 +270,29 @@ export class BrowserAuth {
   }
 
   /**
+   * Exchange server-verified Access authentication for the ordinary browser cookie.
+   * @param req - index request already verified by Connection.
+   * @param res - response owned when a cookie redirect is required.
+   * @returns true when an existing cookie permits serving the index.
+   */
+  authorizeAccessIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse): boolean {
+    if (this.isAuthenticated(req)) return this.authorizeIndex(req, res)
+    const authority = requestAuthority(req.headers)
+    if (authority === undefined) {
+      this.writeUnauthorized(req, res)
+      return false
+    }
+    res.writeHead(303, {
+      'cache-control': 'no-store',
+      'location': './',
+      'referrer-policy': 'no-referrer',
+      'set-cookie': this.newSessionCookie(authority),
+    })
+    res.end()
+    return false
+  }
+
+  /**
    * Verify the authority-bound browser cookie on a Host request.
    * @param request - request headers carrying Host and Cookie.
    * @returns true only for an unexpired cookie signed by this activation's loaded secret.
@@ -297,6 +310,13 @@ export class BrowserAuth {
       && payload.expiresAt > now
       && payload.expiresAt > payload.issuedAt
       && payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
+  }
+
+  private newSessionCookie(authority: string): string {
+    const issuedAt = Date.now()
+    const expiresAt = issuedAt + this.maxAgeMilliseconds
+    const value = encodeCookie({ version: COOKIE_PAYLOAD_VERSION, authority, issuedAt, expiresAt }, this.secret)
+    return sessionCookie(cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000))
   }
 
   private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {

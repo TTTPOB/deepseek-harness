@@ -43,7 +43,7 @@ kind: "package-reference"
 
 所服务的 HTML 携带唯一的文档 base `<base href="./">`，位于每一条注入资源行之前，因此它冻结页面加载时所处的入口目录：shell 自身的应用目录相对引用与宿主的插件资源行都在服务该页面的挂载下解析。同一份 index 因而既服务源站根目录，也服务剥离前缀的代理所拥有的任一挂载；本插件只为 dist 根目录与配置的 index 路径渲染它。
 
-根路径与配置的 index 响应会在读取 HTML 前调用 `ctx.connection.authorizeIndex`。有效进程 token 会得到 303 重定向与持久浏览器 cookie；已有有效 cookie 时直接提供 index；其他 index 请求得到 Connection 所有的 401 响应。非 index 文件仍是公开静态资源。Token、cookie、过期时间与签名记录语义都归 Connection 所有。
+根路径与配置的 index 响应会在读取 HTML 前调用 `ctx.connection.authorizeIndexAsync`。有效进程 token 会得到 303 重定向与持久浏览器 cookie；已有有效 cookie 时直接提供 index；其他 index 请求得到 Connection 所有的 401 响应。配置 Access 后，提供 index 前会等待验证；响应注入服务端验证的 `__DSH_CAN_MANAGE_HOST__` 布尔值，用于设置持久化。非 index 文件仍是公开静态资源。[Connection](../../client/connection/README.zh.md#browser-authentication-and-request-trust) 拥有认证与 cookie 语义。
 
 ### 可观察的失败
 

@@ -8,7 +8,7 @@ import { apply as clientApply, inject } from '../src/client/index.ts'
 
 
 describe('developer tools settings', () => {
-  it('reports a refused Host write after recovering accepted state', async () => {
+  it.each([true, false])('reports refused Host writes for a verified management page (loopback=%s)', async (isLoopback) => {
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())
     const describeCall = vi.fn().mockResolvedValue({ ok: true, value: {
@@ -21,7 +21,8 @@ describe('developer tools settings', () => {
     const mutate = vi.fn().mockResolvedValue({
       ok: false, error: new RemoteError('settings/rejected', 'conflict', { ns: DEVELOPER_TOOLS_NAMESPACE }),
     })
-    new TestRemote(ctx, { settings: { describe: describeCall, mutate } })
+    const remote = new TestRemote(ctx, { settings: { describe: describeCall, mutate } })
+    remote.$host = { home: undefined, isLoopback, canManageHost: true }
     await ctx.plugin({ inject, apply: clientApply }).await()
     await ctx.configForms.describe().ensure()
     await expect(ctx.configForms.developerTools.setEnabled(true)).rejects.toThrow('not saved')
@@ -68,7 +69,7 @@ describe('developer tools settings', () => {
     onTestFinished(() => ctx.fiber.dispose())
     const describeCall = vi.fn()
     const remote = new TestRemote(ctx, { settings: { describe: describeCall } })
-    remote.$host = { home: undefined, isLoopback: false }
+    remote.$host = { home: undefined, isLoopback: false, canManageHost: false }
     const fiber = ctx.plugin({ inject, apply: clientApply })
     await fiber.await()
     const preference = ctx.configForms.developerTools

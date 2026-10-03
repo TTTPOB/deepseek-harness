@@ -115,12 +115,21 @@ export interface ClientRemote extends TypertClientRemote {
   readonly $host: RemoteHostFacts
 }
 
+declare global {
+  interface Window {
+    /** Host-verified management permission injected into the authenticated index. */
+    __DSH_CAN_MANAGE_HOST__?: boolean
+  }
+}
+
 /** The fixed Host facts exposed on `ctx.remote.$host`. */
 export interface RemoteHostFacts {
   /** Host home directory from the ready frame, undefined before it. */
   readonly home: string | undefined
   /** Whether the carrier connects to the local Host. */
   readonly isLoopback: boolean
+  /** Whether the authenticated page may persist settings on the Host. */
+  readonly canManageHost: boolean
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -194,7 +203,12 @@ class ClientRemoteService extends Service implements ClientRemote {
     // itself changed. isLoopback is fixed for the page lifetime.
     const home = this.connection.generation.getSnapshot()?.host.home
     if (this.hostFacts === undefined || this.hostFacts.home !== home) {
-      this.hostFacts = { home, isLoopback: this.connection.isLoopback }
+      this.hostFacts = {
+        home,
+        isLoopback: this.connection.isLoopback,
+        canManageHost: this.connection.isLoopback
+          || (typeof window !== 'undefined' && window.__DSH_CAN_MANAGE_HOST__ === true),
+      }
     }
     return this.hostFacts
   }

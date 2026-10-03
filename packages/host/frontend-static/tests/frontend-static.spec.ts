@@ -86,9 +86,11 @@ async function loadComposition(): Promise<Context> {
 /** GET (by default) one path against the running server; returns status, content-type, and the body. */
 async function request(port: number, path: string, init?: RequestInit): Promise<{ status: number; type: string | null; body: string }> {
   const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, init)
+  const type = response.headers.get('content-type')
+  expect(response.headers.get('cache-control')).toBe(response.status === 401 || type === 'text/html; charset=utf-8' ? 'no-store' : null)
   return {
     status: response.status,
-    type: response.headers.get('content-type'),
+    type,
     body: await response.text(),
   }
 }

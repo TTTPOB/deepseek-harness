@@ -70,7 +70,7 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
  */
 export async function serveStatic(
   pathname: string, res: ServerResponse, distRoot: string, distIndex: string,
-  authorizeIndex: () => boolean,
+  authorizeIndex: () => boolean | Promise<boolean>,
   renderIndex: () => Promise<string>,
 ): Promise<void> {
   const target = resolve(normalize(join(distRoot, pathname)))
@@ -86,7 +86,7 @@ export async function serveStatic(
   let type: string
   try {
     if (target === distRoot || target === distIndex) {
-      if (!authorizeIndex()) return
+      if (!await authorizeIndex()) return
       body = await renderIndex()
       type = HTML_MIME
     } else {
@@ -101,7 +101,10 @@ export async function serveStatic(
     res.end()
     return
   }
-  res.writeHead(200, { 'content-type': type })
+  res.writeHead(200, {
+    'content-type': type,
+    ...type === HTML_MIME ? { 'cache-control': 'no-store' } : {},
+  })
   res.end(body)
 }
 
@@ -133,8 +136,13 @@ export function apply(ctx: Context, config: Config): void {
       res,
       distRoot,
       distIndex,
-      () => ctx.connection.authorizeIndex(req, res),
-      renderIndex,
+      () => ctx.connection.authorizeIndexAsync(req, res),
+      async () => {
+        const body = await renderIndex()
+        const canManageHost = ctx.connection.canManageHost(req)
+        return body.replace(/<head(?:\s[^>]*)?>/i, open =>
+          `${open}<script>window.__DSH_CAN_MANAGE_HOST__=${String(canManageHost)}</script>`)
+      },
     )
   }), 'frontend-static: fallback seat')
 }

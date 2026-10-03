@@ -2,7 +2,7 @@ import { queryObjects } from 'node:v8'
 import { RemoteError, typertOwnedValue } from '@deepseek-ai/dsh-typert-protocol'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { Fiber } from '@deepseek-ai/cordis'
-import { describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import { z } from 'zod'
 import { RemoteMock } from '@deepseek-ai/dsh-remote-mock'
 import {
@@ -582,13 +582,20 @@ describe('Client Remote transport readiness', () => {
     await client.dispose()
   })
 
-  it('reports Host facts as plain reads and keeps them through Connection withdrawal', async () => {
+  it.each([
+    { isLoopback: true, granted: false, canManageHost: true },
+    { isLoopback: false, granted: false, canManageHost: false },
+    { isLoopback: false, granted: true, canManageHost: true },
+  ])('reports verified Host facts without changing loopback ($isLoopback/$granted)', async ({ isLoopback, granted, canManageHost }) => {
+    vi.stubGlobal('window', { __DSH_CAN_MANAGE_HOST__: granted })
+    onTestFinished(() => vi.unstubAllGlobals())
     const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
     await ctx.plugin(TypertRegistry)
     const generation = new GenerationHarness()
     const live: { snapshot: ConnectionGeneration | undefined } = { snapshot: undefined }
     const handle = {
-      isLoopback: true,
+      isLoopback,
       generation: { getSnapshot: () => live.snapshot, subscribe: () => () => {} },
       rpc: {
         call: vi.fn<ConnectionHandle['rpc']['call']>(),
@@ -603,12 +610,12 @@ describe('Client Remote transport readiness', () => {
     const remote = ctx.remote
 
     const beforeReady = remote.$host
-    expect(beforeReady).toEqual({ home: undefined, isLoopback: true })
+    expect(beforeReady).toEqual({ home: undefined, isLoopback, canManageHost })
     expect(remote.$host).toBe(beforeReady)
 
     live.snapshot = { id: 1, host: { home: '/hosts/primary' } }
     const afterReady = remote.$host
-    expect(afterReady).toEqual({ home: '/hosts/primary', isLoopback: true })
+    expect(afterReady).toEqual({ home: '/hosts/primary', isLoopback, canManageHost })
     expect(afterReady).not.toBe(beforeReady)
     expect(remote.$host).toBe(afterReady)
 

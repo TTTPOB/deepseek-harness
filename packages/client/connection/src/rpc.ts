@@ -230,6 +230,35 @@ export interface HostConnectionHandle {
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
 
   /**
+   * Await Access JWT validation before admitting an HTTP or upgrade request.
+   * @param request - incoming request with Host, Origin and authentication headers.
+   * @returns admitted operator or rejection status.
+   */
+  admitAsync(request: ConnectionTrustRequest): Promise<PeerAdmission>
+
+  /**
+   * Await Access authentication before serving an index or minting its cookie.
+   * @param request - frontend index request.
+   * @param response - response owned when the result is false.
+   * @returns true only when the frontend may serve the index.
+   */
+  authorizeIndexAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean>
+
+  /**
+   * Read server-verified Host management permission, not the browser hostname.
+   * @param request - authenticated request previously admitted through Access, or local cookie request.
+   * @returns true for a local authenticated request or an unexpired verified Access assertion.
+   */
+  canManageHost(request: ConnectionTrustRequest): boolean
+
+  /**
+   * Read the verified Access expiry for a long-lived transport.
+   * @param request - request previously admitted with Access.
+   * @returns absolute expiry in milliseconds, or undefined for other authentication.
+   */
+  accessExpiresAt(request: ConnectionTrustRequest): number | undefined
+
+  /**
    * Add the fresh process token to an ordinary Web application URL.
    * @param baseUrl - clean application URL whose authority and mount are preserved.
    * @returns tokenized URL for initial login; a mount proxy strips its prefix before {@link authorizeIndex}.
