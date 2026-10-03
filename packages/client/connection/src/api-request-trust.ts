@@ -14,7 +14,7 @@
  */
 
 import { isLoopbackHostname } from './loopback-hostname.ts'
-import type { ConnectionTrustRequest } from './rpc.ts'
+import type { ConnectionIndexRequest, ConnectionTrustRequest } from './rpc.ts'
 
 function header(headers: ConnectionTrustRequest['headers'], name: string): string | undefined {
   if (headers instanceof Headers) return headers.get(name) ?? undefined
@@ -82,13 +82,8 @@ function isTrustedAuthority(hostUrl: URL, trustedHosts: readonly string[]): bool
   })
 }
 
-/**
- * Decide whether one /api request may reach the RPC bridge.
- * @param request - Node HTTP or Fetch request facts (headers).
- * @param trustedHosts - non-loopback authorities this deployment serves: exact `host:port`, or port-less `host` matching any port.
- * @returns true when the Host is ours (loopback or trusted) and any attached browser markers are same-origin.
- */
-export function isTrustedApiRequest(request: ConnectionTrustRequest, trustedHosts: readonly string[]): boolean {
+/** Host authority shared by API requests and read-only index navigation. */
+function trustedRequestHost(request: ConnectionTrustRequest, trustedHosts: readonly string[]): URL | undefined {
   // Host fence (DNS-rebinding defense), applied to every request: the browser
   // fills Host from the URL it believes it is talking to, so a rebound page
   // carries the attacker's domain here even though the socket lands on this
@@ -97,10 +92,22 @@ export function isTrustedApiRequest(request: ConnectionTrustRequest, trustedHost
   // Fetch-Metadata, indistinguishable from curl, and its response is readable
   // by the rebound page.
   const host = header(request.headers, 'host')
-  if (host === undefined) return false
+  if (host === undefined) return undefined
   const hostUrl = parseAuthority(host)
+  if (hostUrl === undefined) return undefined
+  if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return undefined
+  return hostUrl
+}
+
+/**
+ * Decide whether one /api request may reach the RPC bridge.
+ * @param request - Node HTTP or Fetch request facts (headers).
+ * @param trustedHosts - non-loopback authorities this deployment serves: exact `host:port`, or port-less `host` matching any port.
+ * @returns true when Host is trusted and attached browser markers are same-origin.
+ */
+export function isTrustedApiRequest(request: ConnectionTrustRequest, trustedHosts: readonly string[]): boolean {
+  const hostUrl = trustedRequestHost(request, trustedHosts)
   if (hostUrl === undefined) return false
-  if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
   // Cross-site fence: modern browsers label the initiator relationship on
   // every fetch; an explicit cross-site marker is refused regardless of Origin.
   if (header(request.headers, 'sec-fetch-site') === 'cross-site') return false
@@ -115,4 +122,19 @@ export function isTrustedApiRequest(request: ConnectionTrustRequest, trustedHost
   } catch {
     return false
   }
+}
+
+/**
+ * Accept read-only top-level index navigation without imposing API Origin checks.
+ * Only Access-enabled index authorization uses this exception; the caller owns the index path.
+ * @param request - root or configured-index request, never an API or upgrade request.
+ * @param trustedHosts - non-loopback authorities this deployment serves.
+ * @returns true for a trusted API-style request or a trusted GET document navigation.
+ */
+export function isTrustedIndexRequest(request: ConnectionIndexRequest, trustedHosts: readonly string[]): boolean {
+  if (isTrustedApiRequest(request, trustedHosts)) return true
+  return request.method === 'GET'
+    && header(request.headers, 'sec-fetch-mode') === 'navigate'
+    && header(request.headers, 'sec-fetch-dest') === 'document'
+    && trustedRequestHost(request, trustedHosts) !== undefined
 }

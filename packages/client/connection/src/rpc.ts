@@ -237,7 +237,9 @@ export interface HostConnectionHandle {
   admitAsync(request: ConnectionTrustRequest): Promise<PeerAdmission>
 
   /**
-   * Await Access authentication before serving an index or minting its cookie.
+   * Await Access authentication before serving an index without a DSH cookie.
+   * Local requests retain the launch-token and signed-cookie exchange.
+   * Access index GET document navigations permit cross-site initiators on trusted Hosts.
    * @param request - frontend index request.
    * @param response - response owned when the result is false.
    * @returns true only when the frontend may serve the index.
@@ -246,7 +248,7 @@ export interface HostConnectionHandle {
 
   /**
    * Read server-verified Host management permission, not the browser hostname.
-   * @param request - authenticated request previously admitted through Access, or local cookie request.
+   * @param request - request verified through Access API/index authorization, or local cookie request.
    * @returns true for a local authenticated request or an unexpired verified Access assertion.
    */
   canManageHost(request: ConnectionTrustRequest): boolean

@@ -270,26 +270,25 @@ export class BrowserAuth {
   }
 
   /**
-   * Exchange server-verified Access authentication for the ordinary browser cookie.
+   * Serve a server-verified Access index without requiring or minting a DSH cookie.
+   * Root token links redirect once to the clean directory-relative URL.
    * @param req - index request already verified by Connection.
-   * @param res - response owned when a cookie redirect is required.
-   * @returns true when an existing cookie permits serving the index.
+   * @param res - response owned when a token-cleaning redirect is required.
+   * @returns true when the caller may serve the Access-authenticated index.
    */
   authorizeAccessIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse): boolean {
-    if (this.isAuthenticated(req)) return this.authorizeIndex(req, res)
-    const authority = requestAuthority(req.headers)
-    if (authority === undefined) {
-      this.writeUnauthorized(req, res)
+    /* v8 ignore next -- node:http always supplies url on server requests. */
+    const url = new URL(req.url ?? '/', 'http://dsh.invalid')
+    if (req.method === 'GET' && url.pathname === '/' && url.searchParams.has(TOKEN_QUERY)) {
+      res.writeHead(303, {
+        'cache-control': 'no-store',
+        'location': './',
+        'referrer-policy': 'no-referrer',
+      })
+      res.end()
       return false
     }
-    res.writeHead(303, {
-      'cache-control': 'no-store',
-      'location': './',
-      'referrer-policy': 'no-referrer',
-      'set-cookie': this.newSessionCookie(authority),
-    })
-    res.end()
-    return false
+    return true
   }
 
   /**

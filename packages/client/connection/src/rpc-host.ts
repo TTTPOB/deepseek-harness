@@ -10,7 +10,7 @@ import {
 } from './rpc.ts'
 import { clientRequestSchema } from './rpc-schema.ts'
 import { bridge } from './http-bridge.ts'
-import { isTrustedApiRequest } from './api-request-trust.ts'
+import { isTrustedApiRequest, isTrustedIndexRequest } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
 import type { CloudflareAccess } from './cloudflare-access.ts'
@@ -65,6 +65,7 @@ declare module '@deepseek-ai/cordis' {
 export class HostConnectionService extends Service implements HostConnectionHandle {
   /** The operator Peer every admitted request speaks for. */
   readonly operator: PeerScope
+  // Set only after the request passes its API or index trust check and JWT verification.
   private readonly accessExpiries = new WeakMap<ConnectionTrustRequest, number>()
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
   private readonly fetchRoutes = new Map<string, RegisteredFetchRoute>()
@@ -129,8 +130,9 @@ export class HostConnectionService extends Service implements HostConnectionHand
 
   /** Whether this authenticated request may persist Host settings. */
   canManageHost(request: ConnectionTrustRequest): boolean {
-    if (!isTrustedApiRequest(request, this.trustedHosts)) return false
-    if (this.isLocal(request)) return this.browserAuth.isAuthenticated(request)
+    if (this.isLocal(request)) {
+      return isTrustedApiRequest(request, this.trustedHosts) && this.browserAuth.isAuthenticated(request)
+    }
     return (this.accessExpiries.get(request) ?? 0) > Date.now()
   }
 
@@ -159,15 +161,17 @@ export class HostConnectionService extends Service implements HostConnectionHand
     return this.browserAuth.authorizeIndex(request, response)
   }
 
-  /** Authenticate the index through Access when enabled, otherwise preserve token login. */
+  /** Authenticate read-only index navigation through Access, otherwise preserve token login. */
   async authorizeIndexAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean> {
     if (this.access === undefined || this.isLocal(request)) return this.authorizeIndex(request, response)
-    const admission = await this.admitAsync(request)
-    if ('rejection' in admission) {
-      response.writeHead(admission.rejection, { 'cache-control': 'no-store' })
+    const trusted = isTrustedIndexRequest(request, this.trustedHosts)
+    const expiry = trusted ? await this.access.verify(request) : undefined
+    if (expiry === undefined) {
+      response.writeHead(trusted ? 401 : 403, { 'cache-control': 'no-store' })
       response.end()
       return false
     }
+    this.accessExpiries.set(request, expiry)
     return this.browserAuth.authorizeAccessIndex(request, response)
   }
 

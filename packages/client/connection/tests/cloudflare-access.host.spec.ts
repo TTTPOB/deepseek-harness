@@ -22,6 +22,7 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Connection from '../src/index.ts'
 import { CloudflareAccess } from '../src/cloudflare-access.ts'
+import { BrowserAuth } from '../src/browser-auth.ts'
 
 const issuer = 'https://test-team.cloudflareaccess.com'
 const audience = 'test-app'
@@ -138,12 +139,13 @@ function cookie(response: Awaited<ReturnType<typeof request>>): string {
   return value
 }
 
-async function upgrade(port: number, token?: string) {
+async function upgrade(port: number, token?: string, headers: Record<string, string> = {}) {
   return new Promise<{ status: number; socket?: Duplex }>((resolve, reject) => {
     const request = httpRequest({ host: '127.0.0.1', port, path: '/api/remote.mux', headers: {
       host: 'remote.example', connection: 'Upgrade', upgrade: 'websocket',
       'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
       ...(token === undefined ? {} : { 'cf-access-jwt-assertion': token }),
+      ...headers,
     } })
     request.on('upgrade', (response, socket) => resolve({ status: response.statusCode ?? 0, socket }))
     request.on('response', (response) => { response.resume(); resolve({ status: response.statusCode ?? 0 }) })
@@ -179,15 +181,25 @@ describe('Cloudflare Access', () => {
     const { host, patch } = await load()
     const port = host.webServer.port
     const headers = { host: 'remote.example', 'cf-access-jwt-assertion': token }
-    const exchange = await request(port, '/', headers)
-    expect(exchange.status).toBe(303)
-    const authenticated = { ...headers, cookie: cookie(exchange) }
+    const authenticated = headers
     const page = await request(port, '/', authenticated)
     expect(page.status).toBe(200)
     expect(page.headers['cache-control']).toBe('no-store')
+    expect(page.headers['set-cookie']).toBeUndefined()
     expect(page.body).toContain('window.__DSH_CAN_MANAGE_HOST__=true')
     expect(page.body).not.toContain(new URL(host.connection.authenticatedUrl('https://remote.example')).searchParams.get('token'))
-    expect(await request(port, '/', { host: 'remote.example', cookie: authenticated.cookie })).toMatchObject({ status: 401 })
+    // A signed cookie from token login before Access was enabled cannot replace the JWT.
+    const legacyAuth = await BrowserAuth.create(host, host.credentials, 30)
+    const legacyLaunch = new URL(legacyAuth.authenticatedUrl('https://remote.example'))
+    let legacyCookie = ''
+    legacyAuth.authorizeIndex({ method: 'GET', url: legacyLaunch.pathname + legacyLaunch.search, headers: { host: 'remote.example' } }, {
+      writeHead(_status, responseHeaders) { legacyCookie = responseHeaders?.['set-cookie']?.split(';', 1)[0] ?? '' },
+      end: vi.fn(),
+    })
+    const cookieOnly = { host: 'remote.example', cookie: legacyCookie }
+    expect(legacyAuth.isAuthenticated({ headers: cookieOnly })).toBe(true)
+    expect(await request(port, '/', cookieOnly)).toMatchObject({ status: 401 })
+    expect(await request(port, '/api/persist', { ...cookieOnly, 'content-type': 'application/json' }, '{}')).toMatchObject({ status: 401 })
     const payload = JSON.stringify({ enabled: true })
     const writeHeaders = { ...authenticated, 'content-type': 'application/json', origin: 'https://remote.example' }
     expect(await request(port, '/api/persist', writeHeaders, payload)).toMatchObject({ status: 200, body: '{"saved":true}' })
@@ -204,6 +216,91 @@ describe('Cloudflare Access', () => {
     await host.fiber.dispose()
     ctx = undefined
     expect(host.get('connection')).toBeUndefined()
+  })
+
+  it.each([undefined, issuer, 'https://remote.example', 'null'])('allows Access document navigation with Origin=%s without admitting cross-site API or WS', async (origin) => {
+    const sign = await keys()
+    const token = await sign()
+    const { host, patch } = await load()
+    const port = host.webServer.port
+    const navigation = {
+      host: 'remote.example', 'cf-access-jwt-assertion': token,
+      'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document',
+      ...(origin === undefined ? {} : { origin }),
+    }
+    const firstPage = await request(port, '/', navigation)
+    expect(firstPage.status).toBe(200)
+    expect(firstPage.headers['set-cookie']).toBeUndefined()
+    expect(firstPage.headers['cache-control']).toBe('no-store')
+    expect(firstPage.body).toContain('window.__DSH_CAN_MANAGE_HOST__=true')
+    const authenticated = navigation
+    // Repeated navigation and the configured index render even when no DSH cookie is sent.
+    for (const path of ['/', '/index.html']) {
+      const page = await request(port, path, authenticated)
+      expect(page.status).toBe(200)
+      expect(page.body).toContain('window.__DSH_CAN_MANAGE_HOST__=true')
+      expect(page.headers['set-cookie']).toBeUndefined()
+    }
+    const launch = new URL(host.connection.authenticatedUrl('https://remote.example'))
+    for (const query of [launch.search, '?token=obsolete&token=duplicate']) {
+      const cleaned = await request(port, '/' + query, navigation)
+      expect(cleaned.status).toBe(303)
+      expect(cleaned.headers.location).toBe('./')
+      expect(cleaned.headers['set-cookie']).toBeUndefined()
+      expect(cleaned.headers['referrer-policy']).toBe('no-referrer')
+      expect(await request(port, '/', navigation)).toMatchObject({ status: 200 })
+    }
+    const before = await readFile(patch, 'utf8')
+    const payload = JSON.stringify({ enabled: true })
+    expect(await request(port, '/api/persist', {
+      ...authenticated, 'content-type': 'application/json',
+    }, payload)).toMatchObject({ status: 403 })
+    // Navigation markers do not make a GET to the API or an upgrade a page request.
+    expect(await request(port, '/api/settings.update', authenticated)).toMatchObject({ status: 403 })
+    expect(await upgrade(port, token, authenticated)).toMatchObject({ status: 403 })
+    expect(await readFile(patch, 'utf8')).toBe(before)
+    const sameOrigin = {
+      ...authenticated, origin: 'https://remote.example', 'sec-fetch-site': 'same-origin',
+      'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty', 'content-type': 'application/json',
+    }
+    expect(await request(port, '/api/persist', sameOrigin, payload)).toMatchObject({ status: 200 })
+    expect(await readFile(patch, 'utf8')).toContain('enabled: true')
+  })
+
+  it('keeps Access index Host, JWT and navigation requirements and synchronous refusal', async () => {
+    const sign = await keys()
+    const { host } = await load()
+    const port = host.webServer.port
+    const navigation = {
+      host: 'remote.example', 'cf-access-jwt-assertion': await sign(),
+      'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document',
+    }
+    expect(await request(port, '/', { ...navigation, host: 'evil.example' })).toMatchObject({ status: 403 })
+    for (const token of ['', 'fake.jwt.token', await sign({ signed: false }), await sign({ exp: 1 })]) {
+      const response = await request(port, '/', { ...navigation, 'cf-access-jwt-assertion': token })
+      expect(response.status).toBe(401)
+      expect(response.headers['set-cookie']).toBeUndefined()
+    }
+    for (const markers of [
+      { 'sec-fetch-mode': '', 'sec-fetch-dest': '' },
+      { 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'document' },
+      { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' },
+      { 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'image' },
+    ]) {
+      expect(await request(port, '/', { ...navigation, ...markers })).toMatchObject({ status: 403 })
+    }
+    expect(await request(port, '/', navigation, 'body')).toMatchObject({ status: 405 })
+    const indexRequest = { method: 'GET', url: '/', headers: navigation }
+    const response = { writeHead: vi.fn(), end: vi.fn() }
+    expect(host.connection.authorizeIndex(indexRequest, response)).toBe(false)
+    expect(response.writeHead).toHaveBeenCalledWith(401, { 'cache-control': 'no-store' })
+    expect(host.connection.admit(indexRequest)).toMatchObject({ rejection: 403 })
+    expect(host.connection.canManageHost(indexRequest)).toBe(false)
+    expect(await host.connection.authorizeIndexAsync(indexRequest, response)).toBe(true)
+    expect(host.connection.canManageHost(indexRequest)).toBe(true)
+    expect(await host.connection.admitAsync(indexRequest)).toMatchObject({ rejection: 403 })
+    expect(await host.connection.authorizeIndexAsync({ ...indexRequest, method: 'HEAD' }, response)).toBe(false)
+    expect(response.writeHead).toHaveBeenLastCalledWith(403, { 'cache-control': 'no-store' })
   })
 
   it('requires Access for WebSocket admission and closes the socket at assertion expiry', async () => {
@@ -229,6 +326,7 @@ describe('Cloudflare Access', () => {
     for (const authority of authorities) {
       const launch = new URL(host.connection.authenticatedUrl(`http://${authority}`))
       const exchange = await request(port, launch.pathname + launch.search, { host: authority })
+      expect(exchange.status).toBe(303)
       const page = await request(port, '/', { host: authority, cookie: cookie(exchange) })
       expect(page.status).toBe(200)
       expect(page.body).toContain(`window.__DSH_CAN_MANAGE_HOST__=${String(authority !== 'remote.example')}`)
