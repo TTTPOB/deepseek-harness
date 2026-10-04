@@ -6,7 +6,7 @@ Use this procedure to publish the native plugin-manager modal and mobile termina
 
 Develop and test in a feature worktree, then integrate the verified commits into `daily-driver`. Keep the CLI and Web bundle at `0.1.7-rc.2`. This release uses `0.1.7-rc.2-fork2` for `@deepseek-ai/dsh-client-ui-plugin-manager` and `@deepseek-ai/dsh-client-ui-sidebar-terminal`; retain the existing fork1 archives for recovery.
 
-The [Release workflow](../../.github/workflows/daily-driver-release.yml) builds only these two packages for `daily-driver-v0.1.7-rc.2-fork7`. It downloads the unchanged Access packages from fork6 and UI settings from fork5 for the installed-artifact acceptance test.
+The [Release workflow](../../.github/workflows/daily-driver-release.yml) builds only these two packages for `daily-driver-v0.1.7-rc.2-fork8`. It downloads the unchanged Access packages from fork6 and UI settings from fork5 for the installed-artifact acceptance test.
 
 ## 2. Validate and publish
 
@@ -21,7 +21,7 @@ Only create and push the new tag after publication is authorized. The workflow p
 Publishing does not change the running Host. When installation and restart are separately authorized:
 
 1. Stop the affected Host from an external maintenance process.
-2. Replace only the two UI package global overrides with their immutable fork7 Release asset URLs, and install through pnpm. Preserve the official CLI/Web, Access overrides, independent mobile plugin, and existing configuration.
+2. Replace only the two UI package global overrides with their immutable fork8 Release asset URLs, and install through pnpm. Preserve the official CLI/Web, Access overrides, independent mobile plugin, and existing configuration.
 3. Start the Host and verify its served plugin-manager entry, terminal entry, and terminal lazy chunk. Open the phone UI and check the modal and terminal keyboard behavior.
 
 Keep peer declarations accurate. Any required compatibility exemption must be tested on the packaged combination and recorded as an exact package/runtime pair. Keep the running installation unchanged when a restart cannot be scheduled.
