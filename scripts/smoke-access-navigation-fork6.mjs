@@ -7,17 +7,22 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+const tarballs = process.argv.slice(2).map(path => resolve(path))
+assert([4, 6].includes(tarballs.length),
+  'Usage: node scripts/smoke-access-navigation-fork6.mjs <connection-fork2.tgz> <frontend-static-fork2.tgz> <gateway-fork2.tgz> <ui-settings-fork1.tgz> [<ui-plugin-manager-fork2.tgz> <ui-sidebar-terminal-fork2.tgz>]')
+const uiNames = tarballs.length === 6 ? [
+  '@deepseek-ai/dsh-client-ui-plugin-manager',
+  '@deepseek-ai/dsh-client-ui-sidebar-terminal',
+] : []
 const names = [
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-host-frontend-static',
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-client-ui-settings',
+  ...uiNames,
 ]
 const officialVersion = '0.1.7-rc.2'
 const versions = names.map((_, index) => `${officialVersion}-fork${index === 3 ? 1 : 2}`)
-const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, 4,
-  'Usage: node scripts/smoke-access-navigation-fork6.mjs <connection-fork2.tgz> <frontend-static-fork2.tgz> <gateway-fork2.tgz> <ui-settings-fork1.tgz>')
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const scratch = join(root, 'dist', 'smoke')
 await mkdir(scratch, { recursive: true })
@@ -35,6 +40,12 @@ let child
 let completion
 let closed = false
 let stage = 'installation'
+
+/** Strip source metadata before comparing the served executable with its installed artifact. */
+function executableSource(source) {
+  return source.replace(/(?:\r?\n)?\/\/# sourceURL=[^\r\n]*(?:\r?\n)?$/, '')
+    .replace(/(?:\r?\n)?\/\/# sourceMappingURL=[^\r\n]*(?:\r?\n)?$/, '').trimEnd()
+}
 
 /** Fetch a real loopback HTTP route while retaining the remote ingress authority. */
 function get(origin, path, headers) {
@@ -94,6 +105,14 @@ try {
       assert(!clientBundle.includes('require("@deepseek-ai/cosmokit")'), `${name} inlines cosmokit`)
     }
   }
+  if (uiNames.length) {
+    const manager = dirname(anchors.get(uiNames[0]).resolve(uiNames[0] + '/package.json'))
+    assert((await readFile(join(manager, 'lib/types/client/index.d.ts'), 'utf8')).includes('openModal()'),
+      'installed manager exposes the mobile modal API')
+    const terminal = dirname(anchors.get(uiNames[1]).resolve(uiNames[1] + '/package.json'))
+    assert((await readFile(join(terminal, 'lib/client.terminal.js'), 'utf8')).includes('__ModuleLoader__'),
+      'installed terminal includes its lazy browser chunk')
+  }
   for (const name of names.slice(1)) {
     if (manifests.get(name).peerDependencies?.[names[0]]) {
       assert.equal(await realpath(anchors.get(name).resolve(names[0])), await realpath(web.resolve(names[0])), `${name} shares Connection`)
@@ -114,6 +133,7 @@ try {
   const incompatible = []
   for (const name of names) {
     const issue = boot.evaluatePluginCompatibility(manifests.get(name))
+    if (uiNames.includes(name)) assert(!issue, `${name} passes the official compatibility gate without an exemption`)
     if (names.slice(1, 3).includes(name)) {
       assert(issue && !issue.exempted, `${name} must require explicit consent, not a widened peer range`)
       assert.equal(issue.peers[names[0]], `${officialVersion}-fork2`)
@@ -188,7 +208,7 @@ try {
   const rawBoot = /globalThis\["__DSH_BOOT__"\] = ([\s\S]*?)<\/script>/u.exec(page.text)?.[1]
   assert(rawBoot, 'actual Web page injects __DSH_BOOT__')
   const graph = JSON.parse(rawBoot)
-  const required = [names[0], names[2], names[3],
+  const required = [names[0], names[2], names[3], ...uiNames,
     '@deepseek-ai/dsh-api-session-controller', '@deepseek-ai/dsh-api-job-controller',
     '@deepseek-ai/dsh-api-terminal-controller', '@deepseek-ai/dsh-api-workspace-controller']
   for (const name of required) {
@@ -198,6 +218,22 @@ try {
       'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'script', 'sec-fetch-site': 'same-origin' })
     assert.equal(module.status, 200, `${name} advertised module URL is served`)
     assert(module.text.includes('__ModuleLoader__'), `${name} URL contains a real browser bundle`)
+    if (uiNames.includes(name)) {
+      const installed = dirname(anchors.get(name).resolve(name + '/package.json'))
+      const expected = executableSource(await readFile(join(installed, 'lib/client.js'), 'utf8'))
+      assert(module.text.startsWith(expected), `${name} serves the installed fork executable`)
+    }
+  }
+  if (uiNames.length) {
+    const entry = graph.entries.find(row => row.id === uiNames[1])
+    const chunk = new URL('plugins/' + uiNames[1] + '/client.terminal.js', origin)
+    chunk.searchParams.set('rev', entry.rev)
+    const response = await get(origin, chunk.pathname + chunk.search, { host: 'remote.example',
+      'cf-access-jwt-assertion': jwt, 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'script', 'sec-fetch-site': 'same-origin' })
+    assert.equal(response.status, 200, 'terminal lazy chunk is served by the real Host')
+    const installed = dirname(anchors.get(uiNames[1]).resolve(uiNames[1] + '/package.json'))
+    const expected = executableSource(await readFile(join(installed, 'lib/client.terminal.js'), 'utf8'))
+    assert(response.text.startsWith(expected), 'terminal lazy URL serves the installed fork executable')
   }
   const api = await get(origin, '/api/smoke-navigation-fence', headers)
   assert.equal(api.status, 403, 'valid Access JWT never bypasses the API cross-site fence')
@@ -208,7 +244,8 @@ try {
   const localCookie = localLogin.headers['set-cookie']?.[0]?.split(';', 1)[0]
   assert(localCookie, 'localhost login still sets a Cookie')
   assert.equal((await get(origin, '/', { host: launchUrl.host, cookie: localCookie })).status, 200)
-  console.log('fork6 smoke passed: actual overrides/shared peers, exact CLI exemptions, cold official Web Loader, cookieless Access navigation, localhost Cookie fallback, API fence and served controller graph')
+  console.log('fork6 smoke passed: actual overrides/shared peers, exact CLI exemptions, cold official Web Loader, cookieless Access navigation, localhost Cookie fallback, API fence and served controller graph'
+    + (uiNames.length ? ', manager modal API and terminal main/lazy routes' : ''))
 } catch (error) {
   // Do not print child output, command objects, request headers, assertion values, or URLs containing tokens.
   console.error(`fork6 smoke failed during ${stage}: ${error instanceof assert.AssertionError ? 'acceptance assertion failed (' + error.message.split('\n')[0].replace(/https?:\/\/\S+/g, '[URL]') + ')' : 'operation failed or timed out'}`)

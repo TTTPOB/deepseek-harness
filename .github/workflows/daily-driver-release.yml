@@ -657,8 +657,113 @@ jobs:
           cd dist/daily-driver
           gh release create "$tag" deepseek-ai-dsh-client-connection-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-host-frontend-static-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-api-gateway-0.1.7-rc.2-fork2.tgz SHA256SUMS --verify-tag --title "$tag" --latest \
             --notes 'Access document-navigation fix. Only client-connection, host-frontend-static and api-gateway advance to 0.1.7-rc.2-fork2; retain client-ui-settings fork1 from immutable fork5, official CLI/Web and unrelated overrides. Verify SHA256SUMS and replace the three global overrides together. The official rc.2 compatibility checker requires explicitly acknowledged exact-version exemptions for frontend-static and gateway fork2 on DSH 0.1.7-rc.2; use dsh plugin --profile web allow-version <package@version> --dsh-version 0.1.7-rc.2 --accept-risk only after accepting possible crashes or data loss. The isolated cold official-CLI smoke checks actual shared peers, saved exemptions, cookieless cross-site Access root navigation, localhost Cookie fallback, management permission, API rejection and the real served gateway/controller graph. It does not claim live Cloudflare-browser or running-Host acceptance. Install and restart only in a separately authorized maintenance window. This release contains only three fork2 tarballs and SHA256SUMS.'
+  mobile-ui-fork7:
+    if: github.event_name == 'push' && github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork7'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      CI: 'true'
+      NODE_OPTIONS: --max-old-space-size=3072
+      PACKAGES: packages/client/ui-plugin-manager packages/client/ui-sidebar-terminal
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          version: 11.24.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify UI release identity
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork7
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/tags/daily-driver-v0.1.7-rc.2-fork7)"
+          git merge-base --is-ancestor refs/tags/daily-driver-v0.1.7-rc.2-fork6 HEAD
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          const version = path => JSON.parse(readFileSync(path + '/package.json', 'utf8')).version
+          for (const path of process.env.PACKAGES.split(' ')) assert.equal(version(path), '0.1.7-rc.2-fork2', path)
+          for (const path of ['apps/cli', 'packages/bundle/web-app']) assert.equal(version(path), '0.1.7-rc.2', path)
+          NODE
+      - name: Locate global pnpm store
+        id: store
+        run: echo "path=$(pnpm --config.verify-deps-before-run=false store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-11.24.0-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-11.24.0-
+      - name: Install frozen target closure and build tools
+        run: |
+          node --test scripts/daily-driver-source.test.mjs
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs install "${packages[@]}"
+      - name: Verify UI release routing and paired smoke arguments
+        run: node --test scripts/ui-fork-release.test.mjs
+      - name: Download unchanged Access fixtures from immutable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p dist/fixtures
+          gh release download daily-driver-v0.1.7-rc.2-fork6 --repo "$GH_REPO" --pattern '*.tgz' --dir dist/fixtures
+          gh release download daily-driver-v0.1.7-rc.2-fork5 --repo "$GH_REPO" \
+            --pattern deepseek-ai-dsh-client-ui-settings-0.1.7-rc.2-fork1.tgz --dir dist/fixtures
+      - name: Run focused modal and terminal regressions
+        run: |
+          pnpm --config.verify-deps-before-run=false exec vitest run --maxWorkers=2 packages/client/ui-plugin-manager/tests packages/client/ui-sidebar-terminal/tests
+      - name: Generate Host Remote declarations before Client typechecking
+        run: |
+          pnpm --config.verify-deps-before-run=false exec tsc -b packages/typert/generator/tsconfig.json packages/api/remotes/tsconfig.host.json
+          pnpm --config.verify-deps-before-run=false exec tsdown --workspace packages/util/timeout -F @deepseek-ai/dsh-timeout --env.DSH_BUILD_FACE host
+      - name: Build and pack only the two UI packages
+        run: |
+          pnpm --config.verify-deps-before-run=false exec tsc -b packages/client/ui-plugin-manager/tsconfig.json packages/client/ui-sidebar-terminal/tsconfig.json
+          pnpm --config.verify-deps-before-run=false exec tsdown --workspace packages/util/crypto -F @deepseek-ai/dsh-util-crypto --env.DSH_BUILD_FACE host
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs build "${packages[@]}"
+          pnpm --config.verify-deps-before-run=false exec vitest run packages/client/ui-sidebar-terminal/tests/bundle-split.client.spec.ts
+      - name: Verify official compatibility and cold Web Loader with paired UI artifacts
+        run: |
+          node scripts/smoke-access-navigation-fork6.mjs \
+            dist/fixtures/deepseek-ai-dsh-client-connection-0.1.7-rc.2-fork2.tgz \
+            dist/fixtures/deepseek-ai-dsh-host-frontend-static-0.1.7-rc.2-fork2.tgz \
+            dist/fixtures/deepseek-ai-dsh-api-gateway-0.1.7-rc.2-fork2.tgz \
+            dist/fixtures/deepseek-ai-dsh-client-ui-settings-0.1.7-rc.2-fork1.tgz \
+            dist/daily-driver/deepseek-ai-dsh-client-ui-plugin-manager-0.1.7-rc.2-fork2.tgz \
+            dist/daily-driver/deepseek-ai-dsh-client-ui-sidebar-terminal-0.1.7-rc.2-fork2.tgz
+          (cd dist/daily-driver && sha256sum deepseek-ai-dsh-client-ui-plugin-manager-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-client-ui-sidebar-terminal-0.1.7-rc.2-fork2.tgz > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ui-fork7-release
+          path: |
+            dist/daily-driver/deepseek-ai-dsh-client-ui-plugin-manager-0.1.7-rc.2-fork2.tgz
+            dist/daily-driver/deepseek-ai-dsh-client-ui-sidebar-terminal-0.1.7-rc.2-fork2.tgz
+            dist/daily-driver/SHA256SUMS
+          if-no-files-found: error
+      - name: Publish immutable UI release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag=daily-driver-v0.1.7-rc.2-fork7
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')" = "$(git rev-parse HEAD)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+          cd dist/daily-driver
+          gh release create "$tag" deepseek-ai-dsh-client-ui-plugin-manager-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-client-ui-sidebar-terminal-0.1.7-rc.2-fork2.tgz SHA256SUMS --verify-tag --title "$tag" --latest \
+            --notes 'Integrate the already locally delivered native plugin-manager modal and mobile terminal viewport/one-shot modifier keys into the daily-driver source and immutable release route. Only these two official UI packages advance to fork2; keep official CLI/Web, Access fork6/fork5 overrides and independent mobile plugins unchanged. The artifact smoke checks official compatibility without UI exemptions, shared peers, cold official Web Loader and actually served manager/terminal main and lazy scripts. Source component tests cover modal and terminal behavior; this does not claim Android or running-Host acceptance. Replace the two global overrides with immutable Release URLs only in a separately authorized maintenance window: stop Host, install, start and verify. Never replace the running Host installation or widen peer ranges to pass compatibility.'
   build:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -777,7 +882,7 @@ jobs:
           path: dist/daily-driver/*
           if-no-files-found: error
   publish:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     needs: build
     runs-on: ubuntu-24.04
     permissions:
