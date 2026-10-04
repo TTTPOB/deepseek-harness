@@ -588,7 +588,7 @@ describe('Client Remote transport readiness', () => {
     { isLoopback: false, granted: true, canManageHost: true },
   ])('reports verified Host facts without changing loopback ($isLoopback/$granted)', async ({ isLoopback, granted, canManageHost }) => {
     vi.stubGlobal('window', { __DSH_CAN_MANAGE_HOST__: granted })
-    onTestFinished(() => vi.unstubAllGlobals())
+    onTestFinished(() => { vi.unstubAllGlobals() })
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())
     await ctx.plugin(TypertRegistry)
