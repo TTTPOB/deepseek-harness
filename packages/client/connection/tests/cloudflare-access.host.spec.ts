@@ -62,13 +62,13 @@ async function load(access = true) {
   const index = join(home, 'index.html')
   await writeFile(index, '<head></head><body>shell</body>')
   await writeFile(config, [
-    '- id: credentials', '  name: credentials', '  config:', `    path: ${join(home, 'credentials.yml')}`, '    watch: false',
-    '- id: server', '  name: server', '  config:', '    host: 127.0.0.1', '    port: 0',
-    '- id: connection', '  name: connection', '  config:', '    trustedHosts: [remote.example]',
+    '- id: credentials', '  name: cordis:credentials', '  config:', `    path: ${join(home, 'credentials.yml')}`, '    watch: false',
+    '- id: server', '  name: cordis:server', '  config:', '    host: 127.0.0.1', '    port: 0',
+    '- id: connection', '  name: cordis:connection', '  config:', '    trustedHosts: [remote.example]',
     ...(access ? ['    cloudflareAccess:', `      issuer: ${issuer}`, `      audience: ${audience}`] : []),
-    '- id: frontend', '  name: frontend', '  config:', `    distIndex: ${index}`,
-    '- id: typert', '  name: typert', '- id: gateway', '  name: gateway',
-    '- id: probe', '  name: probe',
+    '- id: frontend', '  name: cordis:frontend', '  config:', `    distIndex: ${index}`,
+    '- id: typert', '  name: cordis:typert', '- id: gateway', '  name: cordis:gateway',
+    '- id: probe', '  name: cordis:probe',
   ].join('\n'))
   ctx = new Context()
   ctx.baseUrl = pathToFileURL(home).href + '/'
@@ -89,15 +89,10 @@ async function load(access = true) {
       })
     },
   }
-  const modules = new Map<string, object>([
-    ['credentials', LocalCredentials], ['server', HttpServer], ['connection', Connection],
-    ['frontend', FrontendStatic], ['probe', probe], ['typert', TypertRegistry], ['gateway', Gateway],
-  ])
-  ctx.loader.internal = { version: 'v2', async import(name: string) {
-    const module = modules.get(name)
-    if (module === undefined) throw new Error(`unexpected module ${name}`)
-    return module
-  } }
+  Object.assign(ctx.loader.builtins, {
+    credentials: LocalCredentials, server: HttpServer, connection: Connection,
+    frontend: FrontendStatic, probe, typert: TypertRegistry, gateway: Gateway,
+  })
   const dir = join(home, 'profile')
   initProfile(dir, ['test-bundle'])
   const bundle = join(dir, 'node_modules', 'test-bundle')
