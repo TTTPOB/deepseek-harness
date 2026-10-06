@@ -81,7 +81,10 @@ export class AgentPresetRegistry extends TypertRemoteService {
   /** Default preset for a subsequently created session. */
   get defaultId(): string { return this.config.selectedDefault.get() ?? this.config.default }
 
-  /** Register a declaration; mount it on first Agent or cold inspection use. */
+  /** Register a declaration; mount it on first Agent or cold inspection use.
+   * @param definition - preset identity, metadata and child plugin declarations.
+   * @returns an asynchronous disposer that unregisters the declaration and collects unused mounts.
+   */
   async register(definition: PresetDefinition): Promise<() => Promise<void>> {
     const context = this.ctx
     if (!definition.id.trim()) throw new Error('Preset id must not be empty')
@@ -231,7 +234,10 @@ export class AgentPresetRegistry extends TypertRemoteService {
     })
   }
 
-  /** Transfer a workspace lease into the Agent scope before caller setup. */
+  /** Transfer a workspace lease into the Agent scope before caller setup.
+   * @param ctx - scoped Agent context that owns the transferred lease.
+   * @param placement - retained workspace placement to release with the Agent scope.
+   */
   place(ctx: Context, placement: PresetPlacement): void {
     const key = scopeOf(ctx)
     if (key === undefined) throw new Error('Agent placement requires a scoped context')

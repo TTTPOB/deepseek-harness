@@ -499,9 +499,9 @@ Source: [`packages/core/agent-loop/src/index.ts`](../../packages/core/agent-loop
 Registry of YAML-declared presets and the revisions live Agents retain.
 
 ```ts cordis-catalog
-/** Register and eagerly load a definition; activation failure remains visible in the roster.
- * @param definition Parsed configuration supplied by the declaring plugin.
- * @returns Definition disposer after activation or its diagnostic settles; the declaring plugin owns it.
+/** Register a declaration; mount it on first Agent or cold inspection use.
+ * @param definition - preset identity, metadata and child plugin declarations.
+ * @returns an asynchronous disposer that unregisters the declaration and collects unused mounts.
  */
 async register(definition: PresetDefinition): Promise<() => Promise<void>>
 
@@ -526,6 +526,12 @@ async resolve(id?: string): Promise<AgentPreset>
  * @returns The declared composition beside its published metadata.
  */
 @Remote('read') readDocument(agentPreset: string): Promise<AgentPresetDocument>
+
+/** Transfer a workspace lease into the Agent scope before caller setup.
+ * @param ctx - scoped Agent context that owns the transferred lease.
+ * @param placement - retained workspace placement to release with the Agent scope.
+ */
+place(ctx: Context, placement: PresetPlacement): void
 
 /** Bind an unpublished Agent to the current preset revision.
  * @param ctx Agent context from its setup callback.
@@ -656,6 +662,13 @@ withoutInitiator<T>(operation: () => T): T
  *   yield it directly — exact identity nests the teardown in order.
  */
 setFactory(factory: AgentFactory): () => void
+
+/**
+ * Register setup run before each create/resume caller setup.
+ * @param setup - contribution composed into unpublished Agent setup.
+ * @returns disposer owned by the registering plugin fiber.
+ */
+registerSetup(setup: AgentSetup): () => void
 
 /**
  * Create and publish a new agent through the registered factory.
