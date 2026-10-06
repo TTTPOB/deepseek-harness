@@ -657,6 +657,92 @@ jobs:
           cd dist/daily-driver
           gh release create "$tag" deepseek-ai-dsh-client-connection-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-host-frontend-static-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-api-gateway-0.1.7-rc.2-fork2.tgz SHA256SUMS --verify-tag --title "$tag" --latest \
             --notes 'Access document-navigation fix. Only client-connection, host-frontend-static and api-gateway advance to 0.1.7-rc.2-fork2; retain client-ui-settings fork1 from immutable fork5, official CLI/Web and unrelated overrides. Verify SHA256SUMS and replace the three global overrides together. The official rc.2 compatibility checker requires explicitly acknowledged exact-version exemptions for frontend-static and gateway fork2 on DSH 0.1.7-rc.2; use dsh plugin --profile web allow-version <package@version> --dsh-version 0.1.7-rc.2 --accept-risk only after accepting possible crashes or data loss. The isolated cold official-CLI smoke checks actual shared peers, saved exemptions, cookieless cross-site Access root navigation, localhost Cookie fallback, management permission, API rejection and the real served gateway/controller graph. It does not claim live Cloudflare-browser or running-Host acceptance. Install and restart only in a separately authorized maintenance window. This release contains only three fork2 tarballs and SHA256SUMS.'
+  catalog-refresh-fork10:
+    if: github.event_name == 'push' && github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork10'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      CI: 'true'
+      NODE_OPTIONS: --max-old-space-size=3072
+      PACKAGES: packages/session/session-persistence-jsonl
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          version: 11.24.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify targeted session-query release identity
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork10
+          git merge-base --is-ancestor refs/tags/daily-driver-v0.1.7-rc.2-fork9 HEAD
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          for (const [path, version] of [
+            ['packages/session-query/session-query', '0.1.7-rc.2-fork1'],
+            ['packages/session/session-persistence-jsonl', '0.1.7-rc.2-fork3'],
+            ['packages/session-query/session-query-sqlite', '0.1.7-rc.2-fork3'],
+            ['apps/cli', '0.1.7-rc.2'],
+            ['packages/bundle/web-app', '0.1.7-rc.2'],
+          ]) assert.equal(JSON.parse(readFileSync(`${path}/package.json`, 'utf8')).version, version, path)
+          NODE
+      - name: Install frozen target closure and build tools
+        run: |
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs install "${packages[@]}"
+      - name: Run focused catalog regression
+        run: |
+          pnpm --config.verify-deps-before-run=false run build:native-system
+          pnpm --config.verify-deps-before-run=false exec vitest run --maxWorkers=2 packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts
+      - name: Build and pack only the persistence provider
+        run: |
+          read -r -a packages <<< "$PACKAGES"
+          node scripts/daily-driver-source.mjs build "${packages[@]}"
+      - name: Fetch unchanged query fixtures from immutable fork9
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/fixtures
+          gh release download daily-driver-v0.1.7-rc.2-fork9 --repo TTTPOB/deepseek-harness \
+            --pattern deepseek-ai-dsh-session-query-0.1.7-rc.2-fork1.tgz \
+            --pattern deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork3.tgz --dir dist/fixtures
+      - name: Verify isolated installed artifacts
+        env:
+          DSH_SMOKE_JSONL_VERSION: 0.1.7-rc.2-fork3
+        run: |
+          node scripts/smoke-session-query-fork9.mjs \
+            dist/fixtures/deepseek-ai-dsh-session-query-0.1.7-rc.2-fork1.tgz \
+            dist/daily-driver/deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork3.tgz \
+            dist/fixtures/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork3.tgz
+          (cd dist/daily-driver && sha256sum *.tgz > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalog-refresh-fork10-release
+          path: dist/daily-driver/*
+          if-no-files-found: error
+      - name: Publish immutable session-query release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag=daily-driver-v0.1.7-rc.2-fork10
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')" = "$(git rev-parse refs/tags/$tag)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+          cd dist/daily-driver
+          gh release create "$tag" *.tgz SHA256SUMS --verify-tag --title "$tag" --latest \
+            --notes 'Only session-persistence-jsonl advances to 0.1.7-rc.2-fork3. Concurrent catalog discovery rechecks a directory after reading its header, preserving rejection of genuinely duplicated IDs in different directories. Keep query fork1, SQLite fork3, official CLI/Web and unrelated overrides unchanged. No DB schema, format, ranking, or BM25 change. Focused regressions and isolated official Web Loader smoke passed. Install this one global override and restart the Host to activate.'
   session-query-fork9:
     if: github.event_name == 'push' && github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork9'
     runs-on: ubuntu-24.04
@@ -839,7 +925,7 @@ jobs:
           gh release create "$tag" deepseek-ai-dsh-client-ui-plugin-manager-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-client-ui-sidebar-terminal-0.1.7-rc.2-fork2.tgz SHA256SUMS --verify-tag --title "$tag" --latest \
             --notes 'Integrate the already locally delivered native plugin-manager modal and mobile terminal viewport/one-shot modifier keys into the daily-driver source and immutable release route. Only these two official UI packages advance to fork2; keep official CLI/Web, Access fork6/fork5 overrides and independent mobile plugins unchanged. The artifact smoke checks official compatibility without UI exemptions, shared peers, cold official Web Loader and actually served manager/terminal main and lazy scripts. Source component tests cover modal and terminal behavior; this does not claim Android or running-Host acceptance. Replace the two global overrides with immutable Release URLs only in a separately authorized maintenance window: stop Host, install, start and verify. Never replace the running Host installation or widen peer ranges to pass compatibility.'
   build:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork8' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork9' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork8' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork9' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork10' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -958,7 +1044,7 @@ jobs:
           path: dist/daily-driver/*
           if-no-files-found: error
   publish:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork8' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork9' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork8' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork9' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork10' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
     needs: build
     runs-on: ubuntu-24.04
     permissions:

@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url'
 
 const packages = [
   ['@deepseek-ai/dsh-session-query', '0.1.7-rc.2-fork1'],
-  ['@deepseek-ai/dsh-session-persistence-jsonl', '0.1.7-rc.2-fork2'],
+  ['@deepseek-ai/dsh-session-persistence-jsonl', process.env.DSH_SMOKE_JSONL_VERSION ?? '0.1.7-rc.2-fork2'],
   ['@deepseek-ai/dsh-session-query-sqlite', '0.1.7-rc.2-fork3'],
 ]
 const tarballs = process.argv.slice(2).map(path => resolve(path))
