@@ -1,0 +1,176 @@
+/** Isolated fork9 artifact, cold official Web Loader, and targeted session-read smoke. */
+import assert from 'node:assert/strict'
+import { execFileSync, spawn } from 'node:child_process'
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const packages = [
+  ['@deepseek-ai/dsh-session-query', '0.1.7-rc.2-fork1'],
+  ['@deepseek-ai/dsh-session-persistence-jsonl', '0.1.7-rc.2-fork2'],
+  ['@deepseek-ai/dsh-session-query-sqlite', '0.1.7-rc.2-fork3'],
+]
+const tarballs = process.argv.slice(2).map(path => resolve(path))
+assert.equal(tarballs.length, 3,
+  'Usage: node scripts/smoke-session-query-fork9.mjs <session-query.tgz> <persistence-jsonl.tgz> <session-query-sqlite.tgz>')
+const runtime = await mkdtemp(join(tmpdir(), 'dsh-session-index-fork9-'))
+try {
+  for (const tarball of tarballs) await copyFile(tarball, join(runtime, basename(tarball)))
+  await writeFile(join(runtime, 'package.json'), JSON.stringify({
+    name: 'session-index-fork9-smoke', private: true, type: 'module', packageManager: 'pnpm@11.24.0',
+    dependencies: { '@deepseek-ai/dsh': '0.1.7-rc.2' },
+  }, null, 2) + '\n')
+  const overrides = packages.map(([name], index) =>
+    `  '${name}': 'file:./${basename(tarballs[index])}'`).join('\n')
+  await writeFile(join(runtime, 'pnpm-workspace.yaml'),
+    `packages:\n  - .\nblockExoticSubdeps: false\noverrides:\n${overrides}\n`)
+  // Preserve the caller's user-level store rather than pnpm's temporary-filesystem fallback.
+  const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], {
+    encoding: 'utf8', timeout: 60_000,
+  }).trim()
+  execFileSync('pnpm', ['--store-dir', dirname(store), 'install', '--ignore-scripts'], {
+    cwd: runtime, stdio: 'inherit', timeout: 600_000,
+  })
+  const runtimeRequire = createRequire(join(runtime, 'package.json'))
+  const cliManifest = runtimeRequire.resolve('@deepseek-ai/dsh/package.json')
+  assert.equal(JSON.parse(await readFile(cliManifest, 'utf8')).version, '0.1.7-rc.2')
+  const cli = createRequire(cliManifest)
+  const base = createRequire(cli.resolve('@deepseek-ai/dsh-base/package.json'))
+  const loaded = []
+  const anchors = []
+  for (const [name, version] of packages) {
+    const manifest = await realpath(base.resolve(`${name}/package.json`))
+    assert.match(manifest, /file\+/)
+    assert.equal(JSON.parse(await readFile(manifest, 'utf8')).version, version)
+    anchors.push(createRequire(manifest))
+    loaded.push(await import(pathToFileURL(base.resolve(name)).href))
+    console.log(`Resolved ${name}@${version}: ${manifest}`)
+  }
+  const [, persistenceAnchor, queryAnchor] = anchors
+  for (const name of ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-persistence', '@deepseek-ai/cordis']) {
+    assert.equal(await realpath(persistenceAnchor.resolve(name)), await realpath(queryAnchor.resolve(name)), name)
+  }
+  for (const [anchor, name] of [
+    [persistenceAnchor, '@deepseek-ai/dsh-session'],
+    [persistenceAnchor, '@deepseek-ai/dsh-session-persistence'],
+    [queryAnchor, '@deepseek-ai/dsh-session-query'],
+  ]) assert.equal(JSON.parse(await readFile(anchor.resolve(`${name}/package.json`), 'utf8')).version,
+    name === '@deepseek-ai/dsh-session-query' ? '0.1.7-rc.2-fork1' : '0.1.7-rc.2')
+  const boot = await import(pathToFileURL(cli.resolve('@deepseek-ai/dsh-app-boot')).href)
+  const home = join(runtime, 'home')
+  const profile = join(home, 'profiles/web')
+  const bin = join(dirname(cliManifest), 'lib/bin.js')
+  const env = { ...process.env, DSH_HOME: home, DSH_AGENTS_HOME: join(runtime, 'agents'), DSH_TELEMETRY_DISABLED: '1' }
+  await mkdir(profile, { recursive: true })
+  await writeFile(join(profile, 'package.json'), JSON.stringify({
+    name: 'session-query-web-smoke', private: true, dependencies: {},
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
+  }) + '\n')
+  for (const [name, version] of packages) {
+    const manifest = JSON.parse(await readFile(base.resolve(`${name}/package.json`), 'utf8'))
+    const issue = boot.evaluatePluginCompatibility(manifest)
+    if (name !== '@deepseek-ai/dsh-session-query-sqlite') assert.equal(issue, undefined)
+    else {
+      assert(issue && !issue.exempted)
+      execFileSync(process.execPath, [bin, 'plugin', '--profile', 'web', 'allow-version',
+        `${name}@${version}`, '--dsh-version', '0.1.7-rc.2', '--accept-risk'],
+      { cwd: runtime, env, stdio: 'pipe', timeout: 60_000 })
+      const exemptions = JSON.parse(await readFile(join(profile, 'compatibility.json'), 'utf8'))
+      assert(boot.evaluatePluginCompatibility(manifest, exemptions).exempted)
+    }
+  }
+  const child = spawn(process.execPath, [bin, '--profile', 'web', '--host', '127.0.0.1', '--port', '0', '--no-open'],
+    { cwd: runtime, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const completion = new Promise(resolveExit => child.once('close', resolveExit))
+  try {
+    const launchUrl = await new Promise((resolveReady, reject) => {
+      let output = ''
+      const timer = setTimeout(() => reject(new Error('Official Web Loader did not become ready within 90s')), 90_000)
+      child.once('error', error => { clearTimeout(timer); reject(error) })
+      child.once('close', code => { clearTimeout(timer); reject(new Error(`Official Web Loader exited before readiness: ${code}`)) })
+      const collect = chunk => {
+        // Keep launch credentials only in memory; never print startup output.
+        output = (output + chunk.toString()).slice(-64 * 1024)
+        const match = /dsh web: (http:\/\/127\.0\.0\.1:\d+[^\s]*)/.exec(output)
+        if (match) { clearTimeout(timer); resolveReady(new URL(match[1])); output = '' }
+      }
+      child.stdout.on('data', collect)
+      child.stderr.on('data', collect)
+    })
+    const login = await fetch(launchUrl, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+    const cookie = login.headers.get('set-cookie')?.split(';')[0]
+    assert(cookie, 'Cold Web Loader supplies the localhost login cookie')
+    const page = await fetch(launchUrl.origin, { headers: { cookie }, signal: AbortSignal.timeout(15_000) })
+    assert.equal(page.status, 200)
+    const html = await page.text()
+    const rawBoot = /globalThis\["__DSH_BOOT__"\] = ([\s\S]*?)<\/script>/u.exec(html)?.[1]
+    assert(rawBoot, 'Official Web serves its authenticated boot graph')
+    assert(JSON.parse(rawBoot).entries.some(entry => entry.id === '@deepseek-ai/dsh-api-session-controller'),
+      'Session controller activates with the paired query service')
+    console.log('fork9 cold official Web Loader and saved exact-version exemption passed')
+  } finally {
+    child.kill('SIGTERM')
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000)
+    try { await completion } finally { clearTimeout(timer) }
+  }
+  const load = async (anchor, name) => import(pathToFileURL(anchor.resolve(name)).href)
+  const { Context, Service } = await load(queryAnchor, '@deepseek-ai/cordis')
+  const sessionModule = await load(persistenceAnchor, '@deepseek-ai/dsh-session')
+  const persistenceModule = await load(persistenceAnchor, '@deepseek-ai/dsh-session-persistence')
+  const queryModule = await load(queryAnchor, '@deepseek-ai/dsh-session-query')
+  const projectionModule = await load(base, '@deepseek-ai/dsh-session-projection')
+  const { createUserMessage } = await load(base, '@deepseek-ai/dsh-llm')
+  const [queryDefinition, persistenceFork, queryFork] = loaded
+  assert.equal(queryDefinition.default, queryModule.default)
+  assert(persistenceFork.default.prototype instanceof persistenceModule.default)
+  assert(queryFork.default.prototype instanceof queryModule.default)
+  assert(persistenceModule.default.prototype instanceof Service)
+  assert.equal(queryFork.SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES, 33554432)
+  assert.throws(() => new queryFork.default.Config({ path: ':memory:', maxIndexedSessionBytes: 0 }))
+  const ctx = new Context()
+  try {
+    await ctx.plugin(sessionModule.default)
+    await ctx.plugin(projectionModule.default)
+    await ctx.plugin(persistenceFork.default, { root: join(runtime, 'sessions'), compression: 'none' })
+    await ctx.plugin(queryFork.default, { path: join(runtime, 'search.db') })
+    const counters = { list: 0, stat: 0, open: 0 }
+    for (const name of Object.keys(counters)) {
+      const original = ctx.sessionPersistence[name].bind(ctx.sessionPersistence)
+      ctx.sessionPersistence[name] = (...args) => { counters[name] += 1; return original(...args) }
+    }
+    const session = ctx.sessions.prepare(sessionModule.SessionId('fork9-smoke'), { meta: { createdAt: 10 } })
+    const writer = await ctx.sessionPersistence.create(session.header)
+    const detach = ctx.sessions.enter(session)
+    ctx.sessions.announce(session)
+    const append = text => session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    append('initial needle')
+    assert.equal((await ctx.sessionQuery.searchSessions({ query: 'initial needle' })).items.length, 1)
+    const before = { ...counters }
+    assert.equal((await ctx.sessionQuery.searchSessions({ query: 'initial needle' })).items.length, 1)
+    assert.deepEqual(counters, before, 'Unchanged search observes no stored source')
+    append('final tail needle')
+    detach()
+    const page = await ctx.sessionQuery.searchSessions({ query: 'final tail' })
+    assert.equal(page.items.length, 1)
+    assert.equal(page.items[0].live, false)
+    assert.equal(page.items[0].persisted, true)
+    await writer.close()
+    const listBefore = counters.list
+    const exact = await ctx.sessionQuery.filterSessions([{ kind: 'id', values: [session.id] }])
+    assert.equal(exact.length, 1)
+    assert.equal(exact[0].persisted, true)
+    const titles = await ctx.sessionQuery.readTitleSnapshots([session.id])
+    assert.equal(titles[0].status, 'fulfilled')
+    assert.equal((await ctx.sessionQuery.readEvent({ sessionId: session.id, seq: sessionModule.SessionSeq(0) })).target.type, 'user/message')
+    assert.equal(counters.list, listBefore, 'Exact metadata, titles and event reads do not enumerate the corpus')
+    console.log('fork9 smoke: shared official Session/Cordis identity, built imports, unchanged search, durable closing tail, and targeted reads without corpus listing passed')
+  } finally {
+    await ctx.fiber.dispose()
+  }
+} finally {
+  await rm(runtime, { recursive: true, force: true })
+}
