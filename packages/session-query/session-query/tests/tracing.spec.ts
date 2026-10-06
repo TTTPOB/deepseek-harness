@@ -145,7 +145,7 @@ async function queryContext(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
-  await ctx.plugin(TestSessionQueryEngine)
+  await ctx.plugin(TestSessionQueryEngine, { metadataCacheTtlMs: 0 })
   return ctx
 }
 

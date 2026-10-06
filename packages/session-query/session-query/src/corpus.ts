@@ -35,11 +35,17 @@ export type LogicalProjectionResult<Value> =
 export class SessionCorpus {
   private _persistence: SessionPersistence | undefined
   private readonly _optionalPersistenceFiber: Fiber
+  private _catalog: { identity: symbol; expiresAt: number; headers: SessionHeader[] } | undefined
+  private _catalogGeneration = 0
 
   constructor(
     private readonly _ctx: Context,
     private readonly _persistedReadConcurrency: number,
+    private readonly _metadataCacheTtlMs: number = 5000,
   ) {
+    const invalidate = (): void => { this._catalog = undefined; this._catalogGeneration += 1 }
+    _ctx.on('session/created', invalidate)
+    _ctx.on('session/disposed', invalidate)
     this._optionalPersistenceFiber = _ctx.inject(['sessionPersistence'], (childCtx: Context) => {
       const service = childCtx.sessionPersistence
       this._persistence = service
@@ -49,7 +55,10 @@ export class SessionCorpus {
       }, 'sessionQuery.persistenceBinding')
     })
     _ctx.effect(() => {
-      return () => this._optionalPersistenceFiber.dispose()
+      return () => {
+        this._catalog = undefined
+        return this._optionalPersistenceFiber.dispose()
+      }
     }, 'sessionQuery.optionalPersistence')
   }
 
@@ -61,7 +70,7 @@ export class SessionCorpus {
   async listSessions(signal?: AbortSignal): Promise<SessionRecord[]> {
     signal?.throwIfAborted()
     const persistence = this._persistence
-    const persisted = persistence === undefined ? [] : await listPersisted(persistence, signal)
+    const persisted = persistence === undefined ? [] : await this.listMetadata(persistence, signal)
     signal?.throwIfAborted()
     const records = new Map<SessionId, SessionRecord>()
     for (const header of persisted) {
@@ -77,6 +86,18 @@ export class SessionCorpus {
       })
     }
     return [...records.values()].sort(compareSessions)
+  }
+
+  private async listMetadata(persistence: SessionPersistence, signal?: AbortSignal): Promise<SessionHeader[]> {
+    const catalog = this._catalog
+    if (catalog?.identity === persistence.identity && Date.now() < catalog.expiresAt) return catalog.headers
+    const generation = this._catalogGeneration
+    const headers = await listPersisted(persistence, signal)
+    signal?.throwIfAborted()
+    if (this._persistence?.identity === persistence.identity && generation === this._catalogGeneration) {
+      this._catalog = { identity: persistence.identity, expiresAt: Date.now() + this._metadataCacheTtlMs, headers }
+    }
+    return headers
   }
 
   /**
@@ -271,7 +292,7 @@ async function listPersisted(
 ): Promise<SessionHeader[]> {
   try {
     const snapshots = await persistence.list(signal === undefined ? undefined : { signal })
-    return snapshots.map(snapshot => snapshot.header)
+    return snapshots.map(snapshot => structuredClone(snapshot.header))
   } catch (error: unknown) {
     if (signal?.aborted) signal.throwIfAborted()
     throw new SessionQueryError(

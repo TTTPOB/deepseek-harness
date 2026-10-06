@@ -144,6 +144,10 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 `ctx.sessionQuery.filterSessions(filters)` 会对完整的逻辑会话语料库应用 `SessionResultFilter`；`ctx.sessionQuery.filterEvents(sessionId, filters)` 按 seq 升序返回匹配的文档。消息、工具调用和工具结果、待办事项，以及失败和状态详情会纳入语义文本；推理（reasoning）块、被阻止的提示词、结构事件和流分片则不会。
 
+## 原始列表分页
+
+`SessionPageRequest` 指定 metadata filters、必填 limit 和可选 snapshot cursor；`pageSessions` 返回 `SessionSearchPage<SessionRecord>`。`SessionEventPageRequest` 指定 sessionId、排他的 afterSeq、可选 types、必填 limit 与可选 includeText；`SessionEventPage` 返回同一次观察的 header、capturedThroughSeq、原始事件 items 与可选 nextAfterSeq。`SessionEventPageItem` 是没有 surface 分类的事件元数据，text 只在请求时存在。类型定义见[公共源码](../../packages/session-query/session-query/src/types.ts)，快照失效及新鲜度语义见[包参考](../../packages/session-query/session-query/README.zh.md#paging-and-freshness)。
+
 ## 全文搜索结果页
 
 整合后的 `ctx.sessionQuery` seam 提供两个全文搜索范围。`searchSessions()` 按匹配度最强的事件对语料库分组；`searchEvents()` 搜索单个会话。请求将不透明游标与规范化后的查询、元数据过滤器和结果数量上限绑定。提供方的元数据过滤器有意不包含事件文本扫描。

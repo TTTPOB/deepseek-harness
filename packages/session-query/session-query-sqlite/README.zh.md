@@ -51,6 +51,9 @@ kind: "package-reference"
 | `readWindowMax` | `50` | 继承的 `readEvent()` 的 `before`/`after` 原始事件数上限 |
 | `persistedReadConcurrency` | `4` | 继承批量读取的并发持久化日志读取数 |
 | `preparedSessionCacheSize` | `5` | 继承的 `observeSession` 读取器为复用保留的冷 prepared-Session 观察数 |
+| `metadataCacheTtlMs` | `5000` | 继承的元数据新鲜度窗口（毫秒），0 关闭复用 |
+| `sessionPageSnapshotTtlMs` | `60000` | 继承的会话列表快照有效期（毫秒） |
+| `sessionPageSnapshotCapacity` | `8` | 继承的会话列表快照容量 |
 | `maxIndexedSessionBytes` | `33554432` | 读入索引的持久化日志产物字节上限；超过该值的会话不进入搜索，并通过 `ctx.logger.warn` 报告 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-query-sqlite)是每个受支持字段及其 JSDoc 的穷尽式真源。

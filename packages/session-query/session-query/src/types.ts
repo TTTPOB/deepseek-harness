@@ -13,6 +13,7 @@ import type {
   SessionLogOffset,
   SessionSeq,
   OptionalSessionSeq,
+  SessionSeqCursor,
   SurfaceEvent,
 } from '@deepseek-ai/dsh-session'
 import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
@@ -31,6 +32,48 @@ export interface SessionRecord {
   live: boolean
   /** Whether the active persistence backend currently lists the id, including a created-but-unmaterialized session it already observes. */
   persisted: boolean
+}
+
+/** Request for newest-first paging over one immutable metadata snapshot. */
+export interface SessionPageRequest {
+  /** ANDed metadata filters, identical on continuation requests. */
+  filters?: readonly SessionResultFilter[]
+  /** Positive safe integer page size. */
+  limit: number
+  /** Snapshot continuation; expires or becomes unavailable after eviction or service reload. */
+  cursor?: SessionSearchCursor
+}
+
+/** Request for ascending raw-event paging without a full semantic-document projection. */
+export interface SessionEventPageRequest {
+  /** Logical session to observe once for this page. */
+  sessionId: SessionId
+  /** Exclusive lower sequence bound; defaults to -1. */
+  afterSeq?: SessionSeqCursor
+  /** ORed event types; an empty list matches nothing. */
+  types?: readonly SessionEventType[]
+  /** Positive safe integer page size. */
+  limit: number
+  /** Extract semantic text only for returned events; defaults to false. */
+  includeText?: boolean
+}
+
+/** One raw event's metadata, without current-surface classification. */
+export interface SessionEventPageItem extends Omit<SessionEventRecord, 'surface'> {
+  /** Semantic text, including an empty string for structural events, when requested. */
+  text?: string
+}
+
+/** One page bound to an exact live or prepared observation. */
+export interface SessionEventPage {
+  /** Detached header from the observation used for this page. */
+  session: SessionHeader
+  /** Ascending raw-event records, including structural events. */
+  items: readonly SessionEventPageItem[]
+  /** Last emitted sequence, present only when another matching event was observed. */
+  nextAfterSeq?: SessionSeq
+  /** Exact observed upper sequence bound, or -1 for an empty log. */
+  capturedThroughSeq: SessionSeqCursor
 }
 
 /** One atomic live-preferred observation of a session's current model surface. */

@@ -144,6 +144,10 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 `ctx.sessionQuery.filterSessions(filters)` applies `SessionResultFilter` to the complete logical corpus; `ctx.sessionQuery.filterEvents(sessionId, filters)` returns matching documents in ascending seq order. Messages, tool calls/results, todos, and failure/status detail contribute semantic text; reasoning blocks, blocked prompts, structural events, and stream chunks do not.
 
+## Raw listing pages
+
+`SessionPageRequest` supplies metadata filters, a required limit, and an optional snapshot cursor; `pageSessions` returns `SessionSearchPage<SessionRecord>`. `SessionEventPageRequest` supplies sessionId, exclusive afterSeq, optional types, required limit, and optional includeText; `SessionEventPage` binds header, capturedThroughSeq, raw-event items, and optional nextAfterSeq to one observation. `SessionEventPageItem` is event metadata without surface classification, with text present only when requested. See the [public type definitions](../../packages/session-query/session-query/src/types.ts) and [package reference](../../packages/session-query/session-query/README.md#paging-and-freshness) for snapshot invalidation and freshness.
+
 ## Full-text search pages
 
 The combined `ctx.sessionQuery` seam has two full-text scopes. `searchSessions()` groups the corpus by strongest matching event; `searchEvents()` searches one session. Requests bind an opaque cursor to the normalized query, metadata filters, and limit. The event text scan is intentionally absent from provider metadata filters.

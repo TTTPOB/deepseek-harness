@@ -51,6 +51,9 @@ Choose it when you want full-text recall over prior sessions with ranking and pa
 | `readWindowMax` | `50` | Maximum `before`/`after` raw events for the inherited `readEvent()` |
 | `persistedReadConcurrency` | `4` | Concurrent persisted-log reads for inherited batch reads |
 | `preparedSessionCacheSize` | `5` | Cold prepared-Session observations the inherited `observeSession` reader retains for reuse |
+| `metadataCacheTtlMs` | `5000` | Inherited metadata freshness window in milliseconds; 0 disables reuse |
+| `sessionPageSnapshotTtlMs` | `60000` | Inherited listing snapshot lifetime in milliseconds |
+| `sessionPageSnapshotCapacity` | `8` | Inherited listing snapshot capacity |
 | `maxIndexedSessionBytes` | `33554432` | Largest persisted log artifact, in bytes, read into the index; a larger session stays out of search and is reported through `ctx.logger.warn` |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-session-query-sqlite) is the exhaustive source for every accepted field and its JSDoc.

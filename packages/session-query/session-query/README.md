@@ -32,6 +32,8 @@ Use `ctx.sessionQuery` from application code when you need to read or search ses
 | Operation | What you get |
 |---|---|
 | `listSessions()` | Every logical session, newest first, with `live` and `persisted` availability flags |
+| `pageSessions(request)` | Bounded metadata pages over an expiring immutable snapshot |
+| `pageEvents(request)` | Bounded ascending raw-event metadata and optional semantic text |
 | `readSession(id)` | The complete replay-validated raw event log, without making the session live |
 | `filterSessions(filters)` | Sessions matching ANDed metadata and availability predicates |
 | `filterEvents(id, filters)` | Semantic event documents matching metadata and literal-text predicates |
@@ -43,6 +45,15 @@ Use `ctx.sessionQuery` from application code when you need to read or search ses
 | `searchSessions(request)` / `searchEvents(request)` | Full-text search pages, implemented by the mounted backend |
 
 Body-free records expose only `SessionHeader.isSeeded`. Reads that return event bodies (`readSession`, `readSurface`, `readEvent`) and retained `SessionObservation` values also carry the exact `inheritedEventCount`, so callers can distinguish inherited and owned events without inferring a cut from the log.
+
+<a id="paging-and-freshness"></a>
+### Paging and freshness
+
+pageSessions({ filters?, limit, cursor? }) fixes an immutable newest-first metadata snapshot. Continuations keep identical filters and may change limit; insertions and deletions do not shift positions, and deleted records remain in the original snapshot. Expiration, capacity eviction, persistence-source replacement, or service reload rejects with SESSION_QUERY_STALE_CURSOR; changed filters reject with SESSION_QUERY_INVALID_CURSOR. Consumers must emit the complete page rather than truncate items and reuse its end cursor.
+
+pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) observes one source per page and returns ascending raw-event metadata, including structural events, without a surface fold. afterSeq is exclusive and defaults to -1; types are ORed, an empty list matches nothing, and includeText defaults to false. Semantic text is extracted only for emitted events. The result binds the session header and capturedThroughSeq to that observation; nextAfterSeq is present only when another matching event was observed. Continuations take a new observation and may see appended events.
+
+Complete listings, non-exact-id filters, and session traces share a persisted-header catalog reused for metadataCacheTtlMs after a successful refresh; every call overlays the current live store. External-process and storage changes have a default five-second visibility window: the next read after expiry scans storage again. A zero TTL re-lists on each read. Persistence-instance identity changes prevent reuse immediately; local session creation and disposal invalidate the catalog, and query-service disposal clears it. Concurrent cold listings own separate cancellation signals and may scan in parallel; the catalog reuses only successfully completed listings. Exact-id filters and cold event reads still stat individual ids. First listings and expired refreshes still scan all metadata; first cold event reads still load and prepare the entire log.
 
 ### Filters
 
@@ -59,6 +70,9 @@ The inherited knobs are set through the mounted backend's config:
 | `readWindowMax` | `50` | Maximum `before`/`after` raw events accepted by `readEvent` |
 | `persistedReadConcurrency` | `4` | Concurrent persisted-log reads in one batch title read |
 | `preparedSessionCacheSize` | `5` | Cold prepared-Session observations retained for reuse across `observeSession` reads |
+| `metadataCacheTtlMs` | `5000` | Persisted metadata freshness window in milliseconds; 0 disables reuse |
+| `sessionPageSnapshotTtlMs` | `60000` | Fixed listing snapshot lifetime in milliseconds |
+| `sessionPageSnapshotCapacity` | `8` | Maximum concurrently retained listing snapshots |
 
 ### Failures and recovery
 
@@ -100,7 +114,8 @@ The decision history lives in the [unified service decision](../../../.agents/no
 | [`src/documents.ts`](src/documents.ts) | Surface-aware semantic document projection |
 | [`src/tracing.ts`](src/tracing.ts) | One-shot session-lineage and event-relationship tracing |
 | [`src/sources.ts`](src/sources.ts) | Immutable-header compatibility check |
-| — | No runtime invariant companion is published; query results are immutable per-call projections whose lineage and event relations are validated while they are built; the service retains no observable result state. |
+| [`src/paging.ts`](src/paging.ts) | Bounded metadata snapshots and continuation cursors |
+| — | No runtime invariant companion is published; retained metadata and page snapshots have owned invalidation semantics, and relationships are validated during projection. |
 
 ### Corpus resolution
 

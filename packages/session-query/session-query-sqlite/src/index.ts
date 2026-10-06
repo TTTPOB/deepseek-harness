@@ -139,6 +139,9 @@ interface ResolvedConfig {
   readWindowMax: number
   persistedReadConcurrency: number
   preparedSessionCacheSize: number
+  metadataCacheTtlMs: number
+  sessionPageSnapshotTtlMs: number
+  sessionPageSnapshotCapacity: number
   maxIndexedSessionBytes: number
 }
 
@@ -252,6 +255,9 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       .min(1)
       .max(Number.MAX_SAFE_INTEGER)
       .default(SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE),
+    metadataCacheTtlMs: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(5000),
+    sessionPageSnapshotTtlMs: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(60000),
+    sessionPageSnapshotCapacity: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8),
     maxIndexedSessionBytes: z.number()
       .step(1)
       .min(1)
@@ -1231,6 +1237,9 @@ function resolveConfig(config: Config): ResolvedConfig {
       ?? SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY,
     preparedSessionCacheSize: config.preparedSessionCacheSize
       ?? SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE,
+    metadataCacheTtlMs: config.metadataCacheTtlMs ?? 5000,
+    sessionPageSnapshotTtlMs: config.sessionPageSnapshotTtlMs ?? 60000,
+    sessionPageSnapshotCapacity: config.sessionPageSnapshotCapacity ?? 8,
     maxIndexedSessionBytes: config.maxIndexedSessionBytes
       ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES,
   }

@@ -32,6 +32,8 @@ kind: "package-reference"
 | 操作 | 你得到什么 |
 |---|---|
 | `listSessions()` | 每个逻辑会话，最新的在前，带 `live` 与 `persisted` 可用性标志 |
+| `pageSessions(request)` | 带到期语义的不可变快照上的有界元数据页 |
+| `pageEvents(request)` | 有界、seq 升序的原始事件元数据及可选语义文本 |
 | `readSession(id)` | 经过回放校验的完整原始事件日志，且不会让该会话变为实时 |
 | `filterSessions(filters)` | 匹配 AND 连接的元数据与可用性谓词的会话 |
 | `filterEvents(id, filters)` | 匹配元数据与字面文本谓词的语义事件文档 |
@@ -43,6 +45,15 @@ kind: "package-reference"
 | `searchSessions(request)` / `searchEvents(request)` | 全文搜索分页结果，由挂载的后端实现 |
 
 不带正文的记录只公开 `SessionHeader.isSeeded`。返回事件正文的读取（`readSession`、`readSurface`、`readEvent`）与保留的 `SessionObservation` 值还携带精确 `inheritedEventCount`，因此调用方无需从日志推断切点即可区分继承事件与自有事件。
+
+<a id="paging-and-freshness"></a>
+### 分页与新鲜度
+
+pageSessions({ filters?, limit, cursor? }) 固定最新优先的不可变元数据快照。续页必须保留相同过滤器，可改变 limit；期间插入和删除不移动页位置，已删除记录仍出现在原快照中。游标在快照到期、被容量淘汰、持久化换源或服务重载后以 SESSION_QUERY_STALE_CURSOR 失败；过滤器变化以 SESSION_QUERY_INVALID_CURSOR 失败。消费方必须完整发出一页，不能截短 items 后仍使用其页末游标。
+
+pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观察一次来源，按 seq 升序返回原始事件元数据（包括结构事件），不折叠 surface。afterSeq 是排他的下界，默认 -1；types 使用 OR，空列表无匹配；includeText 默认 false，只有本页发出的事件才提取语义文本。结果携带同次观察的 session header 和 capturedThroughSeq；观察中仍有匹配事件时才返回 nextAfterSeq。续页是新的观察，允许看到新追加事件。
+
+完整列表、非精确 id 筛选和会话 trace 共用持久化 header catalog，成功刷新后在 metadataCacheTtlMs 内复用；每次读取仍叠加当前 live store。默认跨进程或存储变化最多有 5 秒可见性延迟，TTL 到期后的下一次读取重扫存储；TTL 为 0 时每次读取重新列举。持久化实例身份变化立即阻止旧 catalog 复用；本机会话创建和卸载使 catalog 失效，查询服务卸载清空缓存。同时启动的冷列表读取各自拥有取消信号，可能并行扫描；缓存只复用已成功完成的列举。精确 id 筛选及冷事件读取仍逐 id stat。首次列举和到期刷新仍需完整扫描元数据，冷事件首次读取仍需完整加载与 prepare 日志。
 
 ### 过滤器
 
@@ -59,6 +70,9 @@ kind: "package-reference"
 | `readWindowMax` | `50` | `readEvent` 接受的 `before`/`after` 原始事件数上限 |
 | `persistedReadConcurrency` | `4` | 一次批量标题读取中的并发持久化日志读取数 |
 | `preparedSessionCacheSize` | `5` | 为跨 `observeSession` 读取复用而保留的冷 prepared-Session 观察数 |
+| `metadataCacheTtlMs` | `5000` | 持久化元数据新鲜度窗口（毫秒），0 关闭复用 |
+| `sessionPageSnapshotTtlMs` | `60000` | 会话列表快照固定有效期（毫秒） |
+| `sessionPageSnapshotCapacity` | `8` | 同时保留的会话列表快照数上限 |
 
 ### 失败与恢复
 
@@ -100,7 +114,8 @@ kind: "package-reference"
 | [`src/documents.ts`](src/documents.ts) | 表层感知的语义文档投影 |
 | [`src/tracing.ts`](src/tracing.ts) | 一次性会话血缘与事件关系追踪 |
 | [`src/sources.ts`](src/sources.ts) | 不可变 header 兼容性检查 |
-| — | 不发布运行时不变式伴生入口；查询结果是每次调用产生的不可变投影，其血缘与事件关系会在构建时完成校验；服务不保留可观察的结果状态。 |
+| [`src/paging.ts`](src/paging.ts) | 有界元数据快照及分页游标 |
+| — | 不发布运行时不变式伴生入口；保留的元数据及分页快照自有失效语义，关系在构建时校验。 |
 
 ### 语料库解析
 

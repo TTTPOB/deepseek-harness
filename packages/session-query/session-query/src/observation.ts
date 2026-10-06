@@ -12,6 +12,7 @@ import type { ProjectionSnapshot } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import { SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE, SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
+import { assertSessionHeadersCompatible } from './sources.ts'
 
 /** One exact immutable Session cut retained for the caller's read lifetime. */
 export interface SessionObservation extends Disposable {
@@ -27,6 +28,13 @@ export interface SessionObservation extends Disposable {
    * header, cursor, or projections never copies the log.
    */
   readonly events: readonly SessionEvent[]
+  /**
+   * Borrow immutable events within this cut without materializing the complete live log.
+   * @param from - inclusive sequence offset.
+   * @param to - exclusive sequence offset, clamped to this observation's cut.
+   * @returns immutable events from the selected half-open range.
+   */
+  readEvents(from: SessionLogOffsetType, to: SessionLogOffsetType): readonly SessionEvent[]
   /** Last observed event seq, or -1 for an empty log. */
   readonly cursor: SessionSeqCursor
   /** Durable source revision for a cold prepared observation. */
@@ -116,6 +124,7 @@ export class SessionObservationReader {
         throwIfObservationAborted(signal)
         const attached = this.ctx.sessions.get(sessionId)
         if (attached !== undefined) return this.live(attached, projectionMode)
+        assertSessionHeadersCompatible(snapshot.header, loaded.header)
         // The handle marks persisted events as adoptable; synthetic closers
         // are owned by this read, so the combined seed needs no copy.
         const seed = loaded.events
@@ -253,6 +262,7 @@ export class SessionObservationReader {
         header: entry.session.header,
         inheritedEventCount: entry.session.inheritedEventCount,
         events: entry.events,
+        readEvents: (from, to) => Object.freeze(entry.events.slice(from, to)),
         cursor: entry.events.at(-1)?.seq ?? -1,
         revision: entry.revision,
         ...projections === undefined ? {} : { projections },
@@ -292,6 +302,10 @@ export class SessionObservationReader {
         { cause: error },
       )
     }
+    const readEvents = (from: SessionLogOffsetType, to: SessionLogOffsetType): readonly SessionEvent[] => {
+      // oxlint-disable-next-line typescript/no-deprecated -- Observation range adapter owns the existing synchronous Session read.
+      return session.snapshotEvents(from, SessionLogOffset(Math.min(to, seq)))
+    }
     const lease = (): SessionObservation => {
       let disposed = false
       return {
@@ -299,10 +313,10 @@ export class SessionObservationReader {
         header: session.header,
         inheritedEventCount: session.inheritedEventCount,
         get events() {
-          // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-          materialized ??= session.snapshotEvents(SessionLogOffset(0), seq)
+          materialized ??= readEvents(SessionLogOffset(0), seq)
           return materialized
         },
+        readEvents,
         cursor: seq === 0 ? -1 : SessionSeq(seq - 1),
         ...projections === undefined ? {} : { projections },
         retain: () => {
