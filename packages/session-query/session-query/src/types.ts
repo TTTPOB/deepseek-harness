@@ -35,7 +35,7 @@ export interface SessionRecord {
 }
 
 /** Request for newest-first paging over one immutable metadata snapshot. */
-export interface SessionPageRequest {
+export interface SessionMetadataPageRequest {
   /** ANDed metadata filters, identical on continuation requests. */
   filters?: readonly SessionResultFilter[]
   /** Positive safe integer page size. */

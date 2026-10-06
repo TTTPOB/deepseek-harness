@@ -90,7 +90,7 @@ export class SessionCorpus {
 
   private async listMetadata(persistence: SessionPersistence, signal?: AbortSignal): Promise<SessionHeader[]> {
     const catalog = this._catalog
-    if (catalog?.identity === persistence.identity && Date.now() < catalog.expiresAt) return catalog.headers
+    if (catalog !== undefined && catalog.identity === persistence.identity && Date.now() < catalog.expiresAt) return catalog.headers
     const generation = this._catalogGeneration
     const headers = await listPersisted(persistence, signal)
     signal?.throwIfAborted()

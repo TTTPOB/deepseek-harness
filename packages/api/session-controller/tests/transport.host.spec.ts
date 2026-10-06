@@ -379,6 +379,7 @@ describe('SessionHistoryController', () => {
         header: meta,
         inheritedEventCount: SessionLogOffset(0),
         events: [],
+        readEvents: () => [],
         cursor: -1,
         retain: vi.fn(), [Symbol.dispose]: vi.fn(),
       } satisfies SessionObservation),
@@ -584,7 +585,7 @@ describe('SessionHistoryController', () => {
     expect(inspect).not.toHaveBeenCalled()
   })
 
-  it('rejects incomplete cold metadata before serving a source', async () => {
+  it('rejects incomplete or conflicting cold metadata before serving a source', async () => {
     const first = await setup()
     const sessionId = SessionId('incomplete')
     const address = { kind: 'session' as const, sessionId }
@@ -612,7 +613,7 @@ describe('SessionHistoryController', () => {
       }),
     }) as never)
     await expect(second.transport.page({ address, throughSeq: -1 }, signal()))
-      .rejects.toMatchObject({ code: 'session/not-found' })
+      .rejects.toMatchObject({ code: 'SESSION_QUERY_SOURCE_CONFLICT' })
   })
 
   it('serves cold ordinary history and validates every durable subagent descriptor state', async () => {

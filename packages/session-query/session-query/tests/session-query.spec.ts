@@ -226,7 +226,7 @@ describe('bounded session and event pages', () => {
     expect(second.items.map(item => item.header.id)).toEqual(['page-2', 'page-1'])
     expect(second.nextCursor).toBeUndefined()
     expect(TestPersistence.listCalls).toBe(1)
-    first.items[0]!.header.cwd = '/mutated'
+    Reflect.set(first.items[0]!.header, 'cwd', '/mutated')
     const again = await ctx.sessionQuery.pageSessions({ filters, limit: 2, cursor: first.nextCursor! })
     expect(again.items[0]!.header.cwd).toBe('/project')
     await expect(ctx.sessionQuery.pageSessions({ limit: 2, cursor: first.nextCursor! }))

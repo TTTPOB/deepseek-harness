@@ -146,7 +146,7 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 ## 原始列表分页
 
-`SessionPageRequest` 指定 metadata filters、必填 limit 和可选 snapshot cursor；`pageSessions` 返回 `SessionSearchPage<SessionRecord>`。`SessionEventPageRequest` 指定 sessionId、排他的 afterSeq、可选 types、必填 limit 与可选 includeText；`SessionEventPage` 返回同一次观察的 header、capturedThroughSeq、原始事件 items 与可选 nextAfterSeq。`SessionEventPageItem` 是没有 surface 分类的事件元数据，text 只在请求时存在。类型定义见[公共源码](../../packages/session-query/session-query/src/types.ts)，快照失效及新鲜度语义见[包参考](../../packages/session-query/session-query/README.zh.md#paging-and-freshness)。
+`SessionMetadataPageRequest` 指定 metadata filters、必填 limit 和可选 snapshot cursor；`pageSessions` 返回 `SessionSearchPage<SessionRecord>`。`SessionEventPageRequest` 指定 sessionId、排他的 afterSeq、可选 types、必填 limit 与可选 includeText；`SessionEventPage` 返回同一次观察的 header、capturedThroughSeq、原始事件 items 与可选 nextAfterSeq。`SessionEventPageItem` 是没有 surface 分类的事件元数据，text 只在请求时存在。类型定义见[公共源码](../../packages/session-query/session-query/src/types.ts)，快照失效及新鲜度语义见[包参考](../../packages/session-query/session-query/README.zh.md#paging-and-freshness)。
 
 ## 全文搜索结果页
 
@@ -415,6 +415,22 @@ abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchE
 listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
 
 /**
+ * Page newest-first metadata from an immutable snapshot; continuation never re-lists persistence.
+ * @param request - metadata filters, positive page size, and optional snapshot cursor.
+ * @param signal - cancellation for metadata observation and waiting.
+ * @returns detached records; expired, evicted, or unloaded snapshots reject with STALE_CURSOR.
+ */
+async pageSessions(request: SessionMetadataPageRequest, signal?: AbortSignal): Promise<SessionSearchPage<SessionRecord>>
+
+/**
+ * Project only one ascending raw-event page from one live or prepared observation.
+ * @param request - target, exclusive seq bound, optional types and text, and positive page size.
+ * @param signal - cancellation during cold resolution and page scanning.
+ * @returns page metadata, exact source header and observed upper seq, and optional continuation.
+ */
+async pageEvents(request: SessionEventPageRequest, signal?: AbortSignal): Promise<SessionEventPage>
+
+/**
  * Read and replay-validate one complete logical session log without making it live.
  * @param sessionId - live or persisted session id to read.
  * @returns cloned header and complete raw event log from one observation.
@@ -423,9 +439,9 @@ listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
 async readSession(sessionId: SessionId): Promise<SessionLogSnapshot>
 
 /**
- * Filter the complete logical corpus with provider-independent predicates.
+ * Filter logical sessions; exact id clauses avoid a complete persistence listing.
  * @param filters - ANDed session metadata and availability clauses.
- * @param signal - optional cancellation for persistence listing.
+ * @param signal - optional cancellation for persistence observations.
  * @returns matching cloned records in deterministic newest-first order.
  */
 async filterSessions( filters: readonly SessionResultFilter[], signal?: AbortSignal, ): Promise<SessionRecord[]>

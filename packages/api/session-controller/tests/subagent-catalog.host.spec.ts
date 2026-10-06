@@ -199,6 +199,7 @@ describe('SessionController subagent catalog', () => {
       header,
       inheritedEventCount: SessionLogOffset(0),
       events,
+      readEvents: (from, to) => Object.freeze(events.slice(from, to)),
       cursor: SessionSeq(0),
       retain: () => stateless,
       [Symbol.dispose]: () => {},

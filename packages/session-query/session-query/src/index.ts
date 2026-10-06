@@ -18,7 +18,7 @@ import { foldSessionTitle } from '@deepseek-ai/dsh-session-title'
 import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
 import type {
   SessionEventResultFilter,
-  SessionPageRequest,
+  SessionMetadataPageRequest,
   SessionEventPageRequest,
   SessionEventPage,
   SessionEventPageItem,
@@ -206,7 +206,7 @@ export abstract class SessionQueryEngine extends Service {
    * @param signal - cancellation for metadata observation and waiting.
    * @returns detached records; expired, evicted, or unloaded snapshots reject with STALE_CURSOR.
    */
-  async pageSessions(request: SessionPageRequest, signal?: AbortSignal): Promise<SessionSearchPage<SessionRecord>> {
+  async pageSessions(request: SessionMetadataPageRequest, signal?: AbortSignal): Promise<SessionSearchPage<SessionRecord>> {
     assertReadPageLimit(request.limit)
     signal?.throwIfAborted()
     const filters = materializeSessionResultFilters(request.filters ?? [])

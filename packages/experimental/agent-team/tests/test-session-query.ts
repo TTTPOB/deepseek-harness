@@ -16,6 +16,7 @@ function cut(
     header,
     inheritedEventCount: SessionLogOffset(0),
     events,
+    readEvents: (from, to) => Object.freeze(events.slice(from, to)),
     cursor: events.at(-1)?.seq ?? -1,
     retain: lease,
     [Symbol.dispose]: () => {},
