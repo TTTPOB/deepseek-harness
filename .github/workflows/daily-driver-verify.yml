@@ -62,12 +62,12 @@ jobs:
           smoke=$SELECTED_SMOKE
           if [[ "$packages" = "$DEFAULT_PACKAGES" ]]; then
             tests=${tests:-'packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts packages/session/session-persistence-jsonl/tests/jsonl.spec.ts packages/session-query/session-query/ packages/session-query/session-query-sqlite/ packages/session-query/tool-session-query/'}
-            smoke=${smoke:-'scripts/smoke-session-index-fork4.mjs dist/daily-driver/deepseek-ai-dsh-session-persistence-jsonl-0.1.7-rc.2-fork1.tgz dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork2.tgz'}
+            smoke=${smoke:-'scripts/smoke-session-query-fork11.mjs dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz'}
           fi
           test -n "$tests" && test -n "$smoke"
           printf 'PACKAGES=%s\nTESTS=%s\nSMOKE=%s\n' "$packages" "$tests" "$smoke" >> "$GITHUB_ENV"
       - name: Source command regression
-        run: node --test scripts/daily-driver-source.test.mjs
+        run: node --test scripts/daily-driver-source.test.mjs scripts/daily-driver-fork11.test.mjs
       - name: Install frozen target closure and build tools
         shell: bash
         run: |
@@ -85,6 +85,8 @@ jobs:
           read -r -a packages <<< "$PACKAGES"
           node scripts/daily-driver-source.mjs build "${packages[@]}"
       - name: Isolated tarball smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           read -r -a smoke <<< "$SMOKE"

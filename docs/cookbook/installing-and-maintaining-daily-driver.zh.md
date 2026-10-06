@@ -88,7 +88,7 @@ dsh plugin --profile web allow-version @deepseek-ai/dsh-api-gateway@0.1.7-rc.2-f
 
 专用 `daily-driver-v0.1.7-rc.2-fork11` 路线只发布 `deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz` 和 `SHA256SUMS`。通用 build/publish 跳过该 tag。保留不可变 fork9 的 query fork1、不可变 fork10 的 JSONL fork3、官方 CLI/Web 和所有无关 overrides。发布与日用 Host 激活是分开的步骤。
 
-1. 使用 `scripts/daily-driver-source.mjs` 仅准备和构建 SQLite 目标，并运行其聚焦测试。使用只读验证 workflow 时，明确将 `packages` 设为 `packages/session-query/session-query-sqlite`、`tests` 设为 `packages/session-query/session-query-sqlite/tests`、`smoke` 设为下列脚本及参数；历史默认组合保持不变。
+1. 使用 `scripts/daily-driver-source.mjs` 仅准备和构建 SQLite 目标，并运行其聚焦测试。使用只读验证 workflow 时，明确将 `packages` 设为 `packages/session-query/session-query-sqlite`、`tests` 设为 `packages/session-query/session-query-sqlite/tests`、`smoke` 设为下列脚本及参数。默认验证构建当前 JSONL/SQLite 组合，并对 SQLite fork4 及沿用的 Release fixture 运行 fork11 smoke。
 
 ```sh
 node scripts/smoke-session-query-fork11.mjs dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz

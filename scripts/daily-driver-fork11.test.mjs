@@ -49,3 +49,14 @@ test('fork11 smoke rejects missing or extra arguments before downloading fixture
     assert.match(result.stderr, /Usage: node scripts\/smoke-session-query-fork11.mjs/)
   }
 })
+
+test('source verification selects the built current provider rather than retired artifact filenames', () => {
+  const verification = yaml.load(readFileSync(new URL('.github/workflows/daily-driver-verify.yml', root), 'utf8'))
+  const selection = verification.jobs.verify.steps.find(step => step.name === 'Select focused validation').run
+  const manifest = JSON.parse(readFileSync(new URL('packages/session-query/session-query-sqlite/package.json', root), 'utf8'))
+  const artifact = `deepseek-ai-dsh-session-query-sqlite-${manifest.version}.tgz`
+  assert(selection.includes(`scripts/smoke-session-query-fork11.mjs dist/daily-driver/${artifact}`))
+  assert(!selection.includes('smoke-session-index-fork4.mjs'))
+  const smoke = verification.jobs.verify.steps.find(step => step.name === 'Isolated tarball smoke')
+  assert.equal(smoke.env.GH_TOKEN, '${{ github.token }}')
+})

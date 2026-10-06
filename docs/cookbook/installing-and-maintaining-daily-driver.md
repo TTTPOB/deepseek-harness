@@ -88,7 +88,7 @@ dsh plugin --profile web allow-version @deepseek-ai/dsh-api-gateway@0.1.7-rc.2-f
 
 The dedicated `daily-driver-v0.1.7-rc.2-fork11` route publishes only `deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz` and `SHA256SUMS`. Generic build/publish skip its tag. Retain query fork1 from immutable fork9 and JSONL fork3 from immutable fork10, official CLI/Web, and all unrelated overrides. Publication and daily Host activation are separate steps.
 
-1. Prepare and build only the SQLite target with `scripts/daily-driver-source.mjs`. Run its focused tests. For the read-only verification workflow, explicitly set `packages` to `packages/session-query/session-query-sqlite`, `tests` to `packages/session-query/session-query-sqlite/tests`, and `smoke` to the script and argument below; the historical default combination remains unchanged.
+1. Prepare and build only the SQLite target with `scripts/daily-driver-source.mjs`. Run its focused tests. For the read-only verification workflow, explicitly set `packages` to `packages/session-query/session-query-sqlite`, `tests` to `packages/session-query/session-query-sqlite/tests`, and `smoke` to the script and argument below. The default verification builds the current JSONL/SQLite pair and runs the fork11 smoke against SQLite fork4 with retained Release fixtures.
 
 ```sh
 node scripts/smoke-session-query-fork11.mjs dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz
