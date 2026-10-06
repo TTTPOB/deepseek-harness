@@ -483,6 +483,8 @@ class JsonlSessionPersistence extends SessionPersistence {
   /**
    * List every stored session visible to this process: materialized artifacts
    * plus this process's created-but-unmaterialized sessions.
+   * Related-child membership is captured once for this listing; child-generation
+   * revisions are read from their directories for each historical parent.
    * @param options - optional cancellation.
    * @returns one snapshot per session, in no promised order.
    */
@@ -495,6 +497,14 @@ class JsonlSessionPersistence extends SessionPersistence {
     // predate the scan), so create-to-list visibility never has a hole.
     const pending = [...this.tracker.pendingEntries()]
     const artifacts = await this.listArtifacts(signal)
+    const childrenByParent = new Map<SessionId, CatalogEntry[]>()
+    for (const entry of this.artifactCatalog.values()) {
+      if (entry.header.origin !== 'subagent' || entry.header.parentSession === undefined) continue
+      const parentId = entry.header.parentSession
+      const children = childrenByParent.get(parentId) ?? []
+      children.push(entry)
+      childrenByParent.set(parentId, children)
+    }
     for (const artifact of artifacts) {
       signal?.throwIfAborted()
       try {
@@ -504,7 +514,7 @@ class JsonlSessionPersistence extends SessionPersistence {
         snapshots.push({
           header: artifact.header,
           revision: artifact.sourceVersion < SESSION_FORMAT_VERSION
-            ? SessionPersistenceRevision(`${fileRevision(identity)}:${await this.historicalChildrenRevision(artifact.header.id, signal)}`)
+            ? SessionPersistenceRevision(`${fileRevision(identity)}:${await this.historicalChildrenRevision(artifact.header.id, signal, childrenByParent.get(artifact.header.id) ?? [])}`)
             : fileRevision(identity),
           sizeBytes: Number(identity.size),
         })
@@ -1053,11 +1063,16 @@ class JsonlSessionPersistence extends SessionPersistence {
    * never move this token while any real child change does.
    * @param parentId - historical session whose related sources are witnessed.
    * @param signal - optional cancellation observed between directory reads.
+   * @param children - listing-local membership; omitted for a fresh standalone lookup.
    * @returns a digest over sorted `[path, fileRevision]` child-generation entries.
    */
-  private async historicalChildrenRevision(parentId: SessionId, signal?: AbortSignal): Promise<string> {
+  private async historicalChildrenRevision(
+    parentId: SessionId,
+    signal?: AbortSignal,
+    children?: readonly CatalogEntry[],
+  ): Promise<string> {
     const entries: Array<[string, string]> = []
-    for (const child of await this.relatedChildren(parentId, signal)) {
+    for (const child of children ?? await this.relatedChildren(parentId, signal)) {
       for (const generation of await this.generationIdentities(child.dir, signal)) {
         entries.push([generation.path, fileRevision(generation.identity)])
       }
@@ -1231,10 +1246,10 @@ class JsonlSessionPersistence extends SessionPersistence {
     // This listing is one complete directory observation: publish it as the
     // catalog so related-source lookups reuse it instead of rescanning.
     // Retain known child identities when an opaque successor hides its header.
-    await this.refreshRelatedCatalog(signal)
     for (const artifact of artifacts) {
       this.artifactCatalog.set(dirname(artifact.path), { id: artifact.header.id, header: artifact.header, dir: dirname(artifact.path) })
     }
+    await this.refreshRelatedCatalog(signal)
     signal?.throwIfAborted()
     return artifacts
   }
