@@ -8,7 +8,7 @@ on:
       packages:
         description: Space-separated workspace directories (Host packages)
         type: string
-        default: packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+        default: packages/session-query/session-query packages/session-query/session-query-sqlite
       tests:
         description: Space-separated focused Vitest paths; required for a custom package selection
         type: string
@@ -26,7 +26,7 @@ concurrency:
 env:
   CI: 'true'
   DSH_TELEMETRY_DISABLED: '1'
-  DEFAULT_PACKAGES: packages/session/session-persistence-jsonl packages/session-query/session-query-sqlite
+  DEFAULT_PACKAGES: packages/session-query/session-query packages/session-query/session-query-sqlite
 
 jobs:
   verify:
@@ -62,7 +62,7 @@ jobs:
           smoke=$SELECTED_SMOKE
           if [[ "$packages" = "$DEFAULT_PACKAGES" ]]; then
             tests=${tests:-'packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts packages/session/session-persistence-jsonl/tests/jsonl.spec.ts packages/session-query/session-query/ packages/session-query/session-query-sqlite/ packages/session-query/tool-session-query/'}
-            smoke=${smoke:-'scripts/smoke-session-query-fork11.mjs dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz'}
+            smoke=${smoke:-'scripts/smoke-session-query-fork12.mjs dist/daily-driver/deepseek-ai-dsh-session-query-0.1.7-rc.2-fork2.tgz dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork5.tgz dist/daily-driver/dsh-session-tools-0.1.3.tgz'}
           fi
           test -n "$tests" && test -n "$smoke"
           printf 'PACKAGES=%s\nTESTS=%s\nSMOKE=%s\n' "$packages" "$tests" "$smoke" >> "$GITHUB_ENV"
@@ -76,7 +76,7 @@ jobs:
       - name: Native addon and focused tests
         shell: bash
         run: |
-          node --test scripts/daily-driver-fork11.test.mjs
+          node --test scripts/daily-driver-fork11.test.mjs scripts/daily-driver-fork12.test.mjs
           pnpm --config.verify-deps-before-run=false run build:native-system
           read -r -a tests <<< "$TESTS"
           pnpm --config.verify-deps-before-run=false exec vitest run "${tests[@]}"
@@ -85,6 +85,16 @@ jobs:
         run: |
           read -r -a packages <<< "$PACKAGES"
           node scripts/daily-driver-source.mjs build "${packages[@]}"
+      - uses: actions/checkout@v6
+        if: env.PACKAGES == env.DEFAULT_PACKAGES
+        with:
+          repository: TTTPOB/dsh-session-tools
+          ref: v0.1.3
+          path: dist/session-tools-source
+          persist-credentials: false
+      - name: Build independent browsing consumer
+        if: env.PACKAGES == env.DEFAULT_PACKAGES
+        run: node scripts/prepare-session-tools-fork12.mjs dist/session-tools-source dist/daily-driver
       - name: Isolated tarball smoke
         env:
           GH_TOKEN: ${{ github.token }}

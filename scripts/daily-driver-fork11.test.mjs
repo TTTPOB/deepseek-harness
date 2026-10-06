@@ -55,7 +55,8 @@ test('source verification selects the built current provider rather than retired
   const selection = verification.jobs.verify.steps.find(step => step.name === 'Select focused validation').run
   const manifest = JSON.parse(readFileSync(new URL('packages/session-query/session-query-sqlite/package.json', root), 'utf8'))
   const artifact = `deepseek-ai-dsh-session-query-sqlite-${manifest.version}.tgz`
-  assert(selection.includes(`scripts/smoke-session-query-fork11.mjs dist/daily-driver/${artifact}`))
+  assert(selection.includes(`dist/daily-driver/${artifact}`))
+  assert(selection.includes('scripts/smoke-session-query-fork12.mjs'))
   assert(!selection.includes('smoke-session-index-fork4.mjs'))
   const smoke = verification.jobs.verify.steps.find(step => step.name === 'Isolated tarball smoke')
   assert.equal(smoke.env.GH_TOKEN, '${{ github.token }}')
