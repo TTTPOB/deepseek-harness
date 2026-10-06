@@ -59,4 +59,8 @@ test('source verification selects the built current provider rather than retired
   assert(!selection.includes('smoke-session-index-fork4.mjs'))
   const smoke = verification.jobs.verify.steps.find(step => step.name === 'Isolated tarball smoke')
   assert.equal(smoke.env.GH_TOKEN, '${{ github.token }}')
+  const steps = verification.jobs.verify.steps
+  const prepared = steps.findIndex(step => step.name === 'Install frozen target closure and build tools')
+  const routing = steps.findIndex(step => step.run?.includes('node --test scripts/daily-driver-fork11.test.mjs'))
+  assert(routing > prepared, 'YAML-dependent tests run after the frozen dependency preparation')
 })
