@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { SharedBm25 } from './bm25.ts'
 import { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { DatabaseSync } from 'node:sqlite'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
@@ -214,8 +215,7 @@ interface SearchRow extends SessionHeaderRow {
   time: number
   surface: string
   marked_text: string
-  match_count: number
-  document_length: number
+  score: number
 }
 
 interface CursorPayload {
@@ -265,6 +265,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private readonly _instance = randomUUID()
   private _ready: Promise<void> | undefined
   private _db: DatabaseSync | undefined
+  private _bm25!: SharedBm25
   private _persistenceBinding: PersistenceBinding = { identity: Symbol() }
   private _lastPersistenceIdentity: symbol | undefined
   private _persistenceEpoch = 0
@@ -367,6 +368,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       const persistenceBinding = await this._reconcile(signal)
       assertNotAborted(signal)
       const target = this._targetObservation(normalized.sessionId, persistenceBinding)
+      const background = this._bm25.usesLiveBackground() ? this._globalGeneration : this._mainGeneration()
+      target.generation += `:background:${background}`
       const fingerprint = requestFingerprint(normalized)
       const offset = normalized.cursor === undefined
         ? 0
@@ -424,6 +427,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const state = this._db.prepare(
       'SELECT global_generation FROM search_state WHERE singleton = 1',
     ).get() as { global_generation: number }
+    this._bm25 = new SharedBm25(this._db)
     this._globalGeneration = state.global_generation
     this._localGeneration = state.global_generation
   }
@@ -555,6 +559,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
           this._replaceLiveSession(entry, generation, persisted)
         }
         db.exec('COMMIT')
+        if (persistentDeletes.length > 0) this._bm25.invalidate()
         durableGeneration = Math.max(durableGeneration, staged.generation)
         staged.wrote = true
       } catch (error: unknown) {
@@ -726,6 +731,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       db.prepare('DELETE FROM persisted_docs WHERE session_id = ?').run(id)
       db.prepare('DELETE FROM persisted_sessions WHERE id = ?').run(id)
     } else {
+      db.prepare('DELETE FROM temp.live_token_lengths WHERE rowid IN (SELECT rowid FROM temp.live_docs WHERE session_id = ?)').run(id)
       db.prepare('DELETE FROM temp.live_docs WHERE session_id = ?').run(id)
       db.prepare('DELETE FROM temp.live_sessions WHERE id = ?').run(id)
     }
@@ -794,15 +800,27 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       const text = sanitizeFtsText(document.text)
       const row = existing.get(document.seq)
       existing.delete(document.seq)
+      let rowid: number
       if (row === undefined) {
-        insert.run(text, document.sessionId, document.seq, document.type,
+        const inserted = insert.run(text, document.sessionId, document.seq, document.type,
           document.time, document.surface, Array.from(text).length)
-      } else if (row.text !== text || row.type !== document.type
-        || row.time !== document.time || row.surface !== document.surface) {
-        update.run(text, document.type, document.time, document.surface, Array.from(text).length, row.rowid)
+        rowid = Number(inserted.lastInsertRowid)
+      } else {
+        rowid = row.rowid
+        if (row.text !== text || row.type !== document.type
+          || row.time !== document.time || row.surface !== document.surface) {
+          update.run(text, document.type, document.time, document.surface, Array.from(text).length, rowid)
+        }
+      }
+      if (source === 'live' && (row === undefined || row.text !== text)) {
+        db.prepare('INSERT OR REPLACE INTO temp.live_token_lengths VALUES (?,?)')
+          .run(rowid, this._bm25.tokenCount(text))
       }
     }
-    for (const row of existing.values()) remove.run(row.rowid)
+    for (const row of existing.values()) {
+      remove.run(row.rowid)
+      if (source === 'live') db.prepare('DELETE FROM temp.live_token_lengths WHERE rowid=?').run(row.rowid)
+    }
   }
 
   /**
@@ -826,6 +844,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       this._replacePersistedSession(entry, revision, generation)
       db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(generation)
       db.exec('COMMIT')
+      this._bm25.invalidate()
     } catch (error: unknown) {
       /* v8 ignore next -- a BEGIN failure has no transaction to roll back; the common wrapper still reports it. */
       if (began) {
@@ -870,7 +889,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     assertFts5OuterPredicateCount(sessionWhere.predicateCount + eventWhere.predicateCount)
     const where = [sessionWhere.sql, eventWhere.sql].filter(Boolean).join(' AND ')
     const bindings = [
-      ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined),
+      ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined, this._bm25.parameters(request.query)),
       ...sessionWhere.params,
       ...eventWhere.params,
       request.limit + 1,
@@ -886,18 +905,18 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       ranked AS (
         SELECT *, ROW_NUMBER() OVER (
           PARTITION BY session_id
-          ORDER BY match_count DESC, document_length ASC, time DESC, seq DESC
+          ORDER BY score ASC, time DESC, seq DESC
         ) AS event_rank
         FROM filtered
       ),
       page AS (
         SELECT * FROM ranked
         WHERE event_rank = 1
-        ORDER BY match_count DESC, document_length ASC, time DESC, session_id ASC, seq DESC
+        ORDER BY score ASC, time DESC, session_id ASC, seq DESC
         LIMIT ? OFFSET ?
       )
       SELECT page.*, ${pageHighlightSql()} AS marked_text FROM page
-      ORDER BY match_count DESC, document_length ASC, time DESC, session_id ASC, seq DESC
+      ORDER BY score ASC, time DESC, session_id ASC, seq DESC
     `).all(...bindings) as unknown as SearchRow[]
   }
 
@@ -906,12 +925,14 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     offset: number,
     persistenceBinding: PersistenceBinding,
   ): SearchRow[] {
-    const selected = selectedDocumentsSql()
+    const selected = selectedDocumentsSql(true)
     const eventWhere = buildEventWhere(request.filters)
     assertFts5OuterPredicateCount(1 + eventWhere.predicateCount)
     const where = ['session_id = ?', eventWhere.sql].filter(Boolean).join(' AND ')
     const bindings = [
-      ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined),
+      ...selectedDocumentsParams(
+        request.query, persistenceBinding.service !== undefined, this._bm25.parameters(request.query), request.sessionId,
+      ),
       request.sessionId,
       ...eventWhere.params,
       request.limit + 1,
@@ -924,11 +945,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       filtered AS MATERIALIZED (SELECT * FROM matched WHERE ${where}),
       page AS (
         SELECT * FROM filtered
-        ORDER BY match_count DESC, document_length ASC, time DESC, seq DESC
+        ORDER BY score ASC, time DESC, seq DESC
         LIMIT ? OFFSET ?
       )
       SELECT page.*, ${pageHighlightSql()} AS marked_text FROM page
-      ORDER BY match_count DESC, document_length ASC, time DESC, seq DESC
+      ORDER BY score ASC, time DESC, seq DESC
     `).all(...bindings) as unknown as SearchRow[]
   }
 
@@ -1019,73 +1040,44 @@ function headerBindings(
   ]
 }
 
-function selectedDocumentsSql(): { sql: string } {
-  return {
-    sql: `WITH matched AS (
-      SELECT
-        pd.rowid AS document_rowid,
-        pd.session_id AS session_id,
-        ps.version AS version,
-        ps.created_at AS created_at,
-        ps.cwd AS cwd,
-        ps.parent_session AS parent_session,
-        ps.seed_length AS seed_length,
-        ps.delegation_depth AS delegation_depth,
-        ps.agent_preset AS agent_preset,
-        0 AS live,
-        1 AS persisted,
-        CAST(pd.seq AS INTEGER) AS seq,
-        pd.type AS type,
-        CAST(pd.time AS INTEGER) AS time,
-        pd.surface AS surface,
-        (length(CAST(highlight(persisted_docs, 0, ?, '') AS BLOB))
-          - length(CAST(pd.text AS BLOB))) / ? AS match_count,
-        CAST(pd.codepoint_length AS INTEGER) AS document_length
-      FROM persisted_docs AS pd
-      JOIN persisted_sessions AS ps ON ps.id = pd.session_id
-      WHERE persisted_docs MATCH ?
-        AND ? = 1
-        AND NOT EXISTS (SELECT 1 FROM temp.live_sessions AS ls WHERE ls.id = pd.session_id)
+function selectedDocumentsSql(target = false): { sql: string } {
+  const metadata = (d: string, s: string) => `${d}.rowid AS document_rowid, ${d}.session_id,
+    ${s}.version, ${s}.created_at, ${s}.cwd, ${s}.parent_session,
+    ${s}.seed_length, ${s}.delegation_depth, ${s}.agent_preset`
+  const event = (d: string) => `CAST(${d}.seq AS INTEGER) seq, ${d}.type,
+    CAST(${d}.time AS INTEGER) time, ${d}.surface`
+  // FTS auxiliary functions run in their MATCH SELECT, before outer arithmetic/window sorting.
+  // Common IDF cancels for a single phrase. Round normalized scores to preserve cross-source metadata ties.
+  const tf = '(1.2*(0.25+0.75*l.token_count/b.avg_live)*(-native_score)/(2.2*b.idf_live+native_score))'
+  return { sql: `WITH background(avg_live,avg_history,idf_history,idf_live) AS (VALUES(?,?,?,?)),
+    hraw AS MATERIALIZED (
+      SELECT ${metadata('pd', 'ps')}, 0 live, 1 persisted, ${event('pd')},
+        bm25(persisted_docs) native_score
+      FROM persisted_docs pd JOIN persisted_sessions ps ON ps.id=pd.session_id
+      WHERE persisted_docs MATCH ? AND ?=1${target ? ' AND pd.session_id=?' : ''}
+        AND NOT EXISTS(SELECT 1 FROM temp.live_sessions ls WHERE ls.id=pd.session_id)
+    ),
+    lraw AS MATERIALIZED (
+      SELECT ${metadata('ld', 'ls')}, 1 live, CASE WHEN ?=1 THEN ls.persisted ELSE 0 END persisted,
+        ${event('ld')}, bm25(live_docs) native_score
+      FROM temp.live_docs ld JOIN temp.live_sessions ls ON ls.id=ld.session_id
+      WHERE live_docs MATCH ?${target ? ' AND ld.session_id=?' : ''}
+    ),
+    matched AS (
+      SELECT hraw.*,round(native_score/b.idf_history,12) score FROM hraw CROSS JOIN background b
       UNION ALL
-      SELECT
-        ld.rowid AS document_rowid,
-        ld.session_id AS session_id,
-        ls.version AS version,
-        ls.created_at AS created_at,
-        ls.cwd AS cwd,
-        ls.parent_session AS parent_session,
-        ls.seed_length AS seed_length,
-        ls.delegation_depth AS delegation_depth,
-        ls.agent_preset AS agent_preset,
-        1 AS live,
-        CASE WHEN ? = 1 THEN ls.persisted ELSE 0 END AS persisted,
-        CAST(ld.seq AS INTEGER) AS seq,
-        ld.type AS type,
-        CAST(ld.time AS INTEGER) AS time,
-        ld.surface AS surface,
-        (length(CAST(highlight(live_docs, 0, ?, '') AS BLOB))
-          - length(CAST(ld.text AS BLOB))) / ? AS match_count,
-        CAST(ld.codepoint_length AS INTEGER) AS document_length
-      FROM temp.live_docs AS ld
-      JOIN temp.live_sessions AS ls ON ls.id = ld.session_id
-      WHERE live_docs MATCH ?
-    )`,
-  }
+      SELECT lraw.*,round(-2.2*${tf}/(${tf}+1.2*(0.25+0.75*l.token_count/b.avg_history)),12) score
+      FROM lraw JOIN temp.live_token_lengths l ON l.rowid=lraw.document_rowid CROSS JOIN background b
+    )` }
 }
 
-function selectedDocumentsParams(query: string, persistenceVisible: boolean): Array<string | number> {
+function selectedDocumentsParams(
+  query: string, persistenceVisible: boolean, background: number[], sessionId?: SessionId,
+): Array<string | number> {
   const expression = quoteFtsData(query)
   const visible = persistenceVisible ? 1 : 0
-  return [
-    FTS_HIGHLIGHT_START,
-    Buffer.byteLength(FTS_HIGHLIGHT_START, 'utf8'),
-    expression,
-    visible,
-    visible,
-    FTS_HIGHLIGHT_START,
-    Buffer.byteLength(FTS_HIGHLIGHT_START, 'utf8'),
-    expression,
-  ]
+  const target = sessionId === undefined ? [] : [sessionId]
+  return [...background, expression, visible, ...target, visible, expression, ...target]
 }
 
 // Full highlighted text is produced only for the bounded result page, not window-sort rows.

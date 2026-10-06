@@ -557,7 +557,7 @@ describe('SQLite session search', () => {
     await expect(ctx.sessionQuery.searchSessions({ query: '*' })).resolves.toEqual({ items: [] })
   })
 
-  it('preserves highlighted-span ranking and snippets for overlapping phrases and reserved markers', async () => {
+  it('counts overlapping phrase occurrences for BM25 while preserving sanitized snippets', async () => {
     const persisted = header('disjoint')
     TestPersistence.reset([{ meta: persisted, events: messageEvents('alpha alpha gap alpha alpha', 10) }])
     const ctx = await liveContext({ path: ':memory:', snippetChars: 100 })
@@ -570,9 +570,9 @@ describe('SQLite session search', () => {
     })
     const page = await ctx.sessionQuery.searchSessions({ query: 'alpha alpha' })
     expect(page.items.map(item => [item.header.id, item.bestMatch.snippet])).toEqual([
+      [SessionId('overlap'), 'alpha alpha alpha'],
       [persisted.id, 'alpha alpha gap alpha alpha'],
       [SessionId('markers'), 'alpha alpha ��'],
-      [SessionId('overlap'), 'alpha alpha alpha'],
     ])
     const events = await ctx.sessionQuery.searchEvents({ sessionId: SessionId('overlap'), query: 'alpha alpha' })
     expect(events.items[0]?.snippet).toBe('alpha alpha alpha')
@@ -616,7 +616,7 @@ describe('SQLite session search', () => {
     expect(Array.from(page.items[0]!.snippet).length).toBeLessThanOrEqual(14)
   })
 
-  it('binds cursors to requests and only invalidates within-session pages for target changes', async () => {
+  it('binds cursors to requests and invalidates live-background pages when the corpus changes', async () => {
     const ctx = await liveContext({ path: ':memory:', defaultLimit: 1, maxLimit: 5 })
     const target = ctx.sessions.create(SessionId('target'), {
       seed: [
@@ -672,7 +672,7 @@ describe('SQLite session search', () => {
       query: 'needle',
       limit: 1,
       cursor: eventPage.nextCursor,
-    })).resolves.toMatchObject({ items: [{ sessionId: target.id }] })
+    })).rejects.toThrow(expectCode('SESSION_QUERY_STALE_CURSOR'))
     await expect(ctx.sessionQuery.searchSessions({ query: 'needle', limit: 1, cursor: sessionPage.nextCursor }))
       .rejects.toThrow(expectCode('SESSION_QUERY_STALE_CURSOR'))
     await expect(ctx.sessionQuery.searchEvents({
@@ -1153,6 +1153,9 @@ describe('SQLite reconciliation and source lifecycle', () => {
       .rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
     TestPersistence.listOverride = () => [{ header: durable, revision: 1 as never }]
     await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+
+
+
       .rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
     TestPersistence.listOverride = () => [
       { header: durable, revision: SessionPersistenceRevision('duplicate:1') },
@@ -1984,12 +1987,11 @@ describe('SQLite dirty reconciliation', () => {
     await ctx.sessionQuery.searchSessions({ query: 'needle' })
     expect(docs()).toHaveLength(2)
     expect(docs()[0]).toEqual(original)
-    const changes = () => (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n
-    const before = changes()
+    const before = docs()
     TestPersistence.set({ meta: stored, events: [...messageEvents('alpha needle'), extra] })
     notifyStored(ctx, stored)
     await ctx.sessionQuery.searchSessions({ query: 'needle' })
-    expect(changes() - before).toBe(2)
+    expect(docs()).toEqual(before)
     TestPersistence.set({ meta: stored, events: messageEvents('edited needle') })
     notifyStored(ctx, stored)
     await ctx.sessionQuery.searchSessions({ query: 'edited' })
@@ -2312,5 +2314,154 @@ describe('SQLite bounded index build', () => {
       return 'header' in record && Array.isArray(record.events)
     })
     expect(wholeLogCalls).toEqual([])
+  })
+})
+
+describe('shared historical BM25', () => {
+  it('matches native historical session-best and complete pages after moving identical bodies into live', async () => {
+    const entries = Array.from({ length: 24 }, (_, i) => ({
+      meta: header(`bm25-${String(i).padStart(2, '0')}`),
+      events: [
+        ...messageEvents(`${'alpha '.repeat(1 + i % 5)}${'filler '.repeat(i * 3)}`, 10),
+        { ...messageEvents(`alpha alpha alpha ${'other '.repeat(i * 7)}`, 20)[0]!, seq: SessionSeq(1) },
+      ],
+    }))
+    TestPersistence.reset(entries)
+    const ctx = await liveContext({ path: ':memory:', defaultLimit: 5, maxLimit: 50 })
+    await ctx.plugin(TestPersistence)
+    const collect = async () => {
+      const hits: string[] = []
+      let cursor: ReturnType<typeof SessionSearchCursor> | undefined
+      do {
+        const page = await ctx.sessionQuery.searchSessions({ query: 'alpha', limit: 5, ...cursor === undefined ? {} : { cursor } })
+        hits.push(...page.items.map(item => `${item.header.id}:${item.bestMatch.seq}`))
+        cursor = page.nextCursor
+      } while (cursor !== undefined)
+      return hits
+    }
+    const historical = await collect()
+    for (const entry of entries.filter((_, i) => i % 3 === 0)) {
+      ctx.sessions.create(entry.meta.id, { seed: entry.events, meta: { createdAt: 1 } })
+    }
+    expect(await collect()).toEqual(historical)
+    ctx.sessions.create(SessionId('irrelevant-long-live'), { seed: messageEvents('filler '.repeat(2000)) })
+    expect(await collect()).toEqual(historical)
+    const db = Reflect.get(ctx.sessionQuery, '_db') as DatabaseSync
+    const gold = db.prepare(`WITH hits AS MATERIALIZED (
+      SELECT session_id,CAST(seq AS INTEGER) seq,CAST(time AS INTEGER) time,bm25(persisted_docs) score
+      FROM persisted_docs WHERE persisted_docs MATCH '"alpha"'
+    ), ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY session_id ORDER BY score,time DESC,seq DESC) n FROM hits)
+    SELECT session_id,seq FROM ranked WHERE n=1 ORDER BY score,time DESC,session_id,seq DESC`).all()
+    expect(historical).toEqual(gold.map(row => `${String(row['session_id'])}:${String(row['seq'])}`))
+    await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
+  })
+
+  it('invalidates event pages and recalibrates when another historical revision changes', async () => {
+    const background = header('background')
+    TestPersistence.reset([{ meta: background, events: messageEvents('anchor') }])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const target = ctx.sessions.create(SessionId('bm25-target'), { seed: [
+      ...messageEvents('novel novel ' + 'filler '.repeat(30)),
+      { ...messageEvents('novel', 2)[0]!, seq: SessionSeq(1) },
+    ] })
+    const initial = await ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'novel', limit: 1 })
+    expect(initial.items[0]?.seq).toBe(1)
+    ctx.sessions.create(SessionId('unrelated-live'), { seed: messageEvents('unrelated') })
+    await expect(ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'novel', limit: 1, cursor: initial.nextCursor! }))
+      .resolves.toMatchObject({ items: [{ seq: 0 }] })
+    TestPersistence.set({ meta: background, events: messageEvents('anchor '.repeat(1000)) })
+    notifyStored(ctx, background)
+    await expect(ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'novel', limit: 1, cursor: initial.nextCursor! }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_STALE_CURSOR'))
+    const revised = await ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'novel', limit: 1 })
+    expect(revised.items[0]?.seq).toBe(0)
+    await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
+  })
+
+  it('ranks with a live background for tokenless history and tracks appended token lengths', async () => {
+    TestPersistence.reset([{ meta: header('no-tokens'), events: messageEvents('😀 !!!') }])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const target = ctx.sessions.create(SessionId('live-lengths'), { seed: [
+      ...messageEvents('alpha alpha alpha'),
+      { ...messageEvents('alpha ' + 'filler '.repeat(20), 2)[0]!, seq: SessionSeq(1) },
+    ] })
+    const first = await ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'alpha', limit: 1 })
+    expect(first.items[0]?.seq).toBe(0)
+    const db = Reflect.get(ctx.sessionQuery, '_db') as DatabaseSync
+    expect(db.prepare('SELECT sum(token_count) n FROM temp.live_token_lengths').get()?.['n']).toBe(24)
+    target.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'alpha alpha alpha alpha' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    await ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'alpha' })
+    expect(db.prepare('SELECT sum(token_count) n FROM temp.live_token_lengths').get()?.['n']).toBe(28)
+    await expect(ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'alpha', limit: 1, cursor: first.nextCursor! }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_STALE_CURSOR'))
+    await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
+  })
+})
+
+describe('live BM25 token state', () => {
+  it('rolls back token lengths with FTS rows and retries the same dirty projection', async () => {
+    const ctx = await liveContext()
+    const target = ctx.sessions.create(SessionId('rollback-tokens'), { seed: messageEvents('alpha') })
+    await ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'alpha' })
+    const db = Reflect.get(ctx.sessionQuery, '_db') as DatabaseSync
+    target.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'alpha beta gamma' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const original = db.prepare.bind(db)
+    const prepare = vi.spyOn(db, 'prepare').mockImplementation((sql) => {
+      if (sql.startsWith('INSERT OR REPLACE INTO temp.live_token_lengths')) {
+        prepare.mockRestore()
+        throw new Error('token-state write failed')
+      }
+      return original(sql)
+    })
+    await expect(ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'alpha' }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_INDEX_FAILED'))
+    expect(db.prepare('SELECT sum(token_count) n FROM temp.live_token_lengths').get()?.['n']).toBe(1)
+    expect(db.prepare('SELECT count(*) n FROM temp.live_docs').get()?.['n']).toBe(1)
+    await ctx.sessionQuery.searchEvents({ sessionId: target.id, query: 'beta' })
+    expect(db.prepare('SELECT sum(token_count) n FROM temp.live_token_lengths').get()?.['n']).toBe(4)
+    expect(db.prepare('SELECT count(*) n FROM temp.live_docs').get()?.['n']).toBe(2)
+    await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
+  })
+
+  it('removes lengths on live retirement and rebuilds them from the newly observed body', async () => {
+    const ctx = await liveContext()
+    const id = SessionId('reobserved')
+    const first = ctx.sessions.prepare(id, { seed: messageEvents('alpha alpha alpha') })
+    const detach = ctx.sessions.enter(first)
+    ctx.sessions.announce(first)
+    await ctx.sessionQuery.searchEvents({ sessionId: id, query: 'alpha' })
+    const db = Reflect.get(ctx.sessionQuery, '_db') as DatabaseSync
+    expect(db.prepare('SELECT sum(token_count) n FROM temp.live_token_lengths').get()?.['n']).toBe(3)
+    detach()
+    await ctx.sessionQuery.searchSessions({ query: 'alpha' })
+    expect(db.prepare('SELECT count(*) n FROM temp.live_token_lengths').get()?.['n']).toBe(0)
+    const reopened = ctx.sessions.prepare(id, { seed: messageEvents('beta beta') })
+    const detachAgain = ctx.sessions.enter(reopened)
+    ctx.sessions.announce(reopened)
+    expect((await ctx.sessionQuery.searchEvents({ sessionId: id, query: 'beta' })).items).toHaveLength(1)
+    expect((await ctx.sessionQuery.searchEvents({ sessionId: id, query: 'alpha' })).items).toHaveLength(0)
+    expect(db.prepare('SELECT sum(token_count) n FROM temp.live_token_lengths').get()?.['n']).toBe(2)
+    detachAgain()
+    await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
+  })
+})
+
+
+describe('BM25 source-independent ties', () => {
+  it.each([1, 7, 31, 100, 1000])('uses metadata ties for identical bodies with historical length %i', async (length) => {
+    const stored = header('z-identical')
+    const body = 'alpha alpha alpha ' + 'filler '.repeat(13)
+    TestPersistence.reset([
+      { meta: stored, events: messageEvents(body, 10) },
+      { meta: header('tie-background'), events: messageEvents('background '.repeat(length)) },
+    ])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    ctx.sessions.create(SessionId('a-identical'), { seed: messageEvents(body, 10), meta: { createdAt: 1 } })
+    const page = await ctx.sessionQuery.searchSessions({ query: 'alpha' })
+    expect(page.items.map(item => item.header.id)).toEqual([SessionId('a-identical'), stored.id])
+    await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
   })
 })

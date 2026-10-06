@@ -24,8 +24,8 @@
   en: e08367e2ef19c624
   zh: 3a0427a9c942be70
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/search-behavior:
-  en: 746bd842a7b9c157
-  zh: 2515443f5d3f6656
+  en: 60c8298b0c0f3d6e
+  zh: 613c5b507e952fe7
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/when-to-defer-or-disable-search:
   en: 8df2c14374a1f3a6
   zh: e1dd3ff73de187c4
@@ -39,11 +39,11 @@
   en: 952e4f7cfb275c24
   zh: 3234715e81b7664a
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/source-map:
-  en: 49f5cc363a886430
-  zh: f0e035cc2dc8d513
+  en: b2a5d034b9743c8e
+  zh: 99fe5063266f3b8b
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/index-lifecycle:
-  en: 26fa8600d11ab9c6
-  zh: 6306aea25942ec73
+  en: 6bc740700e99fc87
+  zh: 2b8704048331162a
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/schema-ownership:
   en: cb1e6861a47a618c
   zh: 18863cdd4986f4b7
