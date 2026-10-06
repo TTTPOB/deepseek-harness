@@ -19,6 +19,46 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
+it('shares concurrent discovery of one directory but rejects the same id in another directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-catalog-refresh-'))
+  roots.push(root)
+  const ctx = new Context()
+  contexts.push(ctx)
+  await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+  const id = SessionId('parent')
+  const header = { type: 'session', version: 3, id, createdAt: 1, isSeeded: false, delegationDepth: 0 }
+  const path = generationLogPath(root, undefined, id, 3, 'none')
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, JSON.stringify(header) + '\n')
+  const persistence = ctx.sessionPersistence as typeof ctx.sessionPersistence & {
+    refreshRelatedCatalog(signal?: AbortSignal): Promise<void>
+    readGenerationHeader(...args: never[]): Promise<SessionHeader | undefined>
+  }
+  const readHeader = persistence.readGenerationHeader.bind(persistence)
+  const barrier = Promise.withResolvers<undefined>()
+  let reads = 0
+  const headers = vi.spyOn(persistence, 'readGenerationHeader').mockImplementation(async (...args) => {
+    const result = await readHeader(...args)
+    // Both refreshes must observe the uncatalogued directory before either publishes it.
+    if (++reads === 2) barrier.resolve(undefined)
+    await barrier.promise
+    return result
+  })
+  const outcomes = await Promise.allSettled([
+    persistence.refreshRelatedCatalog(), persistence.refreshRelatedCatalog(),
+  ])
+  expect(headers).toHaveBeenCalledTimes(2)
+  expect(outcomes).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }])
+  headers.mockRestore()
+
+  const duplicate = generationLogPath(root, '/other-project', id, 3, 'none')
+  await mkdir(dirname(duplicate), { recursive: true })
+  await writeFile(duplicate, JSON.stringify({ ...header, cwd: '/other-project' }) + '\n')
+  await expect(persistence.refreshRelatedCatalog()).rejects.toThrow(
+    'duplicate JSONL session id "parent" appears in multiple project directories',
+  )
+})
+
 describe.each(['none', 'zstd'] as const)('historical catalog publication (%s)', (compression) => {
   async function fixture() {
     const root = await mkdtemp(join(tmpdir(), 'dsh-catalog-migration-'))

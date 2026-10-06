@@ -1178,7 +1178,8 @@ class JsonlSessionPersistence extends SessionPersistence {
    * Bring the shared directory catalog up to date with Session directories
    * created or removed since the last scan. Only newly discovered directories
    * pay a header read, so one observation round serves every historical
-   * session's related-source lookups.
+   * session's related-source lookups. Concurrent refreshes share entries for
+   * the same directory; distinct directories with the same Session id reject.
    * @param signal - optional cancellation observed between directory reads.
    */
   private async refreshRelatedCatalog(signal?: AbortSignal): Promise<void> {
@@ -1204,6 +1205,8 @@ class JsonlSessionPersistence extends SessionPersistence {
           throw error
         }
         if (header === undefined) continue
+        // Another refresh may have published this directory during the header read.
+        if (this.artifactCatalog.has(dir)) continue
         for (const existing of this.artifactCatalog.values()) {
           if (existing.id === header.id) {
             throw new Error(`duplicate JSONL session id "${header.id}" appears in multiple project directories`)
