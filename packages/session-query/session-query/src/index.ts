@@ -198,9 +198,9 @@ export abstract class SessionQueryEngine extends Service {
   }
 
   /**
-   * Filter the complete logical corpus with provider-independent predicates.
+   * Filter logical sessions; exact id clauses avoid a complete persistence listing.
    * @param filters - ANDed session metadata and availability clauses.
-   * @param signal - optional cancellation for persistence listing.
+   * @param signal - optional cancellation for persistence observations.
    * @returns matching cloned records in deterministic newest-first order.
    */
   async filterSessions(
@@ -289,7 +289,14 @@ export abstract class SessionQueryEngine extends Service {
     filters: readonly SessionResultFilter[],
     signal?: AbortSignal,
   ): Promise<SessionRecord[]> {
-    return filterSessionResults(await this._corpus.listSessions(signal), filters)
+    const idFilters = filters.filter(filter => filter.kind === 'id')
+    const first = idFilters[0]
+    const records = first === undefined
+      ? await this._corpus.listSessions(signal)
+      : await this._corpus.selectSessions(
+        first.values.filter(id => idFilters.every(filter => filter.values.includes(id))), signal,
+      )
+    return filterSessionResults(records, filters)
   }
 
   private async _filterEvents(

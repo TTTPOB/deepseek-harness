@@ -557,6 +557,27 @@ describe('SQLite session search', () => {
     await expect(ctx.sessionQuery.searchSessions({ query: '*' })).resolves.toEqual({ items: [] })
   })
 
+  it('preserves highlighted-span ranking and snippets for overlapping phrases and reserved markers', async () => {
+    const persisted = header('disjoint')
+    TestPersistence.reset([{ meta: persisted, events: messageEvents('alpha alpha gap alpha alpha', 10) }])
+    const ctx = await liveContext({ path: ':memory:', snippetChars: 100 })
+    await ctx.plugin(TestPersistence)
+    ctx.sessions.create(SessionId('overlap'), {
+      seed: messageEvents('alpha alpha alpha', 10),
+    })
+    ctx.sessions.create(SessionId('markers'), {
+      seed: messageEvents('alpha alpha ﷐﷑', 10),
+    })
+    const page = await ctx.sessionQuery.searchSessions({ query: 'alpha alpha' })
+    expect(page.items.map(item => [item.header.id, item.bestMatch.snippet])).toEqual([
+      [persisted.id, 'alpha alpha gap alpha alpha'],
+      [SessionId('markers'), 'alpha alpha ��'],
+      [SessionId('overlap'), 'alpha alpha alpha'],
+    ])
+    const events = await ctx.sessionQuery.searchEvents({ sessionId: SessionId('overlap'), query: 'alpha alpha' })
+    expect(events.items[0]?.snippet).toBe('alpha alpha alpha')
+  })
+
   it('ranks live and persisted matches on one source-comparable contract', async () => {
     const persisted = header('z-persisted')
     TestPersistence.reset([

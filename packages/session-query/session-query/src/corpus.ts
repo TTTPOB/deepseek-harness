@@ -80,6 +80,29 @@ export class SessionCorpus {
   }
 
   /**
+   * Resolve only the requested ids with live precedence and accurate availability.
+   * @param sessionIds - exact ids selected by ANDed id filters.
+   * @param signal - optional cancellation for persistence observations.
+   * @returns detached records in the same newest-first order as a corpus listing.
+   */
+  async selectSessions(sessionIds: readonly SessionId[], signal?: AbortSignal): Promise<SessionRecord[]> {
+    signal?.throwIfAborted()
+    const persistence = this._persistence
+    const records: SessionRecord[] = []
+    for (const id of new Set(sessionIds)) {
+      const durable = persistence === undefined ? undefined : await statPersisted(persistence, id, signal)
+      signal?.throwIfAborted()
+      const live = this._ctx.sessions.get(id)
+      if (live !== undefined && durable !== undefined) assertSessionHeadersCompatible(live.header, durable)
+      const header = live?.header ?? durable
+      if (header !== undefined) records.push({
+        header: structuredClone(header), live: live !== undefined, persisted: durable !== undefined,
+      })
+    }
+    return records.sort(compareSessions)
+  }
+
+  /**
    * Load one logical source, preferring a detached live snapshot.
    *
    * A known live target never consults persistence, so an optional backend's
@@ -98,7 +121,7 @@ export class SessionCorpus {
     }
     const persistence = this._persistence
     if (persistence === undefined) throw notFound(sessionId)
-    const listed = (await listPersisted(persistence, signal)).find(header => header.id === sessionId)
+    const listed = await statPersisted(persistence, sessionId, signal)
     signal?.throwIfAborted()
     if (listed === undefined) throw notFound(sessionId)
     const loaded = await inspectPersisted(persistence, sessionId, signal)
@@ -120,13 +143,13 @@ export class SessionCorpus {
   }
 
   /**
-   * Project unique logical sources immediately from one persistence listing.
+   * Project unique logical sources through per-id persistence observations.
    *
    * The synchronous projector runs before a persisted worker claims its next id.
    * Full logs are borrowed only for that call and never retained by the batch.
    * @param sessionIds - sessions to resolve in first-occurrence order.
    * @param project - synchronous fold that owns/clones every retained value.
-   * @param signal - cancellation shared by listing and every persisted inspection.
+   * @param signal - cancellation shared by every persisted observation and inspection.
    * @returns one fulfilled or rejected projected result per unique requested id.
    */
   async projectMany<Value>(
@@ -156,29 +179,17 @@ export class SessionCorpus {
       return orderedResults(ids, resolved)
     }
 
-    let persisted: SessionHeader[]
-    try {
-      persisted = await listPersisted(persistence, signal)
-      signal?.throwIfAborted()
-    } catch (error: unknown) {
-      if (signal?.aborted) signal.throwIfAborted()
-      for (const sessionId of unresolved) {
-        resolved.set(sessionId, { sessionId, status: 'rejected', reason: error })
-      }
-      return orderedResults(ids, resolved)
-    }
-    const persistedById = new Map(persisted.map(header => [header.id, header]))
     const resolvePersisted = async (sessionId: SessionId): Promise<void> => {
-      const listed = persistedById.get(sessionId)
-      if (listed === undefined) {
-        const attached = this._ctx.sessions.get(sessionId)
-        resolved.set(sessionId, attached === undefined
-          ? { sessionId, status: 'rejected', reason: notFound(sessionId) }
-          : projectSource(sessionId, sourceLive(attached), project, signal))
-        return
-      }
       try {
+        const listed = await statPersisted(persistence, sessionId, signal)
         signal?.throwIfAborted()
+        const current = this._ctx.sessions.get(sessionId)
+        if (current !== undefined || listed === undefined) {
+          resolved.set(sessionId, current === undefined
+            ? { sessionId, status: 'rejected', reason: notFound(sessionId) }
+            : projectSource(sessionId, sourceLive(current), project, signal))
+          return
+        }
         const loaded = await inspectPersisted(persistence, sessionId, signal)
         signal?.throwIfAborted()
         const attached = this._ctx.sessions.get(sessionId)
@@ -265,6 +276,23 @@ async function listPersisted(
     if (signal?.aborted) signal.throwIfAborted()
     throw new SessionQueryError(
       `session persistence listing failed: ${errorMessage(error)}`,
+      'SESSION_QUERY_PERSISTENCE_FAILED',
+      { cause: error },
+    )
+  }
+}
+
+async function statPersisted(
+  persistence: SessionPersistence,
+  sessionId: SessionId,
+  signal?: AbortSignal,
+): Promise<SessionHeader | undefined> {
+  try {
+    return (await persistence.stat(sessionId, signal === undefined ? undefined : { signal }))?.header
+  } catch (error: unknown) {
+    if (signal?.aborted) signal.throwIfAborted()
+    throw new SessionQueryError(
+      `failed to stat stored session "${sessionId}": ${errorMessage(error)}`,
       'SESSION_QUERY_PERSISTENCE_FAILED',
       { cause: error },
     )

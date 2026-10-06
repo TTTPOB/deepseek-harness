@@ -875,11 +875,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       ...eventWhere.params,
       request.limit + 1,
       offset,
+      ...pageHighlightParams(request.query),
     ]
     assertPortableBindingCount(bindings.length)
     return this._requireDb().prepare(`
       ${selected.sql},
-      filtered AS (
+      filtered AS MATERIALIZED (
         SELECT * FROM matched ${where.length === 0 ? '' : `WHERE ${where}`}
       ),
       ranked AS (
@@ -888,11 +889,15 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
           ORDER BY match_count DESC, document_length ASC, time DESC, seq DESC
         ) AS event_rank
         FROM filtered
+      ),
+      page AS (
+        SELECT * FROM ranked
+        WHERE event_rank = 1
+        ORDER BY match_count DESC, document_length ASC, time DESC, session_id ASC, seq DESC
+        LIMIT ? OFFSET ?
       )
-      SELECT * FROM ranked
-      WHERE event_rank = 1
+      SELECT page.*, ${pageHighlightSql()} AS marked_text FROM page
       ORDER BY match_count DESC, document_length ASC, time DESC, session_id ASC, seq DESC
-      LIMIT ? OFFSET ?
     `).all(...bindings) as unknown as SearchRow[]
   }
 
@@ -911,14 +916,19 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       ...eventWhere.params,
       request.limit + 1,
       offset,
+      ...pageHighlightParams(request.query),
     ]
     assertPortableBindingCount(bindings.length)
     return this._requireDb().prepare(`
-      ${selected.sql}
-      SELECT * FROM matched
-      WHERE ${where}
+      ${selected.sql},
+      filtered AS MATERIALIZED (SELECT * FROM matched WHERE ${where}),
+      page AS (
+        SELECT * FROM filtered
+        ORDER BY match_count DESC, document_length ASC, time DESC, seq DESC
+        LIMIT ? OFFSET ?
+      )
+      SELECT page.*, ${pageHighlightSql()} AS marked_text FROM page
       ORDER BY match_count DESC, document_length ASC, time DESC, seq DESC
-      LIMIT ? OFFSET ?
     `).all(...bindings) as unknown as SearchRow[]
   }
 
@@ -1011,8 +1021,9 @@ function headerBindings(
 
 function selectedDocumentsSql(): { sql: string } {
   return {
-    sql: `WITH candidates AS (
+    sql: `WITH matched AS (
       SELECT
+        pd.rowid AS document_rowid,
         pd.session_id AS session_id,
         ps.version AS version,
         ps.created_at AS created_at,
@@ -1027,7 +1038,8 @@ function selectedDocumentsSql(): { sql: string } {
         pd.type AS type,
         CAST(pd.time AS INTEGER) AS time,
         pd.surface AS surface,
-        highlight(persisted_docs, 0, ?, ?) AS marked_text,
+        (length(CAST(highlight(persisted_docs, 0, ?, '') AS BLOB))
+          - length(CAST(pd.text AS BLOB))) / ? AS match_count,
         CAST(pd.codepoint_length AS INTEGER) AS document_length
       FROM persisted_docs AS pd
       JOIN persisted_sessions AS ps ON ps.id = pd.session_id
@@ -1036,6 +1048,7 @@ function selectedDocumentsSql(): { sql: string } {
         AND NOT EXISTS (SELECT 1 FROM temp.live_sessions AS ls WHERE ls.id = pd.session_id)
       UNION ALL
       SELECT
+        ld.rowid AS document_rowid,
         ld.session_id AS session_id,
         ls.version AS version,
         ls.created_at AS created_at,
@@ -1050,18 +1063,12 @@ function selectedDocumentsSql(): { sql: string } {
         ld.type AS type,
         CAST(ld.time AS INTEGER) AS time,
         ld.surface AS surface,
-        highlight(live_docs, 0, ?, ?) AS marked_text,
+        (length(CAST(highlight(live_docs, 0, ?, '') AS BLOB))
+          - length(CAST(ld.text AS BLOB))) / ? AS match_count,
         CAST(ld.codepoint_length AS INTEGER) AS document_length
       FROM temp.live_docs AS ld
       JOIN temp.live_sessions AS ls ON ls.id = ld.session_id
       WHERE live_docs MATCH ?
-    ), matched AS (
-      SELECT *,
-        (
-          length(CAST(marked_text AS BLOB))
-          - length(CAST(replace(marked_text, ?, '') AS BLOB))
-        ) / ? AS match_count
-      FROM candidates
     )`,
   }
 }
@@ -1071,16 +1078,31 @@ function selectedDocumentsParams(query: string, persistenceVisible: boolean): Ar
   const visible = persistenceVisible ? 1 : 0
   return [
     FTS_HIGHLIGHT_START,
-    FTS_HIGHLIGHT_END,
+    Buffer.byteLength(FTS_HIGHLIGHT_START, 'utf8'),
     expression,
     visible,
     visible,
-    FTS_HIGHLIGHT_START,
-    FTS_HIGHLIGHT_END,
-    expression,
     FTS_HIGHLIGHT_START,
     Buffer.byteLength(FTS_HIGHLIGHT_START, 'utf8'),
+    expression,
   ]
+}
+
+// Full highlighted text is produced only for the bounded result page, not window-sort rows.
+function pageHighlightSql(): string {
+  return `CASE WHEN page.live = 1 THEN (
+    SELECT highlight(live_docs, 0, ?, ?) FROM temp.live_docs
+    WHERE live_docs MATCH ? AND rowid = page.document_rowid
+  ) ELSE (
+    SELECT highlight(persisted_docs, 0, ?, ?) FROM persisted_docs
+    WHERE persisted_docs MATCH ? AND rowid = page.document_rowid
+  ) END`
+}
+
+function pageHighlightParams(query: string): Array<string | number> {
+  const expression = quoteFtsData(query)
+  return [FTS_HIGHLIGHT_START, FTS_HIGHLIGHT_END, expression,
+    FTS_HIGHLIGHT_START, FTS_HIGHLIGHT_END, expression]
 }
 
 function observeLive(session: Session, epoch: number): ObservedLiveSession {

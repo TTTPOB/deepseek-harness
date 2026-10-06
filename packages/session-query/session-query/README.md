@@ -104,7 +104,7 @@ The decision history lives in the [unified service decision](../../../.agents/no
 
 ### Corpus resolution
 
-`SessionCorpus` binds optional `ctx.sessionPersistence` through a fiber and resolves each read live-first: a known live target is snapshotted without consulting persistence; otherwise the session is listed, read completely through a short-lived read handle, and re-checked for a live attachment before cloning. A cold log whose writer crashed mid-turn is balanced in memory with `interruptedTurnClosers` — persistence is never mutated by a read. Header compatibility is asserted between listed and loaded observations. Batch title reads run one metadata listing and bounded-concurrency reads, isolating per-session failures while cancellation rejects the whole batch.
+`SessionCorpus` binds optional `ctx.sessionPersistence` through a fiber and resolves each read live-first: a known live target is snapshotted without consulting persistence; otherwise only that id is observed through `stat`, read completely through a short-lived read handle, and re-checked for a live attachment before cloning. Cold logs are balanced in memory with `interruptedTurnClosers`; reads never mutate persistence. Header compatibility is asserted between stat and loaded observations. Exact-id filters intersect id clauses and stat only those ids, preserving availability flags and newest-first order; filters without id clauses still list the corpus. Batch title reads use bounded-concurrency per-id stat and log reads, isolating per-session failures while cancellation rejects the whole batch.
 
 ### Observation cache
 
