@@ -1,4 +1,4 @@
-/** Isolated fork9 artifact, cold official Web Loader, and targeted session-read smoke. */
+/** Isolated session-query artifacts, cold official Web Loader, and targeted read smoke. */
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url'
 const packages = [
   ['@deepseek-ai/dsh-session-query', '0.1.7-rc.2-fork1'],
   ['@deepseek-ai/dsh-session-persistence-jsonl', process.env.DSH_SMOKE_JSONL_VERSION ?? '0.1.7-rc.2-fork2'],
-  ['@deepseek-ai/dsh-session-query-sqlite', '0.1.7-rc.2-fork3'],
+  ['@deepseek-ai/dsh-session-query-sqlite', process.env.DSH_SMOKE_SQLITE_VERSION ?? '0.1.7-rc.2-fork3'],
 ]
 const tarballs = process.argv.slice(2).map(path => resolve(path))
 assert.equal(tarballs.length, 3,
@@ -109,7 +109,7 @@ try {
     assert(rawBoot, 'Official Web serves its authenticated boot graph')
     assert(JSON.parse(rawBoot).entries.some(entry => entry.id === '@deepseek-ai/dsh-api-session-controller'),
       'Session controller activates with the paired query service')
-    console.log('fork9 cold official Web Loader and saved exact-version exemption passed')
+    console.log('Cold official Web Loader and saved exact-version exemption passed')
   } finally {
     child.kill('SIGTERM')
     const timer = setTimeout(() => child.kill('SIGKILL'), 10_000)
@@ -167,7 +167,58 @@ try {
     assert.equal(titles[0].status, 'fulfilled')
     assert.equal((await ctx.sessionQuery.readEvent({ sessionId: session.id, seq: sessionModule.SessionSeq(0) })).target.type, 'user/message')
     assert.equal(counters.list, listBefore, 'Exact metadata, titles and event reads do not enumerate the corpus')
-    console.log('fork9 smoke: shared official Session/Cordis identity, built imports, unchanged search, durable closing tail, and targeted reads without corpus listing passed')
+    if (process.env.DSH_SMOKE_SQLITE_VERSION === '0.1.7-rc.2-fork4') {
+      const appendTo = (target, text) => target.append('user/message', createUserMessage({
+        content: [{ type: 'text', text }], source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      const ids = ['fork11-short', 'fork11-long'].map(id => sessionModule.SessionId(id))
+      const texts = ['alpha alpha alpha', 'alpha alpha gap alpha alpha']
+      for (let index = 0; index < ids.length; index += 1) {
+        const stored = ctx.sessions.prepare(ids[index], { meta: { createdAt: 20 + index } })
+        const storedWriter = await ctx.sessionPersistence.create(stored.header)
+        const leave = ctx.sessions.enter(stored)
+        ctx.sessions.announce(stored)
+        appendTo(stored, texts[index])
+        leave()
+        await storedWriter.close()
+      }
+      const request = { query: 'alpha alpha' }
+      const history = await ctx.sessionQuery.searchSessions(request)
+      assert.deepEqual(history.items.map(item => item.header.id), ids,
+        'BM25 ranks the shorter document first when actual phrase TF is equal')
+      const live = ctx.sessions.prepare(ids[0], { meta: { createdAt: 20 } })
+      appendTo(live, texts[0])
+      const leaveLive = ctx.sessions.enter(live)
+      ctx.sessions.announce(live)
+      const unrelated = ctx.sessions.prepare(sessionModule.SessionId('fork11-unrelated'), { meta: { createdAt: 30 } })
+      appendTo(unrelated, 'unrelated '.repeat(1000))
+      const leaveUnrelated = ctx.sessions.enter(unrelated)
+      ctx.sessions.announce(unrelated)
+      try {
+        const mixed = await ctx.sessionQuery.searchSessions(request)
+        assert.deepEqual(mixed.items.map(item => item.header.id), ids,
+          'Moving identical history to live with an unrelated long live document preserves ranking')
+        assert.equal(mixed.items[0].live, true)
+      } finally {
+        leaveLive()
+        leaveUnrelated()
+      }
+      const updated = ctx.sessions.prepare(ids[0], { meta: { createdAt: 20 } })
+      appendTo(updated, 'fresh live marker')
+      const leaveUpdated = ctx.sessions.enter(updated)
+      ctx.sessions.announce(updated)
+      try {
+        const fresh = await ctx.sessionQuery.searchSessions({ query: 'fresh live marker' })
+        assert.equal(fresh.items[0].header.id, ids[0])
+        assert.equal(fresh.items[0].live, true)
+        assert.deepEqual((await ctx.sessionQuery.searchSessions(request)).items.map(item => item.header.id), [ids[1]],
+          'Latest live body shadows the old persisted phrase candidate')
+      } finally {
+        leaveUpdated()
+      }
+      console.log('fork11 BM25 phrase ranking, mixed live/history stability, and latest live shadow passed')
+    }
+    console.log('Session-query smoke: shared official identities, built imports, unchanged search, durable closing tail, and targeted reads passed')
   } finally {
     await ctx.fiber.dispose()
   }

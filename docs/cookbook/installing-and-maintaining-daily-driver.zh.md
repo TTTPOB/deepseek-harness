@@ -83,3 +83,20 @@ dsh plugin --profile web allow-version @deepseek-ai/dsh-api-gateway@0.1.7-rc.2-f
 ```
 
 3. 仅在该维护窗口停止 Host、安装三个配套 overrides 并重新启动。只安装不会激活成品。豁免仅授权精确 package/runtime 组合，任一版本变化都需重新评估；见[兼容性与豁免](../../packages/boot/plugin-manager/README.zh.md#version-compatibility-and-exemptions)。不要对这个三包 Release 使用完整 fork1 升级脚本。
+
+## 7. 准备仅 SQLite 的 fork11 发布
+
+专用 `daily-driver-v0.1.7-rc.2-fork11` 路线只发布 `deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz` 和 `SHA256SUMS`。通用 build/publish 跳过该 tag。保留不可变 fork9 的 query fork1、不可变 fork10 的 JSONL fork3、官方 CLI/Web 和所有无关 overrides。当前已发布 Release 是 fork10；这条路线不会在日用 Host 安装或激活 fork11。
+
+1. 使用 `scripts/daily-driver-source.mjs` 仅准备和构建 SQLite 目标，并运行其聚焦测试。使用只读验证 workflow 时，明确将 `packages` 设为 `packages/session-query/session-query-sqlite`、`tests` 设为 `packages/session-query/session-query-sqlite/tests`、`smoke` 设为下列脚本及参数；历史默认组合保持不变。
+
+```sh
+node scripts/smoke-session-query-fork11.mjs dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz
+```
+
+2. [fork11 smoke](../../scripts/smoke-session-query-fork11.mjs) 使用 `gh` 下载沿用的 query/JSONL fixture 并校验其 Release checksum。它复用隔离的官方 CLI 安装、共享 Session/Cordis 身份检查、冷启动 Web Loader 和已保存的精确版本豁免。行为验收覆盖 BM25 literal phrase 排序、相同历史正文转为 live 并与无关长文档共存时的稳定排序、最新 live 正文遮蔽旧历史、未变化搜索和持久化 closing tail。它会删除自己的临时项目，不触及日用 Host。
+3. 另行授权发布并校验新 checksum 后，在维护窗口只替换 SQLite 全局 override。使用下列官方命令接受精确 `@deepseek-ai/dsh-session-query-sqlite@0.1.7-rc.2-fork4` / DSH `0.1.7-rc.2` 组合的兼容性风险；不要扩大 peer 范围或复用 fork3 豁免。重启 Host 后安装包才激活。不要对这个单包 Release 使用完整 fork1 升级脚本。
+
+```sh
+dsh plugin --profile web allow-version @deepseek-ai/dsh-session-query-sqlite@0.1.7-rc.2-fork4 --dsh-version 0.1.7-rc.2 --accept-risk
+```

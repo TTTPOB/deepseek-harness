@@ -83,3 +83,20 @@ dsh plugin --profile web allow-version @deepseek-ai/dsh-api-gateway@0.1.7-rc.2-f
 ```
 
 3. Stop, install the three paired overrides, and restart the Host only during that maintenance window. Installation alone does not activate the artifacts. Exemptions authorize only the exact package/runtime pair and must be reconsidered after either version changes; see [compatibility and exemptions](../../packages/boot/plugin-manager/README.md#version-compatibility-and-exemptions). Do not apply the complete fork1 upgrade script to this three-package release.
+
+## 7. Prepare the SQLite-only fork11 release
+
+The dedicated `daily-driver-v0.1.7-rc.2-fork11` route publishes only `deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz` and `SHA256SUMS`. Generic build/publish skip its tag. Retain query fork1 from immutable fork9 and JSONL fork3 from immutable fork10, official CLI/Web, and all unrelated overrides. The current published Release is fork10; this route does not install or activate fork11 on the daily Host.
+
+1. Prepare and build only the SQLite target with `scripts/daily-driver-source.mjs`. Run its focused tests. For the read-only verification workflow, explicitly set `packages` to `packages/session-query/session-query-sqlite`, `tests` to `packages/session-query/session-query-sqlite/tests`, and `smoke` to the script and argument below; the historical default combination remains unchanged.
+
+```sh
+node scripts/smoke-session-query-fork11.mjs dist/daily-driver/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork4.tgz
+```
+
+2. The [fork11 smoke](../../scripts/smoke-session-query-fork11.mjs) downloads the retained query/JSONL fixtures with `gh` and verifies their Release checksums. It reuses the isolated official-CLI installation, shared Session/Cordis identity checks, cold Web Loader, and saved exact-version exemption. Behavior checks cover BM25 literal-phrase ranking, stable ordering when identical history becomes live beside an unrelated long document, latest live text shadowing old history, unchanged search, and durable closing tails. It removes its temporary projects and does not touch the daily Host.
+3. After separately authorizing publication and verifying the new checksum, replace only the SQLite global override in a maintenance window. Accept the exact `@deepseek-ai/dsh-session-query-sqlite@0.1.7-rc.2-fork4` / DSH `0.1.7-rc.2` compatibility risk through the official command below; do not widen peer ranges or reuse the fork3 exemption. Restarting the Host activates the installed package. Do not apply the complete fork1 upgrade script to this one-package release.
+
+```sh
+dsh plugin --profile web allow-version @deepseek-ai/dsh-session-query-sqlite@0.1.7-rc.2-fork4 --dsh-version 0.1.7-rc.2 --accept-risk
+```
