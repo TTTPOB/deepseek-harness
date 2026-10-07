@@ -1139,5 +1139,6 @@ jobs:
           cd dist/daily-driver
           assets=(deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz)
           sha256sum "${assets[@]}" > SHA256SUMS
-          gh release create "$tag" "${assets[@]}" SHA256SUMS --verify-tag --title "$tag" \
+          gh release create "$tag" "${assets[@]}" SHA256SUMS --verify-tag --draft --title "$tag" \
             --notes 'Publish the four existing rc.2-fork1 core packages: agent, agent-preset-registry, llm-pi-ai and mcp-client. Keep official CLI/Web, previously published subagent and unrelated packages unchanged. Core source and isolated built-entry/setup checks do not install or activate a daily Host. Personal plugins are built and published independently.'
+          gh release edit "$tag" --draft=false
