@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
-import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const fixture = join(repo, 'worktree.smoke')
 const realGlobal = execFileSync('corepack', ['pnpm@11.24.0', '--config.manage-package-manager-versions=false', '--ignore-workspace', 'root', '-g'], { encoding: 'utf8', env: { ...process.env, COREPACK_ENABLE_PROJECT_SPEC: '0' } }).trim().split('\n').at(-1)
 let owning
 for (const entry of await readdir(realGlobal, { withFileTypes: true })) {
@@ -18,22 +17,20 @@ assert(owning, 'Installed DSH YAML parser is needed for isolated fixture')
 const yaml = createRequire(join(owning, 'package.json'))('js-yaml')
 const expression = new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: value => ({ expression: value }) })
 const load = value => yaml.load(value, { schema: yaml.DEFAULT_SCHEMA.extend([expression]) })
+const fixture = await mkdtemp(join(repo, 'worktree.migration-'))
 const globalDir = join(fixture, 'global/v11')
 const home = join(fixture, 'home')
 const web = join(home, 'profiles/web')
-const artifactDir = join(fixture, 'artifacts')
 const bin = join(fixture, 'bin')
 const cli = join(repo, 'scripts/upgrade-daily-driver.mjs')
-const args = ['--home', home, '--global-dir', globalDir, '--global-bin-dir', bin, '--artifacts', artifactDir]
+const args = ['--home', home, '--global-dir', globalDir]
 function run(...flags) {
   return spawnSync(process.execPath, [cli, ...flags, ...args], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
 }
 
 try {
-  await rm(fixture, { recursive: true, force: true })
   await mkdir(join(globalDir, 'project/node_modules/@deepseek-ai'), { recursive: true })
   await mkdir(web, { recursive: true })
-  await mkdir(artifactDir)
   await mkdir(bin)
   await mkdir(join(home, 'sessions'), { recursive: true })
   await mkdir(join(home, 'storages'), { recursive: true })
@@ -50,16 +47,13 @@ try {
   await writeFile(join(web, 'cordis.patch.yml'), '- id: web-fetch-firecrawl\n  config:\n    baseURL: https://fetch.example.test\n    apiKey: !!js process.env.TEST_CANARY_SECRET\n- id: progressive-tools\n  config:\n    maxDescribeTools: 7\n- id: web\n  config:\n    fetchProvider: old\n    credential: !!js "process.env.TEST_CANARY_SECRET"\n- id: web-search-firecrawl\n  config: {}\n- insert:\n    - id: mcp-canary\n      name: canary\n      config:\n        token: !!js "process.env.TEST_CANARY_SECRET"\n')
   await writeFile(join(home, 'cordis.patch.yml'), '- insert:\n    - id: existing-mcp\n      name: old-mcp\n    - id: progressive-tools\n      name: dsh-progressive-tools\n      config:\n        deferTools: mcp\n')
   await writeFile(join(home, 'settings.yaml'), 'agent-presets:\n  default: standard\n  agents: []\nagent-default-model:\n  model: my-not-test-model\nsubagent-model-selection:\n  models: [my-not-test-model]\nui-onboarding:\n  onboardingDone: true\nshell:\n  timeoutMs: 12345\n')
-  for (const name of ['deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz', 'deepseek-ai-dsh-subagent-0.1.7-rc.2-fork1.tgz', 'dsh-progressive-tools-0.3.0.tgz', 'dsh-workspace-envrc-0.2.0.tgz', 'dsh-workspace-overlay-0.2.0.tgz', 'firecrawl-dsh-firecrawl-0.1.0-fork1.tgz', 'earendil-works-pi-ai-0.85.1-fork1.tgz']) await writeFile(join(artifactDir, name), '')
-  await writeFile(join(bin, 'corepack'), `#!/usr/bin/env node
-import fs from 'node:fs';const args=process.argv.slice(2);if(args.shift()!=='pnpm@11.24.0'||args.shift()!=='--config.manage-package-manager-versions=false'||args.shift()!=='--pm-on-fail=ignore'||process.env.COREPACK_ENABLE_PROJECT_SPEC!=='0')process.exit(2);if(args[0]==='--version'){console.log('11.24.0');process.exit(0)}if(!args.includes('install')&&!args.includes('add'))process.exit(2);if(args.includes('install')){if(!args.includes('--config.auto-install-peers=false'))process.exit(3);fs.writeFileSync(args[args.indexOf('--dir')+1]+'/pnpm-lock.yaml','new-lock');process.exit(0)}const dir=args.find(x=>x.startsWith('--config.global-dir='))?.slice('--config.global-dir='.length);if(!dir)process.exit(2);const spec=args.at(-1);const file=dir+'/v11/project/package.json';const data=JSON.parse(fs.readFileSync(file));data.dependencies['@deepseek-ai/dsh']=spec.slice('@deepseek-ai/dsh@'.length);fs.writeFileSync(file,JSON.stringify(data));
-`, { mode: 0o755 })
+  await writeFile(join(bin, 'corepack'), '#!/usr/bin/env node\nprocess.exit(99)\n', { mode: 0o755 })
   const beforeWorkspace = await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8')
   const beforeHomePatch = await readFile(join(home, 'cordis.patch.yml'), 'utf8')
   const beforeSettings = await readFile(join(home, 'settings.yaml'), 'utf8')
   const preview = run('--dry-run')
   assert.equal(preview.status, 0, preview.stderr)
-  assert.match(preview.stdout, /Mode: preview; pnpm: 11\.24\.0/)
+  assert.match(preview.stdout, /Mode: preview; one-time legacy configuration migration/)
   assert.equal(await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8'), beforeWorkspace)
   assert.equal(await readFile(join(home, 'settings.yaml'), 'utf8'), beforeSettings)
   assert.equal(await readFile(join(home, 'cordis.patch.yml'), 'utf8'), beforeHomePatch)
@@ -70,9 +64,11 @@ import fs from 'node:fs';const args=process.argv.slice(2);if(args.shift()!=='pnp
   const backups = await readdir(join(home, 'backups'))
   assert.equal(backups.length, 1)
   const backup = join(home, 'backups', backups[0])
-  assert.equal(await readFile(join(backup, 'sessions/canary'), 'utf8'), 'old-session')
-  assert.equal(await readFile(join(backup, 'storages/canary'), 'utf8'), 'old-storage')
-  assert.equal(await readFile(join(web, 'pnpm-lock.yaml'), 'utf8'), 'new-lock')
+  assert(!existsSync(join(backup, 'sessions')))
+  assert(!existsSync(join(backup, 'storages')))
+  assert.equal(await readFile(join(home, 'sessions/canary'), 'utf8'), 'old-session')
+  assert.equal(await readFile(join(home, 'storages/canary'), 'utf8'), 'old-storage')
+  assert.equal(await readFile(join(web, 'pnpm-lock.yaml'), 'utf8'), 'legacy-lock')
   assert(!existsSync(join(home, 'settings.yaml')))
   const migrated = load(await readFile(join(web, 'cordis.patch.yml'), 'utf8'))
   assert(!migrated.some(row => row.id === 'web-search-firecrawl'))
@@ -88,23 +84,8 @@ import fs from 'node:fs';const args=process.argv.slice(2);if(args.shift()!=='pnp
   assert.equal(migrated.find(row => row.id === 'agent-default-model').config.model, 'my-not-test-model')
   assert.equal(migrated.find(row => row.id === 'bash-sandbox').config.timeoutMs, 12345)
   assert.deepEqual(migrated.find(row => row.id === 'agent-preset-registry').config, { default: 'standard-ptc', agents: [], selectedDefault: 'standard' })
-  const deps = JSON.parse(await readFile(join(web, 'package.json'), 'utf8')).dependencies
-  assert.equal(deps.legacy, '1.0.0')
-  assert.equal(deps['dsh-mcp-panel'], '0.6.19')
-  assert.equal(deps['@deepseek-ai/dsh-agent'], undefined)
-  assert.equal(deps['@earendil-works/pi-ai'], undefined)
-  assert.equal(Object.keys(deps).length, 6)
-  const repeated = run('--apply')
-  assert.equal(repeated.status, 0, repeated.stderr)
-  assert.equal(load(await readFile(join(home, 'cordis.patch.yml'), 'utf8')).flatMap(row => row.insert ?? []).filter(row => row.id === 'progressive-tools').length, 1)
-  const global = load(await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8'))
-  assert.equal(global.overrides.unrelated, 'file:/persistent/other.tgz')
-  assert.equal(global.allowBuilds.unrelated, true)
-  assert.equal(global.blockExoticSubdeps, false)
-  assert.equal(Object.keys(global.overrides).length, 7)
-  assert.equal(global.overrides['@deepseek-ai/dsh-web-app'], undefined)
-  assert.equal(global.overrides['dsh-progressive-tools'], undefined)
-  assert.equal(global.overrides['@earendil-works/pi-ai@0.85.1-fork1'], `file:${join(artifactDir, 'earendil-works-pi-ai-0.85.1-fork1.tgz')}`)
+  assert.deepEqual(JSON.parse(await readFile(join(web, 'package.json'), 'utf8')), oldProfile)
+  assert.equal(await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8'), beforeWorkspace)
   const rolled = run('--rollback', backup)
   assert.equal(rolled.status, 0, rolled.stderr)
   assert.deepEqual(JSON.parse(await readFile(join(web, 'package.json'), 'utf8')), oldProfile)
@@ -125,7 +106,11 @@ import fs from 'node:fs';const args=process.argv.slice(2);if(args.shift()!=='pnp
   assert.equal(load(await readFile(join(home, 'cordis.patch.yml'), 'utf8')).flatMap(row => row.insert ?? []).find(row => row.id === 'workspace-envrc').config.executable, 'custom-direnv')
   assert.deepEqual(load(await readFile(join(second, 'cordis.patch.yml'), 'utf8')), [])
   assert(existsSync(join(home, 'settings.yaml')))
-  console.log('isolated upgrade preview/apply/rollback: passed; shared profile dependencies, expressions, and snapshots retained')
+  const retired = run('--artifacts', '/unused')
+  assert.equal(retired.status, 1)
+  assert.match(retired.stderr, /Unknown option: --artifacts/)
+  assert.equal(await readFile(join(globalDir, 'pnpm-workspace.yaml'), 'utf8'), beforeWorkspace)
+  console.log('isolated legacy configuration preview/apply/rollback passed; packages, lockfiles and state untouched')
 } finally {
   await rm(fixture, { recursive: true, force: true })
 }
