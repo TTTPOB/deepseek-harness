@@ -34,6 +34,11 @@ it('detects a late global service without confusing independent runtimes', async
   } }
   await declare(first, { id: 'standard', plugins: [{ name: 'cordis:late' }] })
   await declare(second, contribution('standard'))
+  expect(livePresetMounts(first.fiber)).toHaveLength(0)
+  expect(livePresetMounts(second.fiber)).toHaveLength(0)
+  await using firstLease = await first.agentPresets.acquireScope()
+  await using secondLease = await second.agentPresets.acquireScope()
+  expect(firstLease.key).not.toBe(secondLease.key)
   expect(livePresetMounts(first.fiber)).toHaveLength(1)
   expect(livePresetMounts(second.fiber)).toHaveLength(1)
   expect(() =>{  publish() }).toThrow('published process-global')

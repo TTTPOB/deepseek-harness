@@ -72,7 +72,12 @@ it('reports grouped and conditional plugin rows from the activated tree', async 
   await declare(ctx, { id: 'standard', plugins: [{ name: 'cordis:group', group: true, config: [
     { id: 'off', name: 'missing', disabled: { __jsExpr: 'true' } },
   ] }] })
-  const tree = livePresetMounts(ctx.fiber)[0]!.tree
+  expect(livePresetMounts(ctx.fiber)).toHaveLength(0)
+  await using lease = await ctx.agentPresets.acquireScope()
+  const mounts = livePresetMounts(ctx.fiber)
+  expect(mounts).toHaveLength(1)
+  expect(mounts[0]!.key).toBe(lease.key)
+  const tree = mounts[0]!.tree
   expect(mountedCompositionRows(tree)).toEqual([{ entryId: 'off', moduleName: 'missing', enabled: false, condition: 'true' }])
 })
 

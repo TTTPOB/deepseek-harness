@@ -18,21 +18,23 @@ function model<A extends 'openai-completions' | 'openai-responses'>(api: A, base
   }
 }
 
-/** The arguments each `toolcall_delta` partial carries, and the finalized arguments. */
-async function collect(events: AsyncIterable<AssistantMessageEvent>): Promise<{ partials: unknown[]; final: unknown }> {
+/** Snapshot observed partial arguments; SDK events share mutable message content. */
+async function collect(events: AsyncIterable<AssistantMessageEvent>): Promise<{ partials: unknown[]; deltas: string[]; final: unknown }> {
   const partials: unknown[] = []
+  const deltas: string[] = []
   let final: unknown
   for await (const event of events) {
     if (event.type === 'toolcall_delta' && event.delta.length > 0) {
       const block = event.partial.content[event.contentIndex]
-      partials.push(block?.type === 'toolCall' ? block.arguments : undefined)
+      partials.push(block?.type === 'toolCall' ? structuredClone(block.arguments) : undefined)
+      deltas.push(event.delta)
     } else if (event.type === 'toolcall_end') {
       final = event.toolCall.arguments
     } else if (event.type === 'error') {
       throw new Error(event.error.errorMessage)
     }
   }
-  return { partials, final }
+  return { partials, deltas, final }
 }
 
 const context = { messages: [{ role: 'user' as const, content: 'hi', timestamp: 0 }] }
@@ -53,8 +55,9 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
       '{"choices":[{"delta":{},"index":0,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}',
       '[DONE]',
     ] }])
-    const events = streamCompletions(model('openai-completions', server.url), context, { apiKey: 'test-key' })
-    const { partials, final } = await collect(events)
+    const events = streamCompletions(model('openai-completions', server.url), context, { apiKey: 'test-key', toolCallParsing: 'final' })
+    const { partials, deltas, final } = await collect(events)
+    expect(deltas).toEqual(fragments)
     expect(partials).toHaveLength(fragments.length)
     expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
     expect(final).toEqual(args)
@@ -72,8 +75,9 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
         id: 'resp_1', status: 'completed', output: [], usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
       } }),
     ] }])
-    const events = streamResponses(model('openai-responses', server.url), context, { apiKey: 'test-key' })
-    const { partials, final } = await collect(events)
+    const events = streamResponses(model('openai-responses', server.url), context, { apiKey: 'test-key', toolCallParsing: 'final' })
+    const { partials, deltas, final } = await collect(events)
+    expect(deltas).toEqual(fragments)
     expect(partials).toHaveLength(fragments.length)
     expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
     expect(final).toEqual(args)
