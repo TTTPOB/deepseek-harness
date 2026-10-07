@@ -7,20 +7,17 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const packages = [
-  ['@deepseek-ai/dsh-session-query', process.env.DSH_SMOKE_QUERY_VERSION ?? '0.1.7-rc.2-fork1'],
-  ['@deepseek-ai/dsh-session-persistence-jsonl', process.env.DSH_SMOKE_JSONL_VERSION ?? '0.1.7-rc.2-fork2'],
-  ['@deepseek-ai/dsh-session-query-sqlite', process.env.DSH_SMOKE_SQLITE_VERSION ?? '0.1.7-rc.2-fork3'],
-]
+import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
+const packages = plan('session-query').packages.map(pkg => [pkg.name, pkg.version])
 const tarballs = process.argv.slice(2).map(path => resolve(path))
 assert.equal(tarballs.length, 3,
-  'Usage: node scripts/smoke-session-query-fork9.mjs <session-query.tgz> <persistence-jsonl.tgz> <session-query-sqlite.tgz>')
-const runtime = await mkdtemp(join(tmpdir(), 'dsh-session-index-fork9-'))
+  'Usage: node scripts/smoke-session-query.mjs <session-query.tgz> <persistence-jsonl.tgz> <session-query-sqlite.tgz>')
+const runtime = await mkdtemp(join(tmpdir(), 'dsh-session-index-artifact-'))
 try {
   for (const tarball of tarballs) await copyFile(tarball, join(runtime, basename(tarball)))
   await writeFile(join(runtime, 'package.json'), JSON.stringify({
-    name: 'session-index-fork9-smoke', private: true, type: 'module', packageManager: 'pnpm@11.24.0',
-    dependencies: { '@deepseek-ai/dsh': '0.1.7-rc.2' },
+    name: 'session-index-artifact-smoke', private: true, type: 'module', packageManager: packageManager,
+    dependencies: { '@deepseek-ai/dsh': officialVersion },
   }, null, 2) + '\n')
   const overrides = packages.map(([name], index) =>
     `  '${name}': 'file:./${basename(tarballs[index])}'`).join('\n')
@@ -35,7 +32,7 @@ try {
   })
   const runtimeRequire = createRequire(join(runtime, 'package.json'))
   const cliManifest = runtimeRequire.resolve('@deepseek-ai/dsh/package.json')
-  assert.equal(JSON.parse(await readFile(cliManifest, 'utf8')).version, '0.1.7-rc.2')
+  assert.equal(JSON.parse(await readFile(cliManifest, 'utf8')).version, officialVersion)
   const cli = createRequire(cliManifest)
   const base = createRequire(cli.resolve('@deepseek-ai/dsh-base/package.json'))
   const loaded = []
@@ -57,7 +54,7 @@ try {
     [persistenceAnchor, '@deepseek-ai/dsh-session-persistence'],
     [queryAnchor, '@deepseek-ai/dsh-session-query'],
   ]) assert.equal(JSON.parse(await readFile(anchor.resolve(`${name}/package.json`), 'utf8')).version,
-    name === '@deepseek-ai/dsh-session-query' ? packages[0][1] : '0.1.7-rc.2')
+    name === '@deepseek-ai/dsh-session-query' ? packages[0][1] : officialVersion)
   const boot = await import(pathToFileURL(cli.resolve('@deepseek-ai/dsh-app-boot')).href)
   const home = join(runtime, 'home')
   const profile = join(home, 'profiles/web')
@@ -68,13 +65,6 @@ try {
     name: 'session-query-web-smoke', private: true, dependencies: {},
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
   }) + '\n')
-  if (process.env.DSH_SMOKE_SESSION_TOOLS) {
-    execFileSync('pnpm', ['--store-dir', dirname(store), '--config.auto-install-peers=false',
-      'add', resolve(process.env.DSH_SMOKE_SESSION_TOOLS)], { cwd: profile, stdio: 'inherit', timeout: 600_000 })
-    execFileSync(process.execPath, [bin, 'plugin', '--profile', 'web', 'allow-version',
-      'dsh-session-tools@0.1.3', '--dsh-version', '0.1.7-rc.2', '--accept-risk'],
-    { cwd: runtime, env, stdio: 'pipe', timeout: 60_000 })
-  }
   for (const [name, version] of packages) {
     const manifest = JSON.parse(await readFile(base.resolve(`${name}/package.json`), 'utf8'))
     const issue = boot.evaluatePluginCompatibility(manifest)
@@ -82,7 +72,7 @@ try {
     else {
       assert(issue && !issue.exempted)
       execFileSync(process.execPath, [bin, 'plugin', '--profile', 'web', 'allow-version',
-        `${name}@${version}`, '--dsh-version', '0.1.7-rc.2', '--accept-risk'],
+        `${name}@${version}`, '--dsh-version', officialVersion, '--accept-risk'],
       { cwd: runtime, env, stdio: 'pipe', timeout: 60_000 })
       const exemptions = JSON.parse(await readFile(join(profile, 'compatibility.json'), 'utf8'))
       assert(boot.evaluatePluginCompatibility(manifest, exemptions).exempted)
@@ -147,7 +137,7 @@ try {
       const original = ctx.sessionPersistence[name].bind(ctx.sessionPersistence)
       ctx.sessionPersistence[name] = (...args) => { counters[name] += 1; return original(...args) }
     }
-    const session = ctx.sessions.prepare(sessionModule.SessionId('fork9-smoke'), { meta: { createdAt: 10 } })
+    const session = ctx.sessions.prepare(sessionModule.SessionId('artifact-smoke'), { meta: { createdAt: 10 } })
     const writer = await ctx.sessionPersistence.create(session.header)
     const detach = ctx.sessions.enter(session)
     ctx.sessions.announce(session)
@@ -174,11 +164,11 @@ try {
     assert.equal(titles[0].status, 'fulfilled')
     assert.equal((await ctx.sessionQuery.readEvent({ sessionId: session.id, seq: sessionModule.SessionSeq(0) })).target.type, 'user/message')
     assert.equal(counters.list, listBefore, 'Exact metadata, titles and event reads do not enumerate the corpus')
-    if (['0.1.7-rc.2-fork4', '0.1.7-rc.2-fork5'].includes(process.env.DSH_SMOKE_SQLITE_VERSION)) {
+    {
       const appendTo = (target, text) => target.append('user/message', createUserMessage({
         content: [{ type: 'text', text }], source: { kind: 'user' },
       }), { surfaceOp: 'append' })
-      const ids = ['fork11-short', 'fork11-long'].map(id => sessionModule.SessionId(id))
+      const ids = ['artifact-short', 'artifact-long'].map(id => sessionModule.SessionId(id))
       const texts = ['alpha alpha alpha', 'alpha alpha gap alpha alpha']
       for (let index = 0; index < ids.length; index += 1) {
         const stored = ctx.sessions.prepare(ids[index], { meta: { createdAt: 20 + index } })
@@ -197,7 +187,7 @@ try {
       appendTo(live, texts[0])
       const leaveLive = ctx.sessions.enter(live)
       ctx.sessions.announce(live)
-      const unrelated = ctx.sessions.prepare(sessionModule.SessionId('fork11-unrelated'), { meta: { createdAt: 30 } })
+      const unrelated = ctx.sessions.prepare(sessionModule.SessionId('artifact-unrelated'), { meta: { createdAt: 30 } })
       appendTo(unrelated, 'unrelated '.repeat(1000))
       const leaveUnrelated = ctx.sessions.enter(unrelated)
       ctx.sessions.announce(unrelated)
@@ -223,73 +213,7 @@ try {
       } finally {
         leaveUpdated()
       }
-      console.log('fork11 BM25 phrase ranking, mixed live/history stability, and latest live shadow passed')
-    }
-    if (process.env.DSH_SMOKE_SESSION_TOOLS) {
-      const resolution = await boot.createRuntimeResolution({ installAnchor: cliManifest,
-        profile: boot.loadProfileDirectory('browsing smoke', profile, cliManifest), home })
-      await ctx.plugin(boot.PluginPackages, { resolution })
-      const profileRequire = createRequire(join(profile, 'package.json'))
-      const pluginEntry = profileRequire.resolve('dsh-session-tools')
-      const pluginManifest = JSON.parse(await readFile(join(profile, 'node_modules/dsh-session-tools/package.json'), 'utf8'))
-      for (const peer of Object.keys(pluginManifest.peerDependencies)) {
-        const actual = ctx.pluginPackages.packageOf(peer, pathToFileURL(pluginEntry).href)
-        const expected = resolution.entries.find(item => item.name === peer && item.scope === 'installation')
-        assert(actual && expected, peer)
-        assert.equal(await realpath(actual.dir), await realpath(expected.packageDir), peer)
-      }
-      const toolsModule = await load(base, '@deepseek-ai/dsh-tools')
-      const promptModule = await load(base, '@deepseek-ai/dsh-system-prompt')
-      await ctx.plugin(promptModule.default)
-      await ctx.plugin(toolsModule.default)
-      const definitions = new Map()
-      const register = ctx.tools.register.bind(ctx.tools)
-      ctx.tools.register = definition => { definitions.set(definition.name, definition); return register(definition) }
-      const plugin = await import(pathToFileURL(pluginEntry).href)
-      const loaderModule = await load(cli, '@deepseek-ai/cordis-plugin-loader')
-      await ctx.plugin(loaderModule.default)
-      ctx.loader.internal = { version: 'v2', async import(name) { assert.equal(name, 'dsh-session-tools'); return plugin } }
-      await ctx.loader.create({ name: 'dsh-session-tools', config: { outputBytes: 1024 } })
-      await ctx.loader.await()
-      assert.equal(definitions.size, 7)
-      const caller = ctx.sessions.create(sessionModule.SessionId('fork12-caller'), { meta: { createdAt: 100, cwd: '/one' } })
-      const parent = ctx.sessions.create(sessionModule.SessionId('fork12-parent'), { meta: { createdAt: 101, cwd: '/one' } })
-      const child = ctx.sessions.create(sessionModule.SessionId('fork12-child'), { meta: { createdAt: 102, cwd: '/one', parentSession: parent.id } })
-      for (const target of [parent, child]) target.append('session/title', { title: target.id, messageSeqs: [], source: { kind: 'user' } })
-      const exec = { signal: new AbortController().signal, agent: { id: caller.id, session: caller } }
-      const run = (name, args) => definitions.get(name).execute(args, exec)
-      const trace = await run('session_trace', { session_id: parent.id })
-      assert.equal(trace.target.title, parent.id)
-      assert.equal(trace.descendants[0].session.title, child.id)
-      const first = await run('session_list', { limit: 1 })
-      assert.equal(first.items[0].session_id, child.id)
-      ctx.sessions.create(sessionModule.SessionId('fork12-insert'), { meta: { createdAt: 103, cwd: '/one' } })
-      const second = await run('session_list', { limit: 1, cursor: first.next_cursor })
-      assert.equal(second.items[0].session_id, parent.id)
-      const huge = parent.append('user/message', createUserMessage({ content: [{ type: 'text', text: '中文😀'.repeat(4000) }], source: { kind: 'user' } }), { surfaceOp: 'append' })
-      const eventPage = await run('session_event_list', { session_id: parent.id, limit: 1, view: 'metadata' })
-      assert.equal(eventPage.items[0].seq, 0)
-      const next = await run('session_event_list', { session_id: parent.id, after_seq: eventPage.next_after_seq, limit: 1 })
-      assert.equal(next.items[0].seq, huge.seq)
-      let reads = 0
-      const exactRead = ctx.sessionQuery.readEvent.bind(ctx.sessionQuery)
-      ctx.sessionQuery.readEvent = (...args) => { reads++; return exactRead(...args) }
-      const fragments = []
-      let offset = 0
-      do {
-        const part = await run('session_event_read', { session_id: parent.id, seq: huge.seq, offset_chars: offset })
-        fragments.push(part.json_fragment)
-        offset = part.next_offset
-      } while (offset !== null)
-      assert.equal(JSON.parse(fragments.join('')).seq, huge.seq)
-      assert.equal(reads, 1, 'Continuation reuses the prepared event')
-      await ctx.sessionQuery.traceSession(session.id)
-      const beforeList = counters.list
-      await ctx.sessionQuery.traceSession(session.id)
-      await ctx.sessionQuery.pageSessions({ limit: 2 })
-      await ctx.sessionQuery.traceSession(session.id)
-      assert.equal(counters.list, beforeList, 'Warm metadata observations reuse the catalog')
-      console.log('fork12 installed consumer: shared Host peers, Loader, trace titles, stable cursor, raw event paging and one-read Unicode fragments passed')
+      console.log('artifact BM25 phrase ranking, mixed live/history stability, and latest live shadow passed')
     }
     console.log('Session-query smoke: shared official identities, built imports, unchanged search, durable closing tail, and targeted reads passed')
   } finally {

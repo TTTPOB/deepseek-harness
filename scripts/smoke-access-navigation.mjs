@@ -5,28 +5,19 @@ import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'nod
 import { request } from 'node:http'
 import { createRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 
+import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
+const expected = plan('access').packages
+const names = expected.map(pkg => pkg.name)
+const versions = expected.map(pkg => pkg.version)
+const uiNames = names.slice(4)
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert([4, 6].includes(tarballs.length),
-  'Usage: node scripts/smoke-access-navigation-fork6.mjs <connection-fork2.tgz> <frontend-static-fork2.tgz> <gateway-fork2.tgz> <ui-settings-fork1.tgz> [<ui-plugin-manager-fork2.tgz> <ui-sidebar-terminal-fork2.tgz>]')
-const uiNames = tarballs.length === 6 ? [
-  '@deepseek-ai/dsh-client-ui-plugin-manager',
-  '@deepseek-ai/dsh-client-ui-sidebar-terminal',
-] : []
-const names = [
-  '@deepseek-ai/dsh-client-connection',
-  '@deepseek-ai/dsh-host-frontend-static',
-  '@deepseek-ai/dsh-api-gateway',
-  '@deepseek-ai/dsh-client-ui-settings',
-  ...uiNames,
-]
-const officialVersion = '0.1.7-rc.2'
-const versions = names.map((_, index) => `${officialVersion}-fork${index === 3 ? 1 : 2}`)
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const scratch = join(root, 'dist', 'smoke')
-await mkdir(scratch, { recursive: true })
-const runtime = await mkdtemp(join(scratch, 'access-navigation-fork6-'))
+assert.equal(tarballs.length, names.length,
+  'Usage: node scripts/smoke-access-navigation.mjs <connection.tgz> <frontend-static.tgz> <gateway.tgz> <ui-settings.tgz> <ui-plugin-manager.tgz> <ui-sidebar-terminal.tgz>')
+const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
+const runtime = await mkdtemp(join(tmpdir(), 'dsh-access-artifact-'))
 const home = join(runtime, 'home')
 const profile = join(home, 'profiles', 'web')
 const issuer = 'https://test-team.cloudflareaccess.com'
@@ -69,14 +60,14 @@ function get(origin, path, headers) {
 try {
   for (const tarball of tarballs) await copyFile(tarball, join(runtime, basename(tarball)))
   await writeFile(join(runtime, 'package.json'), JSON.stringify({
-    name: 'access-navigation-fork6-smoke', private: true, type: 'module', packageManager: 'pnpm@11.24.0',
+    name: 'access-navigation-artifact-smoke', private: true, type: 'module', packageManager: packageManager,
     dependencies: { '@deepseek-ai/dsh': officialVersion },
   }, null, 2) + '\n')
   const overrides = names.map((name, index) => `  '${name}': 'file:./${basename(tarballs[index])}'`).join('\n')
   await writeFile(join(runtime, 'pnpm-workspace.yaml'),
     `packages:\n  - .\nblockExoticSubdeps: false\noverrides:\n${overrides}\n`)
   // The nested project is its own workspace: --ignore-workspace would discard these overrides.
-  execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'install', '--ignore-scripts'], {
+  execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), 'install', '--ignore-scripts'], {
     cwd: runtime, env, stdio: 'pipe', timeout: 600_000, maxBuffer: 4 * 1024 * 1024,
   })
   const local = createRequire(join(runtime, 'package.json'))
@@ -136,7 +127,7 @@ try {
     if (uiNames.includes(name)) assert(!issue, `${name} passes the official compatibility gate without an exemption`)
     if (names.slice(1, 3).includes(name)) {
       assert(issue && !issue.exempted, `${name} must require explicit consent, not a widened peer range`)
-      assert.equal(issue.peers[names[0]], `${officialVersion}-fork2`)
+      assert.equal(issue.peers[names[0]], versions[0])
     }
     if (issue) {
       assert.equal(issue.exempted, false)
@@ -159,9 +150,9 @@ try {
   }
   const jose = await import(pathToFileURL(anchors.get(names[0]).resolve('jose')).href)
   const { privateKey, publicKey } = await jose.generateKeyPair('RS256')
-  const jwt = await new jose.SignJWT({}).setProtectedHeader({ alg: 'RS256', kid: 'fork6-smoke' })
+  const jwt = await new jose.SignJWT({}).setProtectedHeader({ alg: 'RS256', kid: 'artifact-smoke' })
     .setIssuer(issuer).setAudience(audience).setExpirationTime('5m').sign(privateKey)
-  const jwk = { ...await jose.exportJWK(publicKey), alg: 'RS256', use: 'sig', kid: 'fork6-smoke' }
+  const jwk = { ...await jose.exportJWK(publicKey), alg: 'RS256', use: 'sig', kid: 'artifact-smoke' }
   const preload = join(runtime, 'jwks-preload.mjs')
   await writeFile(preload, `const original = globalThis.fetch\nconst endpoint = ${JSON.stringify(issuer + '/cdn-cgi/access/certs')}\nglobalThis.fetch = (input, init) => {\n  const url = input instanceof Request ? input.url : String(input)\n  return url === endpoint ? Promise.resolve(Response.json({ keys: [${JSON.stringify(jwk)}] })) : original(input, init)\n}\n`)
   await writeFile(join(profile, 'cordis.patch.yml'), JSON.stringify([{
@@ -244,11 +235,11 @@ try {
   const localCookie = localLogin.headers['set-cookie']?.[0]?.split(';', 1)[0]
   assert(localCookie, 'localhost login still sets a Cookie')
   assert.equal((await get(origin, '/', { host: launchUrl.host, cookie: localCookie })).status, 200)
-  console.log('fork6 smoke passed: actual overrides/shared peers, exact CLI exemptions, cold official Web Loader, cookieless Access navigation, localhost Cookie fallback, API fence and served controller graph'
+  console.log('artifact smoke passed: actual overrides/shared peers, exact CLI exemptions, cold official Web Loader, cookieless Access navigation, localhost Cookie fallback, API fence and served controller graph'
     + (uiNames.length ? ', manager modal API and terminal main/lazy routes' : ''))
 } catch (error) {
   // Do not print child output, command objects, request headers, assertion values, or URLs containing tokens.
-  console.error(`fork6 smoke failed during ${stage}: ${error instanceof assert.AssertionError ? 'acceptance assertion failed (' + error.message.split('\n')[0].replace(/https?:\/\/\S+/g, '[URL]') + ')' : 'operation failed or timed out'}`)
+  console.error(`artifact smoke failed during ${stage}: ${error instanceof assert.AssertionError ? 'acceptance assertion failed (' + error.message.split('\n')[0].replace(/https?:\/\/\S+/g, '[URL]') + ')' : 'operation failed or timed out'}`)
   process.exitCode = 1
 } finally {
   if (child && !closed) {

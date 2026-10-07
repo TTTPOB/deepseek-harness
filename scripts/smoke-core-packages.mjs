@@ -4,23 +4,25 @@ import { execFileSync } from 'node:child_process'
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import yaml from 'js-yaml'
 
-const names = ['@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-preset-registry', '@deepseek-ai/dsh-llm-pi-ai', '@deepseek-ai/dsh-mcp-client']
+import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
+const expected = plan('core').packages
+const names = expected.map(pkg => pkg.name)
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages-fork13.mjs <agent.tgz> <registry.tgz> <llm-pi-ai.tgz> <mcp-client.tgz>')
+assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <llm-pi-ai.tgz> <mcp-client.tgz>')
 const sourceRoot = fileURLToPath(new URL('../', import.meta.url))
 const workspace = yaml.load(await readFile(join(sourceRoot, 'pnpm-workspace.yaml'), 'utf8'))
 const piSource = workspace.overrides['@earendil-works/pi-ai']
-const parent = join(sourceRoot, 'dist/smoke')
-await mkdir(parent, { recursive: true })
-const root = await mkdtemp(join(parent, 'core-fork13-'))
-const run = (args, cwd = root) => execFileSync('pnpm', ['--config.verify-deps-before-run=false', ...args], { cwd, stdio: 'inherit', timeout: 600_000 })
+const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
+const root = await mkdtemp(join(tmpdir(), 'dsh-core-artifact-'))
+const run = (args, cwd = root) => execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), ...args], { cwd, stdio: 'inherit', timeout: 600_000 })
 let ctx
 try {
   for (const tarball of tarballs) await copyFile(tarball, join(root, basename(tarball)))
-  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'core-fork13-smoke', private: true, type: 'module', packageManager: 'pnpm@11.24.0', dependencies: { '@deepseek-ai/dsh': '0.1.7-rc.2' } }))
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'core-artifact-smoke', private: true, type: 'module', packageManager, dependencies: { '@deepseek-ai/dsh': officialVersion } }))
   await writeFile(join(root, 'pnpm-workspace.yaml'), yaml.dump({ packages: ['.'], blockExoticSubdeps: false,
     overrides: { ...Object.fromEntries(names.map((name, index) => [name, 'file:./' + basename(tarballs[index])])), '@earendil-works/pi-ai': piSource } }))
   run(['install', '--ignore-scripts', '--config.enable-global-virtual-store=false'])
@@ -43,9 +45,9 @@ try {
   for (const name of names) {
     const selected = ctx.pluginPackages.packageOf(name, pathToFileURL(host).href)
     assert(selected, name)
-    assert.equal(selected.version, '0.1.7-rc.2-fork1', name)
+    assert.equal(selected.version, expected.find(pkg => pkg.name === name).version, name)
     const manifest = JSON.parse(await readFile(selected.manifestPath, 'utf8'))
-    assert.equal(boot.evaluatePluginCompatibility(manifest, {}, '0.1.7-rc.2'), undefined, name)
+    assert.equal(boot.evaluatePluginCompatibility(manifest, {}, officialVersion), undefined, name)
     packages.push(await import(pathToFileURL(hostRequire.resolve(name)).href))
   }
   const [agent, presets, pi, mcp] = packages
