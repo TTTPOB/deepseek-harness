@@ -911,6 +911,21 @@ describe('mapStopReason / mapUsage', () => {
   })
 
   it.each([
+    ['Error Code upstream_http2_stream_error: Upstream HTTP/2 stream failed', 'TRANSPORT'],
+    ['upstream_http2_stream_error: upstream failed', 'TRANSPORT'],
+    ['Upstream HTTP/2 stream failed', 'TRANSPORT'],
+    ['server_error: An error occurred while processing your request. You can retry your request.', 'SERVER'],
+    ['Error Code server_error: Internal failure', 'SERVER'],
+    ['capacity_exceeded: Too many concurrent ACP prompts (max 2)', 'PI_AI_ERROR'],
+    ['upstream_unavailable: upstream unavailable', 'PI_AI_ERROR'],
+    ['invalid_configuration: unsupported HTTP/2 option', 'PI_AI_ERROR'],
+    ['invalid_configuration: server_error: unsupported option', 'PI_AI_ERROR'],
+  ])('maps gateway error wording %j to %s', (errorMessage, code) => {
+    expect(mapStopReason(assistant({ stopReason: 'error', errorMessage })))
+      .toEqual({ kind: 'error', failure: { message: errorMessage, code } })
+  })
+
+  it.each([
     'other side closed',
     'HTTP2 request did not get a response',
     'WebSocket closed unexpectedly',

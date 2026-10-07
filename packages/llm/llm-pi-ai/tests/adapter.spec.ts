@@ -333,6 +333,29 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/v1/responses'])
   })
 
+  it.each([
+    [
+      { type: 'error', code: 'upstream_http2_stream_error', message: 'Upstream HTTP/2 stream failed' },
+      'TRANSPORT',
+    ],
+    [
+      { type: 'response.failed', response: {
+        status: 'failed', error: { code: 'server_error', message: 'An error occurred while processing your request.' },
+      } },
+      'SERVER',
+    ],
+  ])('classifies Responses stream failure %j as %s', async (event, code) => {
+    const server = await mockServer([{ events: [JSON.stringify(event)] }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: { openai: { apiKeyEnv: 'PI_TEST_KEY', baseURL: `${server.url}/v1` } },
+    })
+    const result = await assemble(ctx, { provider: 'openai', model: 'gpt-4.1', messages: [] })
+    expect(result.finish).toMatchObject({ kind: 'error', failure: { code } })
+    expect(server.paths).toEqual(['/v1/responses'])
+  })
+
   it('forces one wire request for an SDK-retryable provider failure', async () => {
     const server = await mockServer([
       {
