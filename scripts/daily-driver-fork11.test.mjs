@@ -17,14 +17,13 @@ const accepts = (name, tag, event = 'push') => Function('github', 'inputs', `ret
 test('fork11 tags select only the SQLite route, never the generic fork1 package set', () => {
   const tag = 'daily-driver-v0.1.7-rc.2-fork11'
   assert.equal(accepts('bm25-session-query-fork11', tag), true)
-  assert.equal(accepts('build', tag), false)
-  assert.equal(accepts('publish', tag), false)
+  assert.equal(accepts('core-packages-fork13', tag), false)
+  assert.equal(accepts('core-packages-fork13', tag), false)
   assert.equal(accepts('bm25-session-query-fork11', tag, 'workflow_dispatch'), false)
   for (const suffix of ['fork1', 'fork9', 'fork10']) {
     assert.equal(accepts('bm25-session-query-fork11', `daily-driver-v0.1.7-rc.2-${suffix}`), false)
   }
-  assert.equal(accepts('build', 'daily-driver-v0.1.7-rc.2-fork1'), true)
-  assert.equal(accepts('publish', 'daily-driver-v0.1.7-rc.2-fork1'), true)
+  assert.equal(accepts('core-packages-fork13', 'daily-driver-v0.1.7-rc.2-fork1'), false)
 })
 
 test('fork11 builds and publishes only SQLite fork4, retaining the other packages as fixtures', () => {

@@ -11,18 +11,6 @@ on:
         required: false
         default: false
         type: boolean
-      firecrawl_tarball_url:
-        description: Immutable URL of the adapted Firecrawl fork1 tarball
-        required: false
-        type: string
-      overlay_ref:
-        description: Exact tested source commit for workspace overlay
-        required: false
-        type: string
-      envrc_ref:
-        description: Exact tested source commit for workspace envrc
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -1081,12 +1069,13 @@ jobs:
           cd dist/daily-driver
           gh release create "$tag" deepseek-ai-dsh-client-ui-plugin-manager-0.1.7-rc.2-fork2.tgz deepseek-ai-dsh-client-ui-sidebar-terminal-0.1.7-rc.2-fork2.tgz SHA256SUMS --verify-tag --title "$tag" --latest \
             --notes 'Integrate the already locally delivered native plugin-manager modal and mobile terminal viewport/one-shot modifier keys into the daily-driver source and immutable release route. Only these two official UI packages advance to fork2; keep official CLI/Web, Access fork6/fork5 overrides and independent mobile plugins unchanged. The artifact smoke checks official compatibility without UI exemptions, shared peers, cold official Web Loader and actually served manager/terminal main and lazy scripts. Source component tests cover modal and terminal behavior; this does not claim Android or running-Host acceptance. Replace the two global overrides with immutable Release URLs only in a separately authorized maintenance window: stop Host, install, start and verify. Never replace the running Host installation or widen peer ranges to pass compatibility.'
-  build:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork8' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork9' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork10' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork11' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork12' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
+  core-packages-fork13:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/tags/daily-driver-v0.1.7-rc.2-fork13' && !inputs.subagent_only
     runs-on: ubuntu-24.04
-    outputs:
-      commit: ${{ steps.identity.outputs.commit }}
-      tag: ${{ steps.identity.outputs.tag }}
+    permissions:
+      contents: write
+    env:
+      PACKAGES: packages/core/agent packages/preset/agent-preset-registry packages/llm/llm-pi-ai packages/mcp/mcp-client
     steps:
       - uses: actions/checkout@v6
         with:
@@ -1099,138 +1088,56 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - name: Verify fixed baseline and release identity
-        id: identity
+      - name: Verify core release identity
         run: |
-          expected_tag="daily-driver-v${FORK_VERSION}"
-          if [[ "$GITHUB_REF_TYPE" = tag ]]; then
-            test "$GITHUB_REF_NAME" = "$expected_tag"
-          else
-            test "$GITHUB_REF" = refs/heads/daily-driver
-          fi
-          node scripts/daily-driver.mjs verify
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "tag=$expected_tag" >> "$GITHUB_OUTPUT"
-      - name: Fetch external plugin assets before source installation
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p dist/daily-driver
-          gh release download "$PI_RELEASE" --repo TTTPOB/deepseek-harness \
-            --pattern 'earendil-works-pi-ai-0.85.1-fork1.tgz' --dir dist/daily-driver
-          curl -fLsS -o dist/daily-driver/dsh-progressive-tools-0.3.0.tgz \
-            https://github.com/TTTPOB/dsh-progressive-tools/releases/download/v0.3.0/dsh-progressive-tools-0.3.0.tgz
-          firecrawl_url="${{ inputs.firecrawl_tarball_url || vars.DSH_FIRECRAWL_TARBALL_URL }}"
-          test -n "$firecrawl_url"
-          curl -fLsS -o dist/daily-driver/firecrawl-dsh-firecrawl-0.1.0-fork1.tgz "$firecrawl_url"
-      - name: Install source with Pi override
-        run: |
+          test "$GITHUB_REF_NAME" = daily-driver-v0.1.7-rc.2-fork13
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/tags/daily-driver-v0.1.7-rc.2-fork13)"
+          git merge-base --is-ancestor refs/tags/daily-driver-v0.1.7-rc.2-fork12 HEAD
           node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs'
-          const path = 'pnpm-workspace.yaml'
-          const source = readFileSync(path, 'utf8')
-          const assets = {
-            '@earendil-works/pi-ai': 'earendil-works-pi-ai-0.85.1-fork1.tgz',
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          for (const dir of process.env.PACKAGES.split(' ')) {
+            assert.equal(JSON.parse(readFileSync(dir + '/package.json')).version, '0.1.7-rc.2-fork1')
           }
-          const lines = Object.entries(assets).map(([name, file]) => `  '${name}': 'file:dist/daily-driver/${file}'`)
-          writeFileSync(path, source.replace('\npeerDependencyRules:', `\n${lines.join('\n')}\n\nblockExoticSubdeps: false\n\npeerDependencyRules:`))
+          assert.equal(JSON.parse(readFileSync('apps/cli/package.json')).version, '0.1.7-rc.2')
           NODE
-          printf 'manage-package-manager-versions=false\n' >> .npmrc
-          test "$(pnpm --version)" = 11.24.0
-          pnpm install --no-frozen-lockfile
-      - name: Build affected packages
-        run: |
-          pnpm exec tsc -b packages/typert/generator/tsconfig.json \
-            packages/subagent/subagent/tsconfig.json \
-            packages/llm/llm-pi-ai/tsconfig.json \
-            packages/mcp/mcp-client/tsconfig.json \
-            packages/core/agent/tsconfig.json \
-            packages/preset/agent-preset-registry/tsconfig.json
-          for package in dsh-subagent dsh-llm-pi-ai dsh-mcp-client dsh-agent dsh-agent-preset-registry; do
-            pnpm exec tsdown -F "@deepseek-ai/$package" --env.DSH_BUILD_FACE host
-          done
-      - name: Pack the five DSH forks
-        run: |
-          for package in subagent/subagent llm/llm-pi-ai mcp/mcp-client core/agent preset/agent-preset-registry; do
-            pnpm --dir "packages/$package" pack --pack-destination "$PWD/dist/daily-driver"
-          done
-      - name: Require pinned workspace plugin source commits
-        run: |
-          [[ "${{ inputs.overlay_ref || vars.DSH_OVERLAY_REF }}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${{ inputs.envrc_ref || vars.DSH_ENVRC_REF }}" =~ ^[0-9a-f]{40}$ ]]
-      - uses: actions/checkout@v6
+      - name: Locate global pnpm store
+        id: store
+        run: echo "path=$(pnpm --config.verify-deps-before-run=false store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
         with:
-          repository: TTTPOB/dsh-workspace-overlay
-          ref: ${{ inputs.overlay_ref || vars.DSH_OVERLAY_REF }}
-          path: dist/source-overlay
-          persist-credentials: false
-      - uses: actions/checkout@v6
-        with:
-          repository: TTTPOB/dsh-workspace-envrc
-          ref: ${{ inputs.envrc_ref || vars.DSH_ENVRC_REF }}
-          path: dist/source-envrc
-          persist-credentials: false
-      - name: Build and pack workspace overlay from pinned source
+          path: ${{ steps.store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-11.24.0-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-11.24.0-
+      - name: Install frozen core closure
+        run: node scripts/daily-driver-source.mjs install $PACKAGES
+      - name: Core release routing regression
+        run: node --test scripts/daily-driver-fork11.test.mjs scripts/daily-driver-fork12.test.mjs scripts/daily-driver-fork13.test.mjs scripts/daily-driver-source.test.mjs
+      - name: Native addon and focused core behavior
         run: |
-          printf "overrides:\n  '@deepseek-ai/dsh-agent': 'file:../daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz'\n  '@deepseek-ai/dsh-agent-preset-registry': 'file:../daily-driver/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz'\nblockExoticSubdeps: false\n" >> dist/source-overlay/pnpm-workspace.yaml
-          pnpm --dir dist/source-overlay install --no-frozen-lockfile
-          pnpm --dir dist/source-overlay run build
-          pnpm --dir dist/source-overlay pack --pack-destination "$PWD/dist/daily-driver"
-      - name: Build and pack workspace envrc from pinned source
-        run: |
-          printf "overrides:\n  '@deepseek-ai/dsh-agent': 'file:../daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz'\n  '@deepseek-ai/dsh-agent-preset-registry': 'file:../daily-driver/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz'\n  'dsh-workspace-overlay': 'file:../daily-driver/dsh-workspace-overlay-0.2.0.tgz'\nblockExoticSubdeps: false\n" >> dist/source-envrc/pnpm-workspace.yaml
-          pnpm --dir dist/source-envrc install --no-frozen-lockfile
-          pnpm --dir dist/source-envrc run build
-          pnpm --dir dist/source-envrc pack --pack-destination "$PWD/dist/daily-driver"
-      - name: Verify isolated project dependency closure
+          pnpm --config.verify-deps-before-run=false run build:native-system
+          pnpm --config.verify-deps-before-run=false exec vitest run packages/core/agent/tests packages/preset/agent-preset-registry/tests packages/llm/llm-pi-ai/tests packages/mcp/mcp-client/tests
+      - name: Build and pack core packages
+        run: node scripts/daily-driver-source.mjs build $PACKAGES
+      - name: Verify isolated core artifacts
         run: >-
-          node scripts/daily-driver.mjs smoke
-          dist/daily-driver/deepseek-ai-dsh-subagent-0.1.7-rc.2-fork1.tgz
-          dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz
-          dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz
+          node scripts/smoke-core-packages-fork13.mjs
           dist/daily-driver/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz
           dist/daily-driver/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz
-          dist/daily-driver/earendil-works-pi-ai-0.85.1-fork1.tgz
-          dist/daily-driver/dsh-progressive-tools-0.3.0.tgz
-          dist/daily-driver/dsh-workspace-overlay-0.2.0.tgz
-          dist/daily-driver/dsh-workspace-envrc-0.2.0.tgz
-          dist/daily-driver/firecrawl-dsh-firecrawl-0.1.0-fork1.tgz
-      - uses: actions/upload-artifact@v4
-        with:
-          name: daily-driver-package
-          path: dist/daily-driver/*
-          if-no-files-found: error
-  publish:
-    if: github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork2' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork3' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork4' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork5' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork6' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork7' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork8' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork9' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork10' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork11' && github.ref != 'refs/tags/daily-driver-v0.1.7-rc.2-fork12' && (github.event_name != 'workflow_dispatch' || !inputs.subagent_only)
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: daily-driver-package
-          path: release
-      - name: Publish immutable release
+          dist/daily-driver/deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz
+          dist/daily-driver/deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz
+      - name: Publish immutable core assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          COMMIT: ${{ needs.build.outputs.commit }}
-          TAG: ${{ needs.build.outputs.tag }}
-        shell: bash
         run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" = push ]]; then
-            current=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.sha')
-          else
-            current=$(gh api "repos/$GH_REPO/git/ref/heads/daily-driver" --jq '.object.sha')
-          fi
-          test "$current" = "$COMMIT"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; immutable releases are never overwritten." >&2
+          tag=daily-driver-v0.1.7-rc.2-fork13
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release already exists; immutable assets are not overwritten." >&2
             exit 1
           fi
-          cd release
-          gh release create "$TAG" ./*.tgz runtime-cli-package.json runtime-cli-pnpm-workspace.yaml runtime-cli-pnpm-lock.yaml runtime-profile-package.json runtime-profile-pnpm-lock.yaml \
-            --target "$COMMIT" --title "$TAG" --latest \
-            --notes 'Official DSH 0.1.7-rc.2 CLI with five DSH fork1 overrides, Pi AI fork1, official Web app, and four ordinary shared-plugin tarballs plus MCP Panel 0.6.19. CLI and profile dependency smoke does not verify Loader behavior.'
+          cd dist/daily-driver
+          assets=(deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-llm-pi-ai-0.1.7-rc.2-fork1.tgz deepseek-ai-dsh-mcp-client-0.1.7-rc.2-fork1.tgz)
+          sha256sum "${assets[@]}" > SHA256SUMS
+          gh release create "$tag" "${assets[@]}" SHA256SUMS --verify-tag --title "$tag" \
+            --notes 'Publish the four existing rc.2-fork1 core packages: agent, agent-preset-registry, llm-pi-ai and mcp-client. Keep official CLI/Web, previously published subagent and unrelated packages unchanged. Core source and isolated built-entry/setup checks do not install or activate a daily Host. Personal plugins are built and published independently.'

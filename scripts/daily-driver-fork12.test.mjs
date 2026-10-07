@@ -14,8 +14,8 @@ const accepts = (name, tag) => Function('github', 'inputs', `return (${workflow.
 test('fork12 selects the browsing route without triggering generic releases', () => {
   const tag = 'daily-driver-v0.1.7-rc.2-fork12'
   assert(accepts('session-browsing-fork12', tag))
-  assert.equal(accepts('build', tag), false)
-  assert.equal(accepts('publish', tag), false)
+  assert.equal(accepts('core-packages-fork13', tag), false)
+  assert.equal(accepts('core-packages-fork13', tag), false)
   assert.equal(accepts('session-browsing-fork12', 'daily-driver-v0.1.7-rc.2-fork11'), false)
   const job = workflow.jobs['session-browsing-fork12']
   assert.equal(job.env.PACKAGES, 'packages/session-query/session-query packages/session-query/session-query-sqlite')
