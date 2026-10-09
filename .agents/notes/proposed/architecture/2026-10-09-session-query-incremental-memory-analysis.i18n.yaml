@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for 2026-10-09-session-query-incremental-memory-analysis.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-10-09-session-query-incremental-memory-analysis.md
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis:
+  en: dab34a6b9cffc1f4
+  zh: 3c6f264269bceccd
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/problem:
+  en: 5ed177189b5f06c6
+  zh: 7905b0078bb0cf55
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/proposal:
+  en: 09b9e28bb801e82b
+  zh: 33f28a0052bac756
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/proposal/1-reuse-observations-and-copy-only-final-output:
+  en: 52fb98b99f9f2cd9
+  zh: acc64ec567a92dde
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/proposal/2-build-once-then-maintain-new-logical-events-incrementally:
+  en: 5046622d09173826
+  zh: a75de2c3e34dd909
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/proposal/3-evict-analysis-state-with-its-owning-session-cache:
+  en: a67da62dbe052ddc
+  zh: bd23195c0acfd8f9
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/responsibilities-and-impact:
+  en: e8f97486e4e7969c
+  zh: 55fba94129b73fe5
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/alternatives-considered:
+  en: 35349fc0e9d33da8
+  zh: 2d285c89383e3636
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/acceptance-criteria:
+  en: e8c4cf2016f895ed
+  zh: 9fbe5d2a14686aee
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/risks:
+  en: 245cdb1bdca407d6
+  zh: 12b2e0cc86e95336
