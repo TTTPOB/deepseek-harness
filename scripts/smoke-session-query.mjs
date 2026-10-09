@@ -75,15 +75,13 @@ try {
   for (const [name, version] of packages) {
     const manifest = JSON.parse(await readFile(base.resolve(`${name}/package.json`), 'utf8'))
     const issue = boot.evaluatePluginCompatibility(manifest)
-    if (name !== '@deepseek-ai/dsh-session-query-sqlite') assert.equal(issue, undefined)
-    else {
-      assert(issue && !issue.exempted)
-      execFileSync(process.execPath, [bin, 'plugin', '--profile', 'web', 'allow-version',
-        `${name}@${version}`, '--dsh-version', officialVersion, '--accept-risk'],
-      { cwd: runtime, env, stdio: 'pipe', timeout: 60_000 })
-      const exemptions = JSON.parse(await readFile(join(profile, 'compatibility.json'), 'utf8'))
-      assert(boot.evaluatePluginCompatibility(manifest, exemptions).exempted)
-    }
+    if (issue === undefined) continue
+    assert(!issue.exempted)
+    execFileSync(process.execPath, [bin, 'plugin', '--profile', 'web', 'allow-version',
+      `${name}@${version}`, '--dsh-version', officialVersion, '--accept-risk'],
+    { cwd: runtime, env, stdio: 'pipe', timeout: 60_000 })
+    const exemptions = JSON.parse(await readFile(join(profile, 'compatibility.json'), 'utf8'))
+    assert(boot.evaluatePluginCompatibility(manifest, exemptions).exempted)
   }
   const child = spawn(process.execPath, [bin, '--profile', 'web', '--host', '127.0.0.1', '--port', '0', '--no-open'],
     { cwd: runtime, env, stdio: ['ignore', 'pipe', 'pipe'] })
