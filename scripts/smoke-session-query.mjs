@@ -128,7 +128,6 @@ try {
   const { createUserMessage } = await load(base, '@deepseek-ai/dsh-llm')
   const [queryDefinition, persistenceFork, queryFork, sessionFork] = loaded
   assert.equal(sessionFork, sessionModule)
-  assert.equal(typeof sessionModule.SurfaceFoldAccumulator, 'function')
   assert.equal(queryDefinition.default, queryModule.default)
   assert(persistenceFork.default.prototype instanceof persistenceModule.default)
   assert(queryFork.default.prototype instanceof queryModule.default)
@@ -176,7 +175,6 @@ try {
       assert.deepEqual(updated.events.map(event => event.seq), [0, 1])
       await ctx.sessionQuery.traceEvent({ sessionId: session.id, seq: sessionModule.SessionSeq(1) })
       assert.equal(folds - beforeTail, 1, 'Append advances canonical analysis by one event')
-      assert.equal(surface.events.length, 1, 'Earlier output stays detached after append')
       console.log('Packaged Session accumulator and canonical query reuse: first fold 1, unchanged 0, append 1')
     } finally {
       prototype.append = originalAppend

@@ -16,8 +16,9 @@ test('source commands stay frozen and never auto-install the full workspace', as
 import { appendFileSync } from 'node:fs'
 appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\n')
 `, { mode: 0o755 })
+    const directories = plan('session-query').packages.map(pkg => pkg.directory)
     for (const command of ['install', 'build']) {
-      const result = spawnSync(process.execPath, [script, command, 'packages/session-query/session-query-sqlite'], {
+      const result = spawnSync(process.execPath, [script, command, ...directories], {
         env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, ARGV_LOG: log },
         encoding: 'utf8', timeout: 30_000,
       })
@@ -26,16 +27,18 @@ appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\
       assert.equal(result.status, 0, result.stderr)
     }
     const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-    assert.equal(calls.length, 4)
+    assert.equal(calls.length, 2 + directories.length * 2)
     for (const args of calls) assert.equal(args[0], '--config.verify-deps-before-run=false')
     assert(calls[0].includes('--frozen-lockfile'))
     assert(calls[0].includes('@deepseek-ai/dsh-session-query-sqlite...'))
     assert(calls[0].includes('@deepseek-ai/dsh-root'))
     assert(!calls[0].includes('@deepseek-ai/dsh-root...'))
-    assert.deepEqual(calls[2].slice(1), ['exec', 'tsdown', '--workspace',
-      'packages/session-query/session-query-sqlite', '-F', '@deepseek-ai/dsh-session-query-sqlite',
-      '--env.DSH_BUILD_FACE', 'host'])
-    assert(calls[3].includes('pack'))
+    assert(calls[0].includes('@deepseek-ai/dsh-session...'))
+    assert(calls[1].includes('packages/core/session/tsconfig.json'))
+    const host = calls.find(args => args.includes('tsdown') && args.includes('packages/core/session'))
+    assert.deepEqual(host?.slice(1), ['exec', 'tsdown', '--workspace',
+      'packages/core/session', '-F', '@deepseek-ai/dsh-session', '--env.DSH_BUILD_FACE', 'host'])
+    assert(calls.some(args => args.includes('pack') && args.includes('packages/core/session')))
     await writeFile(log, '')
     const client = spawnSync(process.execPath, [script, 'build', 'packages/client/connection'], {
       env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, ARGV_LOG: log },
@@ -47,22 +50,6 @@ appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\
     assert.deepEqual(clientCalls[1].slice(1), ['exec', 'tsdown', '--workspace',
       'packages/client/connection'])
     assert(clientCalls[2].includes('pack'))
-    await writeFile(log, '')
-    const directories = plan('session-query').packages.map(pkg => pkg.directory)
-    for (const command of ['install', 'build']) {
-      const result = spawnSync(process.execPath, [script, command, ...directories], {
-        env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, ARGV_LOG: log },
-        encoding: 'utf8', timeout: 30_000,
-      })
-      assert.equal(result.signal, null)
-      assert.equal(result.error, undefined)
-      assert.equal(result.status, 0, result.stderr)
-    }
-    const closure = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-    assert(closure[0].includes('@deepseek-ai/dsh-session...'))
-    assert(closure[1].includes('packages/core/session/tsconfig.json'))
-    assert(closure.some(args => args.includes('tsdown') && args.includes('packages/core/session')))
-    assert(closure.some(args => args.includes('pack') && args.includes('packages/core/session')))
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
