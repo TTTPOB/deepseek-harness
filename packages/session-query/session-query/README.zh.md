@@ -142,6 +142,7 @@ prepared 条目仅在持久化 identity、revision 及 preparation mode 相同�
 
 当包级约定不够用时阅读以下页面。它们从共享查询词汇逐步进入具体后端与决策证据。
 
+- [规范 query 诊断](tests/performance/README.zh.md)——可复现的合成 CPU、heap 与 clone 量测。
 - [会话查询子系统参考](../../../docs/subsystems/session-query.zh.md)——完整类型级约定：记录、过滤器、搜索页、血缘、有界读取与错误。
 - [dsh-session-query-sqlite](../session-query-sqlite/README.zh.md)——已发布的全文后端及其索引生命周期。
 - [dsh-tool-session-query](../tool-session-query/README.zh.md)——构建在本服务之上的面向模型消费方。
@@ -168,7 +169,7 @@ prepared 条目仅在持久化 identity、revision 及 preparation mode 相同�
 
 - **无调用方授权**——这是上下文范围内的可信基础设施；模型工具或 UI 必须限制调用方可检查的会话。
 - **无提供方协调器或回退**——服务在搜索上是抽象的，组合必须挂载具体后端；没有搜索提供方注册表或回退实现。
-- **冷缓存未命中仍检查完整日志**——首次 cold 读取和 revision 改变仍加载并恢复完整日志。`readSurface` 与事件 trace 复用 owner 持有的分析；`readSession`、`listEvents` 与 `filterEvents` 仍每次检查完整日志。本轮未量测性能收益。
+- **冷缓存未命中仍检查完整日志**——首次 cold 读取和 revision 改变仍加载并恢复完整日志。`readSurface` 与事件 trace 复用 owner 持有的分析；`readSession`、`listEvents` 与 `filterEvents` 仍每次检查完整日志。[合成诊断](tests/performance/README.zh.md)量测复用成本，不构成部署保证。
 - **字面文本扫描，而非全文搜索**——`text` 过滤器用正则表达式扫描提取出的文档且不提供排名；带排名的搜索需要挂载后端。
 
 <a id="dev-note"></a>
