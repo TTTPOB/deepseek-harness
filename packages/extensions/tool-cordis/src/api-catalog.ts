@@ -2295,7 +2295,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async readSurface(sessionId: SessionId): Promise<SessionSurfaceSnapshot>',
-        description: 'Read one session\'s complete current model surface from one corpus observation.',
+        description: 'Read original current surface events from an exact cut, reusing owner-held analysis.',
         parameters: [{ name: 'sessionId', description: 'live-preferred session id to read.' }],
         returns: 'cloned header, current surface, and the last sequence number included in the raw-log capture.',
         throws: ['when source resolution fails or the session surface is invalid.'],
@@ -2309,7 +2309,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async traceEvent(request: SessionEventTraceRequest, signal?: AbortSignal): Promise<SessionEventTraceObservation>',
-        description: 'Trace one event\'s direct positional replacements and cited source events.',
+        description: 'Trace direct replacements and citations at an exact cut, advancing only unseen events.',
         parameters: [{ name: 'request', description: 'target session id and event seq.' }, { name: 'signal', description: 'optional cancellation for persisted source resolution.' }],
         returns: 'source header, direct links, and the target\'s positional replacement chain.',
         throws: ['when source resolution fails, the target is absent, or surface/source-event validation fails.'],

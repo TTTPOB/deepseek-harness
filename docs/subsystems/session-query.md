@@ -489,7 +489,7 @@ async listEvents(sessionId: SessionId): Promise<SessionEventRecord[]>
 async filterEvents( sessionId: SessionId, filters: readonly SessionEventResultFilter[], ): Promise<SessionEventSearchDocument[]>
 
 /**
- * Read one session's complete current model surface from one corpus observation.
+ * Read original current surface events from an exact cut, reusing owner-held analysis.
  * @param sessionId - live-preferred session id to read.
  * @returns cloned header, current surface, and the last sequence number included in the raw-log capture.
  * @throws when source resolution fails or the session surface is invalid.
@@ -506,7 +506,7 @@ async readSurface(sessionId: SessionId): Promise<SessionSurfaceSnapshot>
 async traceSession(sessionId: SessionId, signal?: AbortSignal): Promise<SessionLineageTrace>
 
 /**
- * Trace one event's direct positional replacements and cited source events.
+ * Trace direct replacements and citations at an exact cut, advancing only unseen events.
  * @param request - target session id and event seq.
  * @param signal - optional cancellation for persisted source resolution.
  * @returns source header, direct links, and the target's positional replacement chain.
