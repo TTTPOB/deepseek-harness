@@ -69,7 +69,7 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 |---|---|---|
 | `readWindowMax` | `50` | `readEvent` 接受的 `before`/`after` 原始事件数上限 |
 | `persistedReadConcurrency` | `4` | 一次批量标题读取中的并发持久化日志读取数 |
-| `preparedSessionCacheSize` | `5` | 为跨 `observeSession` 读取复用而保留的冷 prepared-Session 观察数 |
+| `preparedSessionCacheSize` | `5` | 为观察和规范 query 分析复用而保留的冷 prepared 条目数 |
 | `metadataCacheTtlMs` | `5000` | 持久化元数据新鲜度窗口（毫秒），0 关闭复用 |
 | `sessionPageSnapshotTtlMs` | `60000` | 会话列表快照固定有效期（毫秒） |
 | `sessionPageSnapshotCapacity` | `8` | 同时保留的会话列表快照数上限 |
@@ -95,7 +95,7 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 - **实时优先的逻辑语料库。** 每次读取都解析一个一致的观察：实时 `ctx.sessions` 优先，可选的 `ctx.sessionPersistence` 补充其余部分，冲突的不可变 header 宁可失败也不合并。
 - **脱离存储的结果。** 所有返回的 header、事件与记录都是克隆；不暴露实时状态，也不保留订阅。
 - **精确读取具体，搜索抽象。** 读取、过滤与追踪在此只实现一次；两个全文方法是由后端拥有的唯一抽象表面。
-- **一次规范的表层折叠。** `listEvents`、`readSurface` 与 `traceEvent` 使用同一个 `dsh-session` 折叠校验整个日志，因此搜索与追踪和模型历史推导一致。
+- **同一规范表层解释器。** `listEvents`、`readSurface` 与 `traceEvent` 使用 `dsh-session` 转换及 catalog 消息定义；公共观察保持 store 定义的 preparation。
 
 决策历史记录在[统一服务决策](../../../.agents/notes/archived/architecture/2026-07-23-unified-session-query-service.md)、[追踪笔记](../../../.agents/notes/archived/feature/2026-07-13-session-query-tracing.md)与 [SQLite 提供方笔记](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md)中。
 
@@ -112,7 +112,7 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 | [`src/filters.ts`](src/filters.ts) | 提供方无关谓词与字面文本扫描 |
 | [`src/extraction.ts`](src/extraction.ts) | 按事件类型的第一方语义文本提取 |
 | [`src/documents.ts`](src/documents.ts) | 表层感知的语义文档投影 |
-| [`src/tracing.ts`](src/tracing.ts) | 一次性会话血缘与事件关系追踪 |
+| [`src/tracing.ts`](src/tracing.ts) | 增量规范事件分析与会话血缘追踪 |
 | [`src/sources.ts`](src/sources.ts) | 不可变 header 兼容性检查 |
 | [`src/paging.ts`](src/paging.ts) | 有界元数据快照及分页游标 |
 | — | 不发布运行时不变式伴生入口；保留的元数据及分页快照自有失效语义，关系在构建时校验。 |
@@ -127,9 +127,11 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 
 ### 读取与追踪
 
-`EventLogAnalysis` 在借用的事件引用上增量维护规范 surface、实际替换历史和反向直接来源引用。surface 读取只生成当前事件，trace 只生成目标 record；`eventRecords` 仍物化完整列表。公开 surface 与 trace 入口目前仍为每次 corpus 读取构建分析。
+`EventLogAnalysis` 在借用的事件引用上增量维护规范 surface、实际替换历史和反向直接来源引用。surface 读取只生成当前事件，trace 只生成目标 record；`eventRecords` 仍物化完整列表。reader 在 `WeakMap<Session, state>` 中持有 live 分析，在 prepared 条目上持有 cold 分析。查询惰性处理 `[processed, cut)`；没有 replacement 的普通引用也会推进反向索引。Session dispose（资源释放）删除弱键；query 服务 dispose 清空 prepared 条目并替换 weak map，进行中的读取不能回填。
 
-`readSession` 通过 `Session.create` 回放日志，复用恢复的校验。`readSurface`、`listEvents` 与 `traceEvent` 共用一次 `foldSurface` 遍历，把事件分类为 `current`、`shadowed` 或 `log-only`，并校验从零开始且连续的 seq、表层标记的适用性以及替换或引用完整性；任何违规都以 `SESSION_QUERY_INVALID_SURFACE` 失败。追踪是一次性的：会话血缘只读取一次语料库并确定性遍历父级与后代树；事件追踪沿位置替换者跟进到最终节点，同时保持被引用源事件链接不传递。
+`readSurface` 与 `traceEvent` 异步解析来源后，在同一同步段 capture cut、推进分析并复制最终输出，且在 `finally` 释放租约。surface 输出包含按节点位置排序的原事件，保留空消息；image-offload 解释校验日志，但不把投影消息替入输出。事件 trace 先检查目标存在，再执行规范 fold 和 cold preparation；沿实际位置替换追踪，保留直接来源顺序及升序的后来引用。规范 fold 失败仍为 `SESSION_QUERY_INVALID_SURFACE`；cold preparation 仍执行 `Session.fromRestore` 校验。
+
+prepared 条目仅在持久化 identity、revision 及 preparation mode 相同的情况下复用分析。规范 query preparation 使用 catalog 定义，与公共 `observeSession` 的 store 定义隔离。revision 改变时重建完整的补齐前缀，包括 synthetic interrupted closers；新 live Session 也完整重建，包括其 end-seed marker。旧租约 cut 落后于共享分析时临时重建该前缀，而不通过过滤较新的 surface 生成答案。`readSession` 保持完整回放校验，`listEvents` 保持完整 record 列表。
 
 </details>
 
@@ -166,7 +168,7 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 
 - **无调用方授权**——这是上下文范围内的可信基础设施；模型工具或 UI 必须限制调用方可检查的会话。
 - **无提供方协调器或回退**——服务在搜索上是抽象的，组合必须挂载具体后端；没有搜索提供方注册表或回退实现。
-- **精确读取回放整个日志**——`readSession`、`readSurface`、`filterEvents` 与事件追踪会加载并校验完整逻辑日志，因此非常大的历史每次调用都要付出完整检查；`listSessions` 保持轻量。
+- **冷缓存未命中仍检查完整日志**——首次 cold 读取和 revision 改变仍加载并恢复完整日志。`readSurface` 与事件 trace 复用 owner 持有的分析；`readSession`、`listEvents` 与 `filterEvents` 仍每次检查完整日志。本轮未量测性能收益。
 - **字面文本扫描，而非全文搜索**——`text` 过滤器用正则表达式扫描提取出的文档且不提供排名；带排名的搜索需要挂载后端。
 
 <a id="dev-note"></a>

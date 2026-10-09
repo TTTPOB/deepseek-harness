@@ -145,15 +145,16 @@ export abstract class SessionQueryEngine extends Service {
     ] as const) {
       if (!Number.isSafeInteger(value) || value < minimum) {
         throw new SessionQueryError(
-          'session-query: ' + name + ' must be a safe integer >= ' + minimum,
+          'session-query: ' + name + ' must be a safe integer >= ' + String(minimum),
           'SESSION_QUERY_INVALID_CONFIG',
         )
       }
     }
     this._pages = new SessionPages(snapshotTtlMs, snapshotCapacity)
-    ctx.effect(() => () => this._pages.clear(), 'sessionQuery.pages')
+    ctx.effect(() => () => { this._pages.clear() }, 'sessionQuery.pages')
     this._corpus = new SessionCorpus(ctx, persistedReadConcurrency, metadataCacheTtlMs)
     this._observations = new SessionObservationReader(ctx, preparedSessionCacheSize)
+    ctx.effect(() => () => { this._observations.dispose() }, 'sessionQuery.observations')
   }
 
   /**
@@ -396,19 +397,18 @@ export abstract class SessionQueryEngine extends Service {
   }
 
   /**
-   * Read one session's complete current model surface from one corpus observation.
+   * Read original current surface events from an exact cut, reusing owner-held analysis.
    * @param sessionId - live-preferred session id to read.
    * @returns cloned header, current surface, and the last sequence number included in the raw-log capture.
    * @throws when source resolution fails or the session surface is invalid.
    */
   async readSurface(sessionId: SessionId): Promise<SessionSurfaceSnapshot> {
-    const loaded = await this._corpus.load(sessionId)
-    return {
-      session: structuredClone(loaded.header),
-      inheritedEventCount: loaded.inheritedEventCount,
-      capturedThroughSeq: loaded.events.at(-1)?.seq ?? null,
-      events: tracing.currentSurfaceEvents(sessionId, loaded.events),
-    }
+    return this._observations.project(sessionId, (observation, analysis) => ({
+      session: structuredClone(observation.header),
+      inheritedEventCount: observation.inheritedEventCount,
+      capturedThroughSeq: observation.cursor === -1 ? null : observation.cursor,
+      events: analysis.surfaceEvents(),
+    }))
   }
 
   /**
@@ -425,19 +425,17 @@ export abstract class SessionQueryEngine extends Service {
   }
 
   /**
-   * Trace one event's direct positional replacements and cited source events.
+   * Trace direct replacements and citations at an exact cut, advancing only unseen events.
    * @param request - target session id and event seq.
    * @param signal - optional cancellation for persisted source resolution.
    * @returns source header, direct links, and the target's positional replacement chain.
    * @throws when source resolution fails, the target is absent, or surface/source-event validation fails.
    */
   async traceEvent(request: SessionEventTraceRequest, signal?: AbortSignal): Promise<SessionEventTraceObservation> {
-    const loaded = await this._corpus.load(request.sessionId, signal)
-    signal?.throwIfAborted()
-    return {
-      session: loaded.header,
-      ...tracing.traceEvent(request.sessionId, loaded.events, request.seq),
-    }
+    return this._observations.project(request.sessionId, (observation, analysis) => ({
+      session: structuredClone(observation.header),
+      ...analysis.trace(request.seq),
+    }), signal, request.seq)
   }
 
   /**

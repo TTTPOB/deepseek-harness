@@ -69,7 +69,7 @@ The inherited knobs are set through the mounted backend's config:
 |---|---|---|
 | `readWindowMax` | `50` | Maximum `before`/`after` raw events accepted by `readEvent` |
 | `persistedReadConcurrency` | `4` | Concurrent persisted-log reads in one batch title read |
-| `preparedSessionCacheSize` | `5` | Cold prepared-Session observations retained for reuse across `observeSession` reads |
+| `preparedSessionCacheSize` | `5` | Cold prepared entries retained for observations and canonical query analysis |
 | `metadataCacheTtlMs` | `5000` | Persisted metadata freshness window in milliseconds; 0 disables reuse |
 | `sessionPageSnapshotTtlMs` | `60000` | Fixed listing snapshot lifetime in milliseconds |
 | `sessionPageSnapshotCapacity` | `8` | Maximum concurrently retained listing snapshots |
@@ -95,7 +95,7 @@ The service is built on one separation and three commitments:
 - **Live-preferred logical corpus.** Every read resolves one consistent observation: live `ctx.sessions` wins, optional `ctx.sessionPersistence` fills the rest, and conflicting immutable headers fail rather than merge.
 - **Detached results.** All returned headers, events, and records are cloned; nothing exposes live state or a retained subscription.
 - **Exact reads concrete, search abstract.** Reads, filters, and traces are implemented here once; the two full-text methods are the only abstract surface a backend owns.
-- **One canonical surface fold.** `listEvents`, `readSurface`, and `traceEvent` validate the whole log with the same `dsh-session` fold, so search and traces agree with model-history derivation.
+- **One canonical surface interpreter.** `listEvents`, `readSurface`, and `traceEvent` use the `dsh-session` transitions with catalog message definitions; public observations retain store-definition preparation.
 
 The decision history lives in the [unified service decision](../../../.agents/notes/archived/architecture/2026-07-23-unified-session-query-service.md), the [tracing note](../../../.agents/notes/archived/feature/2026-07-13-session-query-tracing.md), and the [SQLite provider note](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md).
 
@@ -112,7 +112,7 @@ The decision history lives in the [unified service decision](../../../.agents/no
 | [`src/filters.ts`](src/filters.ts) | Provider-independent predicates and the literal text scan |
 | [`src/extraction.ts`](src/extraction.ts) | First-party semantic text extraction per event type |
 | [`src/documents.ts`](src/documents.ts) | Surface-aware semantic document projection |
-| [`src/tracing.ts`](src/tracing.ts) | One-shot session-lineage and event-relationship tracing |
+| [`src/tracing.ts`](src/tracing.ts) | Incremental canonical event analysis and session-lineage tracing |
 | [`src/sources.ts`](src/sources.ts) | Immutable-header compatibility check |
 | [`src/paging.ts`](src/paging.ts) | Bounded metadata snapshots and continuation cursors |
 | — | No runtime invariant companion is published; retained metadata and page snapshots have owned invalidation semantics, and relationships are validated during projection. |
@@ -127,9 +127,11 @@ The decision history lives in the [unified service decision](../../../.agents/no
 
 ### Reads and traces
 
-`EventLogAnalysis` incrementally maintains the canonical surface, actual replacement history, and reverse direct-source citations over borrowed event references. It generates only current events for a surface read and only the requested record for a trace; `eventRecords` still materializes the complete list. The public surface and trace entry points currently build this analysis for each corpus read.
+`EventLogAnalysis` incrementally maintains the canonical surface, actual replacement history, and reverse direct-source citations over borrowed event references. It generates only current events for a surface read and only the requested record for a trace; `eventRecords` still materializes the complete list. The reader holds live analysis in a `WeakMap<Session, state>` and cold analysis on its prepared entry. Queries lazily process only `[processed, cut)`; ordinary citations advance the reverse index even without a replacement. Session disposal removes its weak key; query-service disposal clears prepared entries and replaces the weak map, and in-flight reads cannot refill them.
 
-`readSession` replays the log through `Session.create` to reuse resume's validation. `readSurface`, `listEvents`, and `traceEvent` share one `foldSurface` pass that classifies events as `current`, `shadowed`, or `log-only` and validates zero-based contiguous seqs, surface-marker eligibility, and replacement or citation integrity; any violation fails with `SESSION_QUERY_INVALID_SURFACE`. Traces are one-shot: session lineage reads the corpus once and walks parents and descendant trees deterministically, and event traces follow positional replacers to the final node while keeping cited-source links non-transitive.
+`readSurface` and `traceEvent` resolve the source asynchronously, then capture the cut, advance analysis, and copy final output in one synchronous segment, releasing the lease in `finally`. Surface output contains original events in node-position order, including empty messages; image-offload interpretation validates the log without substituting projected messages in the output. Event traces check target existence before canonical folding and cold preparation, follow actual positional replacements, and retain direct source order and ascending later citations. Canonical fold failures remain `SESSION_QUERY_INVALID_SURFACE`; cold preparation still performs `Session.fromRestore` validation.
+
+Prepared entries reuse analysis only for the same persistence identity, revision, and preparation mode. Canonical query preparation uses catalog definitions, separately from public `observeSession` store definitions. Revision changes rebuild the complete balanced prefix, including synthetic interrupted closers; a new live Session also rebuilds, including its end-seed marker. An older lease whose cut precedes shared analysis gets a temporary prefix rebuild rather than a filtered newer surface. `readSession` retains full replay validation and `listEvents` retains its complete record list.
 
 </details>
 
@@ -166,7 +168,7 @@ These limits define when this package is a poor fit or needs special operational
 
 - **No caller authorization** — this is trusted context-wide infrastructure; a model tool or UI must constrain which sessions its caller may inspect.
 - **No provider coordinator or fallback** — the service is abstract over search, so a composition must mount a concrete backend; there is no search-provider registry or fallback implementation.
-- **Exact reads replay whole logs** — `readSession`, `readSurface`, `filterEvents`, and event traces load and validate the complete logical log, so very large histories pay full inspection per call; `listSessions` stays lightweight.
+- **Cold misses inspect whole logs** — first cold reads and changed revisions still load and restore the complete log. `readSurface` and event traces reuse owner-held analysis; `readSession`, `listEvents`, and `filterEvents` still inspect complete logs per call. Performance gains are not measured here.
 - **Literal text scan, not full-text search** — the `text` filter scans extracted documents with a regular expression and does not rank; ranked search requires the mounted backend.
 
 <a id="dev-note"></a>
