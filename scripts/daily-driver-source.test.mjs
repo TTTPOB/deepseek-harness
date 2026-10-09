@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { plan } from './daily-driver-plan.mjs'
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'daily-driver-source.mjs')
 test('source commands stay frozen and never auto-install the full workspace', async () => {
@@ -46,6 +47,22 @@ appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\
     assert.deepEqual(clientCalls[1].slice(1), ['exec', 'tsdown', '--workspace',
       'packages/client/connection'])
     assert(clientCalls[2].includes('pack'))
+    await writeFile(log, '')
+    const directories = plan('session-query').packages.map(pkg => pkg.directory)
+    for (const command of ['install', 'build']) {
+      const result = spawnSync(process.execPath, [script, command, ...directories], {
+        env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, ARGV_LOG: log },
+        encoding: 'utf8', timeout: 30_000,
+      })
+      assert.equal(result.signal, null)
+      assert.equal(result.error, undefined)
+      assert.equal(result.status, 0, result.stderr)
+    }
+    const closure = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    assert(closure[0].includes('@deepseek-ai/dsh-session...'))
+    assert(closure[1].includes('packages/core/session/tsconfig.json'))
+    assert(closure.some(args => args.includes('tsdown') && args.includes('packages/core/session')))
+    assert(closure.some(args => args.includes('pack') && args.includes('packages/core/session')))
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }

@@ -27,6 +27,8 @@ kind: "package-reference"
 
 当你需要读取或搜索会话历史、而不直接触碰会话服务或存储后端时，从应用代码使用 `ctx.sessionQuery`。该服务由具体后端插件提供——已发布组合挂载 `@deepseek-ai/dsh-session-query-sqlite`（[README](../session-query-sqlite/README.zh.md)）——因此本包从不单独挂载。一旦组合了后端，以下全部能力都可在 `ctx.sessionQuery` 上使用。
 
+增量 query 实现从 `@deepseek-ai/dsh-session` 导入 `SurfaceFoldAccumulator`。请同时安装本包打包后 peer 依赖声明的 Session 版本和匹配的 SQLite 后端；官方 `0.1.7-rc.2` Session 未导出该 accumulator。[daily-driver 检查](../../../scripts/README.daily-driver.md)会校验 Session/query/JSONL/SQLite 四个产物，即使 release 只发布发生变化的包。
+
 ### 你可以做什么
 
 | 操作 | 你得到什么 |

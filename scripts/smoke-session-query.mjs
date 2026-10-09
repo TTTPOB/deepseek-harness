@@ -10,8 +10,8 @@ import { pathToFileURL } from 'node:url'
 import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
 const packages = plan('session-query').packages.map(pkg => [pkg.name, pkg.version])
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, 3,
-  'Usage: node scripts/smoke-session-query.mjs <session-query.tgz> <persistence-jsonl.tgz> <session-query-sqlite.tgz>')
+assert.equal(tarballs.length, 4,
+  'Usage: node scripts/smoke-session-query.mjs <session-query.tgz> <persistence-jsonl.tgz> <session-query-sqlite.tgz> <session.tgz>')
 const runtime = await mkdtemp(join(tmpdir(), 'dsh-session-index-artifact-'))
 try {
   for (const tarball of tarballs) await copyFile(tarball, join(runtime, basename(tarball)))
@@ -45,7 +45,7 @@ try {
     loaded.push(await import(pathToFileURL(base.resolve(name)).href))
     console.log(`Resolved ${name}@${version}: ${manifest}`)
   }
-  const [, persistenceAnchor, queryAnchor] = anchors
+  const [definitionAnchor, persistenceAnchor, queryAnchor] = anchors
   for (const name of ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-persistence', '@deepseek-ai/cordis']) {
     assert.equal(await realpath(persistenceAnchor.resolve(name)), await realpath(queryAnchor.resolve(name)), name)
   }
@@ -54,7 +54,14 @@ try {
     [persistenceAnchor, '@deepseek-ai/dsh-session-persistence'],
     [queryAnchor, '@deepseek-ai/dsh-session-query'],
   ]) assert.equal(JSON.parse(await readFile(anchor.resolve(`${name}/package.json`), 'utf8')).version,
-    name === '@deepseek-ai/dsh-session-query' ? packages[0][1] : officialVersion)
+    name === '@deepseek-ai/dsh-session-query' ? packages[0][1]
+      : name === '@deepseek-ai/dsh-session' ? packages[3][1] : officialVersion)
+  assert.equal(await realpath(definitionAnchor.resolve('@deepseek-ai/dsh-session')),
+    await realpath(queryAnchor.resolve('@deepseek-ai/dsh-session')))
+  for (const [index, peers] of [[0, [3]], [2, [0, 3]]]) {
+    const metadata = JSON.parse(await readFile(anchors[index].resolve(`${packages[index][0]}/package.json`), 'utf8'))
+    for (const peer of peers) assert.equal(metadata.peerDependencies[packages[peer][0]], packages[peer][1])
+  }
   const boot = await import(pathToFileURL(cli.resolve('@deepseek-ai/dsh-app-boot')).href)
   const home = join(runtime, 'home')
   const profile = join(home, 'profiles/web')
@@ -119,7 +126,9 @@ try {
   const queryModule = await load(queryAnchor, '@deepseek-ai/dsh-session-query')
   const projectionModule = await load(base, '@deepseek-ai/dsh-session-projection')
   const { createUserMessage } = await load(base, '@deepseek-ai/dsh-llm')
-  const [queryDefinition, persistenceFork, queryFork] = loaded
+  const [queryDefinition, persistenceFork, queryFork, sessionFork] = loaded
+  assert.equal(sessionFork, sessionModule)
+  assert.equal(typeof sessionModule.SurfaceFoldAccumulator, 'function')
   assert.equal(queryDefinition.default, queryModule.default)
   assert(persistenceFork.default.prototype instanceof persistenceModule.default)
   assert(queryFork.default.prototype instanceof queryModule.default)
@@ -149,7 +158,29 @@ try {
     const before = { ...counters }
     assert.equal((await ctx.sessionQuery.searchSessions({ query: 'initial needle' })).items.length, 1)
     assert.deepEqual(counters, before, 'Unchanged search observes no stored source')
-    append('final tail needle')
+    const prototype = sessionModule.SurfaceFoldAccumulator.prototype
+    const originalAppend = prototype.append
+    let folds = 0
+    prototype.append = function (...args) { folds += 1; return originalAppend.apply(this, args) }
+    try {
+      const surface = await ctx.sessionQuery.readSurface(session.id)
+      assert.deepEqual(surface.events.map(event => event.seq), [0])
+      assert.equal(folds, 1, 'First canonical read folds the captured prefix')
+      const trace = await ctx.sessionQuery.traceEvent({ sessionId: session.id, seq: sessionModule.SessionSeq(0) })
+      assert.equal(trace.target.surface, 'current')
+      await ctx.sessionQuery.readSurface(session.id)
+      assert.equal(folds, 1, 'Unchanged surface and trace share canonical analysis')
+      append('final tail needle')
+      const beforeTail = folds
+      const updated = await ctx.sessionQuery.readSurface(session.id)
+      assert.deepEqual(updated.events.map(event => event.seq), [0, 1])
+      await ctx.sessionQuery.traceEvent({ sessionId: session.id, seq: sessionModule.SessionSeq(1) })
+      assert.equal(folds - beforeTail, 1, 'Append advances canonical analysis by one event')
+      assert.equal(surface.events.length, 1, 'Earlier output stays detached after append')
+      console.log('Packaged Session accumulator and canonical query reuse: first fold 1, unchanged 0, append 1')
+    } finally {
+      prototype.append = originalAppend
+    }
     detach()
     const page = await ctx.sessionQuery.searchSessions({ query: 'final tail' })
     assert.equal(page.items.length, 1)

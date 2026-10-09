@@ -27,6 +27,8 @@ English | [中文](README.zh.md)
 
 Use `ctx.sessionQuery` from application code when you need to read or search session history without touching the session service or a storage backend directly. The service is provided by a concrete backend plugin — the shipped composition mounts `@deepseek-ai/dsh-session-query-sqlite` ([README](../session-query-sqlite/README.md)) — so this package is never mounted alone. Everything below is available on `ctx.sessionQuery` once a backend is composed.
 
+The incremental query implementation imports `SurfaceFoldAccumulator` from `@deepseek-ai/dsh-session`. Install the Session version declared by this package's packed peer dependency together with the matching SQLite backend; the official `0.1.7-rc.2` Session does not export that accumulator. The [daily-driver checks](../../../scripts/README.daily-driver.md) validate all four Session/query/JSONL/SQLite artifacts even when the release publishes only the changed packages.
+
 ### What you can do
 
 | Operation | What you get |

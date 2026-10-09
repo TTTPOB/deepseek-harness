@@ -10,8 +10,8 @@ export const officialVersion = manifest('apps/cli').version
 export const packageManager = manifest('.').packageManager
 export const selections = {
   'session-query': {
-    packages: ['packages/session-query/session-query', 'packages/session/session-persistence-jsonl', 'packages/session-query/session-query-sqlite'],
-    tests: ['packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts', 'packages/session/session-persistence-jsonl/tests/jsonl.spec.ts', 'packages/session-query/session-query/tests', 'packages/session-query/session-query-sqlite/tests', 'packages/session-query/tool-session-query/tests'],
+    packages: ['packages/session-query/session-query', 'packages/session/session-persistence-jsonl', 'packages/session-query/session-query-sqlite', 'packages/core/session'],
+    tests: ['packages/core/session/tests', 'packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts', 'packages/session/session-persistence-jsonl/tests/jsonl.spec.ts', 'packages/session-query/session-query/tests', 'packages/session-query/session-query-sqlite/tests', 'packages/session-query/tool-session-query/tests'],
     smoke: 'smoke-session-query.mjs',
   },
   core: {
