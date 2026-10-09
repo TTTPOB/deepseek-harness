@@ -1,5 +1,5 @@
 import { Context } from '@deepseek-ai/cordis'
-import { createMessage, createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import SessionStore, { Session, SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import SessionPersistence, {
@@ -843,11 +843,11 @@ describe('SessionObservationReader canonical query projections', () => {
     const callId = ToolCallId('pending')
     source.append('turn/start', { turn: 1 })
     source.append('step/start', { turn: 1, step: 1 })
-    source.append('assistant/message', { turn: 1, step: 1, stream: [], message: createMessage({
-      role: 'assistant', source: { kind: 'model', provider: 'mock', model: 'mock' },
-      content: [{ type: 'tool-call', id: callId, name: 'read', arguments: {} }],
+    source.append('assistant/message', { turn: 1, step: 1, stream: [], message: createAssistantMessage({
+      source: { provider: 'mock', model: 'mock' },
+      content: [{ type: 'tool-call', id: callId, name: 'read', arguments: '{}' }],
     }) }, { surfaceOp: 'append' })
-    source.append('tool/call', { turn: 1, step: 1, callId, name: 'read', arguments: {} })
+    source.append('tool/call', { turn: 1, step: 1, callId, name: 'read', arguments: '{}' })
     const entry: StoredEntry = { header: meta, events: [...source.snapshotEvents()], revision: 'r1' }
     const counters = { stat: 0, open: 0, read: 0 }
     ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, entry]]), counters))
@@ -880,7 +880,7 @@ describe('SessionObservationReader canonical query projections', () => {
     expect(analyzeObservation(oldLease!, oldAnalysis!).surfaceEvents()).toEqual(first.events)
     oldLease![Symbol.dispose]()
     const live = ctx.sessions.create(meta.id, {
-      seed: entry.events, meta: { createdAt: meta.createdAt, cwd: meta.cwd },
+      seed: entry.events, meta: { createdAt: meta.createdAt, ...meta.cwd === undefined ? {} : { cwd: meta.cwd } },
     })
     const liveSnapshots = vi.spyOn(live, 'snapshotEvents')
     await reader.project(meta.id, (observation, analysis) => {

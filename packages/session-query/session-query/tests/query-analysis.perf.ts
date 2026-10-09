@@ -18,7 +18,7 @@ import SessionQueryEngine from '../src/index.ts'
 import type { SessionEventTrace, SessionSurfaceSnapshot } from '../src/index.ts'
 import { SessionCorpus } from '../src/corpus.ts'
 
-const BASELINE = '1963494328'
+const BASELINE = 'daily-driver-v0.1.7-rc.2-fork14'
 const ACTIVITIES = 500
 const ITERATIONS = 40
 const SAMPLES = 5
