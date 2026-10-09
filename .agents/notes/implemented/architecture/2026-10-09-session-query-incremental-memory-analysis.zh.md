@@ -64,7 +64,7 @@ List/Detail 采用有界原字段读取，不为每页或搜索命中请求全 s
 
 ## 验证
 
-实施验收包含 core 557 tests、query 116 tests 和受影响消费方 323 tests；最终 core 定向运行为 7 tests，最终 consumer 运行为 51 tests。差分与定向回归覆盖 append/replacement 分析、普通来源引用、空消息与 image offload、旧 cut、preparation modes、revision/new-live 重建、dispose 及进行中来源解析。已验证六个 public query error codes。这些是记录的验收结果，不代表所有 Host 生命周期均已端到端运行。
+实施验收包含 core 557 tests，以及 query 和实际消费方共 9 个文件的 323 tests，其中 query 自身 4 个文件包含 116 tests；最终 core 定向运行为 7 tests，最终 consumer 运行为 51 tests。差分与定向回归覆盖 append/replacement 分析、普通来源引用、空消息与 image offload、旧 cut、preparation modes、revision/new-live 重建、dispose 及进行中来源解析。已验证六个 public query error codes。这些是记录的验收结果，不代表所有 Host 生命周期均已端到端运行。
 
 普通 Node ESM smoke 使用匹配的正式 tarball、真实 Loader 组合及 SQLite，观察到首次 fold 217 events，重复查询零 fold append，append 仅 `[217]`，replacement 仅 `[218]`。旧 lease 读取与已返回输出保持不变。这验证了保留 live 输入的复用，不代表 GUI/install 已激活，也不代表 cold 生命周期经过端到端 Host 运行。
 
@@ -72,4 +72,4 @@ List/Detail 采用有界原字段读取，不为每页或搜索命中请求全 s
 
 重复读取复用已校验分析，同一保留 live Session 的正常 append 只处理未见事件。内存仍含与保留历史规模相关的事件引用、已解释消息及关系索引；最终 surface 复制随返回 surface 大小增长。所有查询并不因此具备常量内存或常量时间保证。
 
-首次 cold 查询仍承担完整 I/O、修复、校验及恢复成本。Revision 改变和新 live 对象需要重建。消费方补读仍有界，可能返回不完整活动，见 [ADR 0002](<../../../../../dsh-session-tools/docs/adr/0002-local-reading-and-completeness.md>)。合成性能诊断不构成 production CPU/memory 保证、精确 allocations 或首次 cold 提速依据；cold 生命周期没有端到端 Host 验收运行。
+首次 cold 查询仍承担完整 I/O、修复、校验及恢复成本。Revision 改变和新 live 对象需要重建。消费方补读仍有界，可能返回不完整活动，见 [ADR 0002](<../../../../../dsh-session-tools/docs/adr/0002-local-reading-and-completeness.md>)。[合成性能诊断](<../../../../packages/session-query/session-query/tests/performance/README.zh.md>)不构成 production CPU/memory 保证、精确 allocations 或首次 cold 提速依据；cold 生命周期没有端到端 Host 验收运行。
