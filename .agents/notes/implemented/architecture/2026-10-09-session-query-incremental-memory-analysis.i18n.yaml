@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for 2026-10-09-session-query-incremental-memory-analysis.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-09-session-query-incremental-memory-analysis.md
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis:
+  en: 2380ea7ef871e305
+  zh: 71c7d5bc65d74a58
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/problem:
+  en: b5af4d7f226140a1
+  zh: 6132bbb04a25a4be
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/decision:
+  en: 0bd462370d3d37f9
+  zh: 00d12da247dc3ef6
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/decision/shared-canonical-folding-and-separate-relationship-indexes:
+  en: 3d5c2fe9ab845458
+  zh: 7cef648e8a6e1e6b
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/decision/exact-cuts-and-owner-lifetime:
+  en: 80ecafde81f4fa9a
+  zh: c12202282387c7ee
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/decision/preparation-modes-and-error-ordering:
+  en: 81cb3b8f843e789a
+  zh: 2e8b7e6896476246
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/responsibilities-and-impact:
+  en: 0782853bebf34bb9
+  zh: 6b9b098af4a84f20
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/alternatives-considered:
+  en: 0db01d4aaa5ad4f8
+  zh: 321fd89981f1fd43
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/verification:
+  en: d835e6ad661d8baf
+  zh: a7c6767ff6e26a36
+/agent-note-reuse-session-query-caches-and-maintain-incremental-in-memory-analysis/consequences:
+  en: e7744086f209d67a
+  zh: 69c781d4378f6458
