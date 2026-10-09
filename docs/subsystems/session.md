@@ -413,9 +413,14 @@ interface SessionSurface {
 }
 ```
 
+<a id="surface-folding"></a>
 ### `SurfaceFoldReplacement` and `SurfaceFoldResult` — a complete surface replay
 
 `foldSurface(events, projections)` returns detached current event sequences together with the actual sequences shadowed by each declared replacement range. The live manager uses the same transitions without retaining replacement history. Its `replaceGeneration` increments for each committed replacement so incremental consumers can distinguish pure tail growth from a rewrite.
+
+`SurfaceFoldAccumulator(projections?)` is exported from `dsh-session` and its browser-safe `/surface` subpath. `append(event, events)` validates and applies the next committed event, returning a detached `SurfaceFoldReplacement` only for a positional replacement. `nextSeq` is the next event offset, starting at zero and advancing for every accepted event, including log-only records. Failed validation leaves the accepted prefix unchanged. `events` supplies the immutable history indexed from seq 0 for historical-header, tool-rewrite, protected-head, and plugin-projection validation; the accumulator neither copies payloads nor retains this array. A reader can append frozen references from its newly observed `[nextSeq, cut)` range to its own history array, then process those events synchronously through `append`.
+
+The accumulator's `nodes` and `projectedMessages` are borrowed readonly views, not historical snapshots. To retain an answer, copy the required sequences or final output before further appends. Returned replacement metadata remains unchanged by later appends; `shadowedSeqs` follows current surface order and excludes cited diagnostics that were not covered. The caller retains any desired replacement or source-reference history. Projection definitions are borrowed: unloading or replacing a used definition rejects reads and appends, as in the live manager. Replaying an older cut or a different recovered log requires a fresh accumulator.
 
 ```ts type-equiv
 /** One replacement operation observed while folding a session surface. */

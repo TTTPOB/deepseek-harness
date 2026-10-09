@@ -415,9 +415,14 @@ interface SessionSurface {
 }
 ```
 
+<a id="surface-folding"></a>
 ### `SurfaceFoldReplacement` 与 `SurfaceFoldResult`：完整的 surface 回放
 
 `foldSurface(events, projections)` 返回一份独立的当前事件 seq 列表，以及每个声明的替换范围实际遮蔽的 seq。实时管理器复用同一套状态转换，但不保留替换历史。每提交一次替换，其 `replaceGeneration` 就递增一次，使增量消费方能够区分纯尾部增长与重写。
+
+`SurfaceFoldAccumulator(projections?)` 从 `dsh-session` 及其浏览器安全的 `/surface` 子路径导出。`append(event, events)` 校验并应用下一条已提交事件，仅在发生位置替换时返回独立的 `SurfaceFoldReplacement`。`nextSeq` 是下一条事件的偏移，从零开始，每接受一条事件就推进，包括仅日志记录。校验失败保持已接受的前缀不变。`events` 提供从 seq 0 索引的不可变历史，供历史请求头、工具结果重写、受保护头节点及插件投影校验使用；累积器不复制载荷，也不保留该数组。读取器可以将新观察到的 `[nextSeq, cut)` 区间内的冻结引用追加到自己拥有的历史数组，再同步逐条调用 `append`。
+
+累积器的 `nodes` 与 `projectedMessages` 是借用的只读视图，不是历史快照。需要保留答案时，必须在后续追加前复制所需序号或最终输出。返回的替换元数据不受后续追加影响；`shadowedSeqs` 遵循当前 surface 顺序，不包含仅被引用而未被覆盖的诊断。调用方保留所需的替换历史或来源引用历史。解释器定义采用借用方式：卸载或替换已经使用的定义后，读取和追加都会被拒绝，与实时管理器一致。回放旧截止位置或另一份恢复日志需要新建累积器。
 
 ```ts type-equiv
 /** One replacement operation observed while folding a session surface. */

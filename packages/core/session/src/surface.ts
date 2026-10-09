@@ -590,6 +590,70 @@ function applySurfacePlan(
   }
 }
 
+/** Reject cached interpretations whose borrowed definitions have been unloaded. */
+function assertProjectionDefinitions(
+  required: Iterable<SessionMessageProjection>,
+  projections: readonly SessionMessageProjection[],
+): void {
+  for (const projection of required) {
+    if (!projections.includes(projection)) {
+      throw new Error(`session message projection "${projection.type}" was removed or replaced; restore the session with its owning plugin`)
+    }
+  }
+}
+
+/**
+ * Resumable canonical fold over one contiguous event prefix starting at seq 0.
+ * The caller owns the immutable event history and any replacement history.
+ * Readonly views are borrowed and advance on append; copy required sequences
+ * or final output before retaining an answer across further appends.
+ */
+export class SurfaceFoldAccumulator {
+  private readonly state = createFoldState()
+  private processed = SessionLogOffset(0)
+
+  /**
+   * @param projections - borrowed pure definitions; removing a used definition blocks reads and appends.
+   */
+  constructor(private readonly projections: readonly SessionMessageProjection[] = []) {}
+
+  /** Next event offset to process; unchanged when append validation fails. */
+  get nextSeq(): SessionLogOffset {
+    return this.processed
+  }
+
+  /** Current surface sequences; a borrowed view updated by later appends. */
+  get nodes(): readonly SessionSeq[] {
+    assertProjectionDefinitions(this.state.projections, this.projections)
+    return this.state.nodes
+  }
+
+  /** Immutable projected messages in a borrowed map updated by later appends. */
+  get projectedMessages(): ReadonlyMap<SessionSeq, Message> {
+    assertProjectionDefinitions(this.state.projections, this.projections)
+    return this.state.projectedMessages
+  }
+
+  /**
+   * Validate and fold one committed event without copying its payload.
+   * @param event - next event at nextSeq in the caller's contiguous history.
+   * @param events - immutable events indexed from seq 0, including all prior history required by validation and projections.
+   * Entries at or beyond event.seq are not committed inputs to its interpreter.
+   * The accumulator does not retain this array or the event.
+   * @returns detached replacement metadata, including actual shadowed nodes in surface order, or undefined otherwise.
+   * Later appends do not mutate previously returned metadata.
+   * @throws when an interpreter is missing or unloaded, or canonical fold validation fails; the event is not applied.
+   */
+  append(event: SessionEvent, events: readonly SessionEvent[]): SurfaceFoldReplacement | undefined {
+    assertProjectionDefinitions(this.state.projections, this.projections)
+    const replacement = applySurfaceEvent(
+      this.state, event, SessionSeq(this.processed), events, SessionLogOffset(0), this.projections,
+    )
+    this.processed = SessionLogOffset(this.processed + 1)
+    return replacement
+  }
+}
+
 /**
  * Replay a complete session log through the canonical surface fold.
  * @param events - session events in contiguous seq order.
@@ -598,20 +662,13 @@ function applySurfacePlan(
  * @throws when an interpreter is missing or an event violates its projection, surface metadata, source attribution, or replacement rules.
  */
 export function foldSurface(events: readonly SessionEvent[], projections: readonly SessionMessageProjection[] = []): SurfaceFoldResult {
-  const state = createFoldState()
+  const accumulator = new SurfaceFoldAccumulator(projections)
   const replacements: SurfaceFoldReplacement[] = []
-  for (const [index, event] of events.entries()) {
-    const replacement = applySurfaceEvent(
-      state,
-      event,
-      SessionSeq(index),
-      events,
-      SessionLogOffset(0),
-      projections,
-    )
+  for (const event of events) {
+    const replacement = accumulator.append(event, events)
     if (replacement !== undefined) replacements.push(replacement)
   }
-  return { nodes: [...state.nodes], replacements, projectedMessages: new Map(state.projectedMessages) }
+  return { nodes: [...accumulator.nodes], replacements, projectedMessages: new Map(accumulator.projectedMessages) }
 }
 
 /** Incremental ordered surface view and append-boundary validator. */
@@ -709,10 +766,6 @@ export class SurfaceManager implements SessionSurface {
     const required = pending?.kind === 'project'
       ? [...this._state.projections, pending.projection]
       : this._state.projections
-    for (const projection of required) {
-      if (!this.projections.includes(projection)) {
-        throw new Error(`session message projection "${projection.type}" was removed or replaced; restore the session with its owning plugin`)
-      }
-    }
+    assertProjectionDefinitions(required, this.projections)
   }
 }
