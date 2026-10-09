@@ -127,6 +127,8 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 
 ### 读取与追踪
 
+`EventLogAnalysis` 在借用的事件引用上增量维护规范 surface、实际替换历史和反向直接来源引用。surface 读取只生成当前事件，trace 只生成目标 record；`eventRecords` 仍物化完整列表。公开 surface 与 trace 入口目前仍为每次 corpus 读取构建分析。
+
 `readSession` 通过 `Session.create` 回放日志，复用恢复的校验。`readSurface`、`listEvents` 与 `traceEvent` 共用一次 `foldSurface` 遍历，把事件分类为 `current`、`shadowed` 或 `log-only`，并校验从零开始且连续的 seq、表层标记的适用性以及替换或引用完整性；任何违规都以 `SESSION_QUERY_INVALID_SURFACE` 失败。追踪是一次性的：会话血缘只读取一次语料库并确定性遍历父级与后代树；事件追踪沿位置替换者跟进到最终节点，同时保持被引用源事件链接不传递。
 
 </details>

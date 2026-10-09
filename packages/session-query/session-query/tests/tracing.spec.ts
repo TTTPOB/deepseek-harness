@@ -2,7 +2,7 @@ import { createUserMessage, createMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { foldSurface, SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { Session, SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import SessionPersistence, {
@@ -18,6 +18,8 @@ import type {
 } from '@deepseek-ai/dsh-session-persistence'
 import { type SessionQueryErrorCode } from '@deepseek-ai/dsh-session-query'
 import { TestSessionQueryEngine } from './test-service.ts'
+import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-format-catalog/message-projections'
+import { EventLogAnalysis } from '../src/tracing.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -315,6 +317,61 @@ describe('session lineage tracing', () => {
 })
 
 describe('session event tracing', () => {
+  it('matches full folding at every prefix while copying only requested output', async () => {
+    const ctx = await queryContext()
+    for (const definition of currentSessionMessageProjections) ctx.sessions.registerMessageProjection(definition)
+    const session = ctx.sessions.create(SessionId('incremental-prefixes'))
+    appendTraceEvents(session)
+    const image = session.append('user/message', createUserMessage({ source: { kind: 'user' }, content: [{
+      type: 'image', attachment: {
+        attachmentId: 'sha256:' + 'a'.repeat(64) as never,
+        mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+      },
+    }] }), { surfaceOp: 'append' })
+    session.append('image/offload', { targets: [{ seq: image.seq, imageIndexes: [0] }] })
+    session.append('user/message', createUserMessage({ source: { kind: 'user' }, content: [] }), {
+      surfaceOp: 'append', sourceEventSeqs: [SessionSeq(8), SessionSeq(2)],
+    })
+    using observed = await ctx.sessionQuery.observeSession(session.id, { projectionMode: 'none' })
+    const events = observed.events
+    const analysis = new EventLogAnalysis(session.id)
+    for (let cut = 1; cut <= events.length; cut += 1) {
+      analysis.append(events.slice(cut - 1, cut))
+      expect(analysis.processed).toBe(cut)
+      const prefix = events.slice(0, cut)
+      const complete = foldSurface(prefix, currentSessionMessageProjections)
+      const replacedBy = new Map(complete.replacements.flatMap(item => item.shadowedSeqs.map(seq => [seq, item.seq] as const)))
+      const records = prefix.map(event => ({
+        sessionId: session.id, seq: event.seq, type: event.type, time: event.time,
+        surface: complete.nodes.includes(event.seq) ? 'current' : replacedBy.has(event.seq) ? 'shadowed' : 'log-only',
+      }))
+      expect(analysis.records()).toEqual(records)
+      expect(analysis.surfaceEvents()).toEqual(complete.nodes.map(seq => prefix[seq]))
+      for (const event of prefix) {
+        const chain = []
+        for (let replacement = replacedBy.get(event.seq); replacement !== undefined; replacement = replacedBy.get(replacement)) {
+          chain.push(replacement)
+        }
+        const next = replacedBy.get(event.seq)
+        expect(analysis.trace(event.seq)).toEqual({
+          target: records[event.seq], ...next === undefined ? {} : { replacedBy: next },
+          replacementChain: chain,
+          replacedEventSeqs: complete.replacements.find(item => item.seq === event.seq)?.shadowedSeqs ?? [],
+          sourceEventSeqs: event.sourceEventSeqs ?? [],
+          derivedEventSeqs: prefix.filter(item => item.seq > event.seq && item.sourceEventSeqs?.includes(event.seq)).map(item => item.seq),
+        })
+      }
+    }
+    const surface = analysis.surfaceEvents()
+    expect(surface.at(-1)).toMatchObject({ data: { content: [] } })
+    expect(surface.find(event => event.seq === image.seq)).toEqual(image)
+    expect(surface.find(event => event.seq === image.seq)).not.toBe(image)
+    const trace = analysis.trace(SessionSeq(2))
+    trace.derivedEventSeqs.length = 0
+    expect(analysis.trace(SessionSeq(2)).derivedEventSeqs).toEqual([3, 4, 8, 11])
+    await ctx.fiber.dispose()
+  })
+
   it('returns direct replacement and cited source-event links in their contract order', async () => {
     const ctx = await queryContext()
     const session = ctx.sessions.create(SessionId('trace'))

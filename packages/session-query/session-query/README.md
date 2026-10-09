@@ -127,6 +127,8 @@ The decision history lives in the [unified service decision](../../../.agents/no
 
 ### Reads and traces
 
+`EventLogAnalysis` incrementally maintains the canonical surface, actual replacement history, and reverse direct-source citations over borrowed event references. It generates only current events for a surface read and only the requested record for a trace; `eventRecords` still materializes the complete list. The public surface and trace entry points currently build this analysis for each corpus read.
+
 `readSession` replays the log through `Session.create` to reuse resume's validation. `readSurface`, `listEvents`, and `traceEvent` share one `foldSurface` pass that classifies events as `current`, `shadowed`, or `log-only` and validates zero-based contiguous seqs, surface-marker eligibility, and replacement or citation integrity; any violation fails with `SESSION_QUERY_INVALID_SURFACE`. Traces are one-shot: session lineage reads the corpus once and walks parents and descendant trees deterministically, and event traces follow positional replacers to the final node while keeping cited-source links non-transitive.
 
 </details>
