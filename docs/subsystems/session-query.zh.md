@@ -6,6 +6,21 @@
 
 源码：[`packages/session-query/session-query/src/types.ts`](../../packages/session-query/session-query/src/types.ts)
 
+<a id="synchronous-session-sampling"></a>
+## 同步 Session 采样
+
+`captureSession(id, capture, options)` 解析 live 或未发布的 store-prepared Session，并在选定它的同一同步段调用 `capture(reader, observation)`。公开的 [`SessionCaptureReader`](../../packages/session-query/session-query/src/types.ts) 提供只读身份、继承计数、日志长度、有序 `SessionSurface`、请求 header/context 及逐事件消息解释。TypeScript 拒绝 mutator、嵌套元数据写入、节点数组写入以及返回 Promise-like 的回调。运行时 reader 是原始完整 Session，不是包装对象。
+
+回调必须在返回前复制所需输出：不能 yield、修改 Session、retain observation，或返回借用的 Session 引用或容器。Query 在 `finally` 释放自己的 observation，包括回调失败时。回调错误原样传播；源解析与取消沿用现有 observation 错误。`observeSession` 仍返回由调用方拥有的租约。
+
+按位置顺序遍历 `reader.surface.nodes`，经 `observation.readEvents` 读取各 seq，再调用 `reader.deriveEventMessage(event)`。null 消息仍占据节点位置；不能把节点与已过滤的 `deriveMessages` 历史 zip。输出需要 replacement/content generation 和路由元数据时，在此回调中一并复制。
+
+`projectionMode: none` 避免 projection 工作；`all` 在同一个 Session 上同步计算配对的 projection snapshot。两种模式均保留 store 恢复校验。cold capture 不 enter 或 announce Session、不激活 Agent，也不写持久存储。它与公共 observation 共用现有的每 id 单 entry 准备缓存：复用要求 persistence identity、源 revision 及 store preparation mode 均相同。canonical query 分析可以替换该 entry；capture 不扩展缓存。
+
+分别记录 observation 的 source cut、meter 返回的 `logRevision` 及 replacement/content generation。cold observation 包含 synthetic interrupted closers；prepared Session 还可能包含 observation 中没有的 end-seed marker。capture 读取当前逻辑 Session，而非任意历史 cut。
+
+使用未修改 token-meter 的消费方可以把 `reader as Session` 集中在一个仅在 capture 内调用的私有 meter 适配函数中。该做法依据 Query 传入原始完整 Session，因此保持 meter 以 Session 为键的内存缓存。Query 不依赖 meter。meter 独立解释日志及附件路由，因此预览与 token 值需要分别标明依据；同 Session 采样不承诺文本相同。源授权由消费方负责，首次 cold capture 与计量仍可能检查完整日志/surface。
+
 ## 逻辑记录
 
 `SessionRecord` 由全语料库列表返回。它除了克隆的、优先取自 live 源的 header 外，还单独公开各源的可用性。`SessionEventRecord` 是轻量的原始日志投影；分类使用与模型历史推导相同的 `foldSurface()` 状态转换。

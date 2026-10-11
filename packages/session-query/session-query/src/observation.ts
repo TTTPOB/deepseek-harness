@@ -15,6 +15,7 @@ import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
 import { assertSessionHeadersCompatible } from './sources.ts'
 import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-format-catalog/message-projections'
 import { EventLogAnalysis, requireEvent } from './tracing.ts'
+import type { SessionCaptureReader } from './types.ts'
 import type { SessionSeq as SessionSeqType } from '@deepseek-ai/dsh-session'
 
 type PreparationMode = 'store' | 'canonical'
@@ -132,7 +133,7 @@ export class SessionObservationReader {
     targetSeq?: SessionSeqType,
   ): Promise<Value> {
     return this.resolve(sessionId, { ...signal === undefined ? {} : { signal }, projectionMode: 'none' },
-      'canonical', (observation, analysis) => {
+      'canonical', (observation, _session, analysis) => {
         const ready = analyzeObservation(observation, analysis ?? new EventLogAnalysis(sessionId))
         return project(observation, ready)
       }, targetSeq)
@@ -153,11 +154,33 @@ export class SessionObservationReader {
     return this.resolve(sessionId, options, 'store', observation => observation)
   }
 
+  /**
+   * Sample the selected store Session synchronously and release its observation.
+   * @param sessionId - live-preferred Session identity.
+   * @param capture - synchronous reader returning independently owned output.
+   * @param options - cancellation and projection selection.
+   * @returns captured output after releasing the observation lease.
+   */
+  capture<Value>(
+    sessionId: SessionId,
+    capture: (session: SessionCaptureReader, observation: SessionObservation) =>
+      Value & (Value extends PromiseLike<unknown> ? never : unknown),
+    options: SessionObservationOptions = {},
+  ): Promise<Value> {
+    return this.resolve(sessionId, options, 'store', (observation, session) => {
+      try {
+        return capture(session, observation)
+      } finally {
+        observation[Symbol.dispose]()
+      }
+    })
+  }
+
   private async resolve<Value>(
     sessionId: SessionId,
     options: SessionObservationOptions,
     mode: PreparationMode,
-    consume: (observation: SessionObservation, analysis?: EventLogAnalysis) => Value,
+    consume: (observation: SessionObservation, session: Session, analysis?: EventLogAnalysis) => Value,
     targetSeq?: SessionSeqType,
   ): Promise<Value> {
     const { signal, projectionMode = 'all' } = options
@@ -229,9 +252,9 @@ export class SessionObservationReader {
         )
       }
       const observation = this.preparedLease(sessionId, entry, projections)
-      if (mode === 'store') return consume(observation)
+      if (mode === 'store') return consume(observation, entry.session)
       try {
-        return consume(observation, entry.analysis)
+        return consume(observation, entry.session, entry.analysis)
       } finally {
         observation[Symbol.dispose]()
       }
@@ -242,11 +265,11 @@ export class SessionObservationReader {
     session: Session,
     projectionMode: NonNullable<SessionObservationOptions['projectionMode']>,
     mode: PreparationMode,
-    consume: (observation: SessionObservation, analysis?: EventLogAnalysis) => Value,
+    consume: (observation: SessionObservation, session: Session, analysis?: EventLogAnalysis) => Value,
     targetSeq: SessionSeqType | undefined,
   ): Value {
     const observation = this.live(session, projectionMode)
-    if (mode === 'store') return consume(observation)
+    if (mode === 'store') return consume(observation, session)
     try {
       if (targetSeq !== undefined) {
         const target = observation.readEvents(SessionLogOffset(targetSeq), SessionLogOffset(targetSeq + 1))[0]
@@ -262,7 +285,7 @@ export class SessionObservationReader {
         analysis = new EventLogAnalysis(session.id)
         this.liveAnalyses.set(session, analysis)
       }
-      return consume(observation, analysis)
+      return consume(observation, session, analysis)
     } finally {
       observation[Symbol.dispose]()
     }

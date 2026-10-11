@@ -36,6 +36,7 @@ kind: "package-reference"
 | `listSessions()` | 每个逻辑会话，最新的在前，带 `live` 与 `persisted` 可用性标志 |
 | `pageSessions(request)` | 带到期语义的不可变快照上的有界元数据页 |
 | `pageEvents(request)` | 有界、seq 升序的原始事件元数据及可选语义文本 |
+| `captureSession(id, capture, options)` | 在同一个选定 Session 上同步复制当前节点、预览、路由与消费方自有计量结果 |
 | `readSession(id)` | 经过回放校验的完整原始事件日志，且不会让该会话变为实时 |
 | `filterSessions(filters)` | 匹配 AND 连接的元数据与可用性谓词的会话 |
 | `filterEvents(id, filters)` | 匹配元数据与字面文本谓词的语义事件文档 |
@@ -56,6 +57,12 @@ pageSessions({ filters?, limit, cursor? }) 固定最新优先的不可变元数�
 pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观察一次来源，按 seq 升序返回原始事件元数据（包括结构事件），不折叠 surface。afterSeq 是排他的下界，默认 -1；types 使用 OR，空列表无匹配；includeText 默认 false，只有本页发出的事件才提取语义文本。结果携带同次观察的 session header 和 capturedThroughSeq；观察中仍有匹配事件时才返回 nextAfterSeq。续页是新的观察，允许看到新追加事件。
 
 完整列表、非精确 id 筛选和会话 trace 共用持久化 header catalog，成功刷新后在 metadataCacheTtlMs 内复用；每次读取仍叠加当前 live store。默认跨进程或存储变化最多有 5 秒可见性延迟，TTL 到期后的下一次读取重扫存储；TTL 为 0 时每次读取重新列举。持久化实例身份变化立即阻止旧 catalog 复用；本机会话创建和卸载使 catalog 失效，查询服务卸载清空缓存。同时启动的冷列表读取各自拥有取消信号，可能并行扫描；缓存只复用已成功完成的列举。精确 id 筛选及冷事件读取仍逐 id stat。首次列举和到期刷新仍需完整扫描元数据，冷事件首次读取仍需完整加载与 prepare 日志。
+
+### 同步采样
+
+需要在一个同步回调中组合当前 Session 读取并返回独立拥有的结果时，使用 `captureSession`。Query 通过只读 `SessionCaptureReader` 类型传入原始 Session 及配对的源 observation，再在 `finally` 释放租约。不能 yield、修改或保留 Session、retain observation，或返回借用容器。只读节点时使用 `projectionMode: none`，还需已记录 projection 汇总时使用 `all`。源授权仍由调用方负责；回调错误原样传播。
+
+[采样参考](../../../docs/subsystems/session-query.zh.md#synchronous-session-sampling)说明逐节点解释、空节点、私有 meter 适配、source cut 与 meter revision 的区别及 store preparation 复用。cold capture 从不激活 Agent 或写持久存储；首次未命中仍恢复完整日志。
 
 ### 过滤器
 
@@ -95,7 +102,7 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 本服务建立在一个分离与三项承诺之上：
 
 - **实时优先的逻辑语料库。** 每次读取都解析一个一致的观察：实时 `ctx.sessions` 优先，可选的 `ctx.sessionPersistence` 补充其余部分，冲突的不可变 header 宁可失败也不合并。
-- **脱离存储的结果。** 所有返回的 header、事件与记录都是克隆；不暴露实时状态，也不保留订阅。
+- **自有结果。** 精确读取结果为独立克隆；observation 有显式租约，capture 回调仅在复制自有输出时借用所选 Session。
 - **精确读取具体，搜索抽象。** 读取、过滤与追踪在此只实现一次；两个全文方法是由后端拥有的唯一抽象表面。
 - **同一规范表层解释器。** `listEvents`、`readSurface` 与 `traceEvent` 使用 `dsh-session` 转换及 catalog 消息定义；公共观察保持 store 定义的 preparation。
 
@@ -156,7 +163,7 @@ prepared 条目仅在持久化 identity、revision 及 preparation mode 相同�
 <a id="model-experience"></a>
 ## 模型体验
 
-无，因为该可信查询服务只向调用方返回克隆记录，且不注册任何面向模型的内容。
+无；可信查询服务不注册面向模型的内容。调用方负责授权及任何模型可见呈现。
 
 #### KV Cache 影响
 

@@ -42,7 +42,7 @@ Reuse a still-valid prepared object with the same mode and source revision; the 
 
 Read and interpret each event by seq from session.surface.nodes, retaining zero-price nodes without messages; do not zip nodes with deriveMessages, which filters empty messages; see [message derivation](../../../../packages/core/session/src/index.ts#L835-L880). The meter synchronously reads the same Session log, independently folds original events, and applies its image/offload and attachment route logic; it requires neither Session activation nor arbitrary Session plugin interpretation results. Align nodes by index/seq and label preview/pricing basis separately without promising identical priced text; see [meter sampling](../../../../packages/llm/token-meter/src/index.ts#L146-L190) and [meter fold](../../../../packages/llm/token-meter/src/surface-fold.ts#L107-L127).
 
-Use `projectionMode: none` for node-only maps and `all` when recorded context summaries are needed. Both retain existing projection semantics; `none` does not skip restoration validation. Callers authorize the source before sampling, and the public model tool and library use the same scope rules.
+Use `projectionMode: none` for node-only maps and `all` when recorded context summaries are needed. Both retain existing projection semantics; `none` does not skip restoration validation. The I/O entry `getContextMap(ctx, exec, ...)` authorizes the source before sampling, with the same scope rules as the public model tool. The pure `buildContextMap(reader, observation, measurement, ...)` performs no I/O or authorization: it projects Session data already held by its caller and also serves the reminder projection.
 
 ## Alternatives considered
 

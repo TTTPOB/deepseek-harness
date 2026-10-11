@@ -6,6 +6,8 @@
  */
 
 import type {
+  Session,
+  SessionSurface,
   SessionEvent,
   SessionEventType,
   SessionHeader,
@@ -20,6 +22,50 @@ import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
 import type { SessionSearchCursor } from './cursor.ts'
 
 export type { SessionSearchCursor } from './cursor.ts'
+
+/** Recursively readonly data borrowed during synchronous Session sampling. */
+type CaptureReadonly<Value> = Value extends string | number | boolean | bigint | symbol | null | undefined
+  ? Value
+  : Value extends (...args: never[]) => unknown
+    ? Value
+    : Value extends object
+      ? { readonly [Key in keyof Value]: CaptureReadonly<Value[Key]> }
+      : Value
+
+/**
+ * Borrowed reading view of the original full Session selected by captureSession.
+ * Read methods may update memory caches. Do not retain this view or its containers,
+ * mutate the Session, or yield during capture; copy the output needed by the caller.
+ * The runtime value is the Session itself, never a wrapper or proxy.
+ */
+export interface SessionCaptureReader {
+  /** Logical identity of the selected Session. */
+  readonly id: SessionId
+  /** Immutable storage metadata of this same Session. */
+  readonly header: SessionHeader
+  /** Exact fork-inherited event count. */
+  readonly inheritedEventCount: SessionLogOffset
+  /** Current log length, including any in-memory preparation marker. */
+  readonly seq: SessionLogOffset
+  /** Ordered node sequences and replacement/content generations; copy nodes during capture. */
+  readonly surface: SessionSurface
+  /**
+   * Read the current immutable request envelope.
+   * @returns latest logged envelope, or undefined before any request header.
+   */
+  requestHeader(): CaptureReadonly<ReturnType<Session['requestHeader']>>
+  /**
+   * Read the latest immutable resolved route metadata.
+   * @returns latest logged route, or undefined before any request context.
+   */
+  requestContext(): CaptureReadonly<ReturnType<Session['requestContext']>>
+  /**
+   * Interpret one event with this Session's store message definitions.
+   * @param event - event read from the paired observation.
+   * @returns immutable interpreted message, or null for a node with no message.
+   */
+  deriveEventMessage(event: SessionEvent): CaptureReadonly<ReturnType<Session['deriveEventMessage']>>
+}
 
 /** Whether an event is current model context, replaced context, or raw-log-only. */
 export type SessionEventSurface = 'current' | 'shadowed' | 'log-only'

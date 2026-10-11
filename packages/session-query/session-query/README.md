@@ -36,6 +36,7 @@ The incremental query implementation imports `SurfaceFoldAccumulator` from `@dee
 | `listSessions()` | Every logical session, newest first, with `live` and `persisted` availability flags |
 | `pageSessions(request)` | Bounded metadata pages over an expiring immutable snapshot |
 | `pageEvents(request)` | Bounded ascending raw-event metadata and optional semantic text |
+| `captureSession(id, capture, options)` | Synchronously copy current nodes, previews, routing, and consumer-owned measurements from one selected Session |
 | `readSession(id)` | The complete replay-validated raw event log, without making the session live |
 | `filterSessions(filters)` | Sessions matching ANDed metadata and availability predicates |
 | `filterEvents(id, filters)` | Semantic event documents matching metadata and literal-text predicates |
@@ -56,6 +57,12 @@ pageSessions({ filters?, limit, cursor? }) fixes an immutable newest-first metad
 pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) observes one source per page and returns ascending raw-event metadata, including structural events, without a surface fold. afterSeq is exclusive and defaults to -1; types are ORed, an empty list matches nothing, and includeText defaults to false. Semantic text is extracted only for emitted events. The result binds the session header and capturedThroughSeq to that observation; nextAfterSeq is present only when another matching event was observed. Continuations take a new observation and may see appended events.
 
 Complete listings, non-exact-id filters, and session traces share a persisted-header catalog reused for metadataCacheTtlMs after a successful refresh; every call overlays the current live store. External-process and storage changes have a default five-second visibility window: the next read after expiry scans storage again. A zero TTL re-lists on each read. Persistence-instance identity changes prevent reuse immediately; local session creation and disposal invalidate the catalog, and query-service disposal clears it. Concurrent cold listings own separate cancellation signals and may scan in parallel; the catalog reuses only successfully completed listings. Exact-id filters and cold event reads still stat individual ids. First listings and expired refreshes still scan all metadata; first cold event reads still load and prepare the entire log.
+
+### Synchronous sampling
+
+Use `captureSession` for an independently owned result that combines current Session reads in one synchronous callback. Query passes the original Session through the readonly `SessionCaptureReader` type, paired with its source observation, then releases the lease in `finally`. Do not yield, mutate or retain the Session, retain the observation, or return borrowed containers. Use `projectionMode: none` for node-only reads and `all` when recorded projection summaries are also needed. Source authorization remains with the caller; callback errors propagate unchanged.
+
+The [sampling reference](../../../docs/subsystems/session-query.md#synchronous-session-sampling) explains per-node interpretation, empty nodes, private meter adaptation, source cuts versus meter revisions, and store preparation reuse. Cold capture never activates an Agent or writes persistence; first misses still restore the complete log.
 
 ### Filters
 
@@ -95,7 +102,7 @@ This section explains the design decisions behind the service and points at the 
 The service is built on one separation and three commitments:
 
 - **Live-preferred logical corpus.** Every read resolves one consistent observation: live `ctx.sessions` wins, optional `ctx.sessionPersistence` fills the rest, and conflicting immutable headers fail rather than merge.
-- **Detached results.** All returned headers, events, and records are cloned; nothing exposes live state or a retained subscription.
+- **Owned results.** Exact-read results are detached clones; observations have explicit leases, and capture callbacks borrow the selected Session only while copying their own output.
 - **Exact reads concrete, search abstract.** Reads, filters, and traces are implemented here once; the two full-text methods are the only abstract surface a backend owns.
 - **One canonical surface interpreter.** `listEvents`, `readSurface`, and `traceEvent` use the `dsh-session` transitions with catalog message definitions; public observations retain store-definition preparation.
 
@@ -156,7 +163,7 @@ Read these pages when the package-level contract is not enough. They move from t
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the trusted query service exposes cloned records only to callers and registers nothing model-facing.
+None; the trusted query service registers nothing model-facing. Callers own authorization and any model-visible presentation.
 
 #### KV Cache effect
 

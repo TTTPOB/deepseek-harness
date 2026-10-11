@@ -42,7 +42,7 @@ Query 负责源解析、取消、准备模式、observation cut 与租约；cons
 
 按 session.surface.nodes 的 seq 逐项取事件并解释消息，保留无消息且计量为零的节点，不把过滤空消息的 deriveMessages 数组直接与节点 zip，见 [消息派生](../../../../packages/core/session/src/index.ts#L835-L880)。meter 同步读取同一个 Session 的日志，独立 fold 原事件并应用其 image/offload 与附件路由逻辑；不要求 Session 激活，也不直接使用 Session 的任意插件解释结果。因此节点按 index/seq 对齐，预览与计量值分别标 basis，不承诺计量所依据的文本完全相同，见 [meter 采样](../../../../packages/llm/token-meter/src/index.ts#L146-L190)及 [meter fold](../../../../packages/llm/token-meter/src/surface-fold.ts#L107-L127)。
 
-只需节点地图时使用 `projectionMode: none`；需要已记录上下文汇总时使用 `all`。两者保持现有 projection 语义，`none` 不跳过恢复校验。源授权由调用方在采样前完成，公共模型工具与库入口采用同一作用域规则。
+只需节点地图时使用 `projectionMode: none`；需要已记录上下文汇总时使用 `all`。两者保持现有 projection 语义，`none` 不跳过恢复校验。IO 入口 `getContextMap(ctx, exec, ...)` 在采样前授权源，与公共模型工具采用同一作用域规则。纯函数 `buildContextMap(reader, observation, measurement, ...)` 不执行 IO 或授权：它投影调用方已持有的 Session 数据，也供 reminder 投影复用。
 
 ## Alternatives considered
 

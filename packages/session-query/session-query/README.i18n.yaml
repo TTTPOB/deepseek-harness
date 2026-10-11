@@ -18,11 +18,14 @@
   en: 89c6fbec851ee303
   zh: b31b754b8da9d6a6
 /deepseek-ai-dsh-session-query/use-this-package/what-you-can-do:
-  en: 70335310d06574bf
-  zh: 96426f282ff25318
+  en: e2d80dc6c044eaae
+  zh: 3b15cc37df0e7bbf
 /deepseek-ai-dsh-session-query/use-this-package/paging-and-freshness:
   en: 346f4a66c5a37d90
   zh: 767e6d912c5ccbcf
+/deepseek-ai-dsh-session-query/use-this-package/synchronous-sampling:
+  en: 23670546097e50da
+  zh: 5dfc6c530900997e
 /deepseek-ai-dsh-session-query/use-this-package/filters:
   en: 1b95403461947ca1
   zh: cffa21b03df9f0ad
@@ -36,8 +39,8 @@
   en: 6a18034f1ccc247a
   zh: aecd49a7b846f913
 /deepseek-ai-dsh-session-query/understand-the-implementation/design-philosophy:
-  en: 9d47038b66c78635
-  zh: 8740e8564b5bb466
+  en: e8dba9d13c942e79
+  zh: 89d90c98e276c3ed
 /deepseek-ai-dsh-session-query/understand-the-implementation/source-map:
   en: 6d5a42aead5b3d92
   zh: 2f6f839684fe81f9
@@ -54,8 +57,8 @@
   en: 402ee0b1698a5541
   zh: 3aa7b4bb3a4414b8
 /deepseek-ai-dsh-session-query/model-experience:
-  en: dff12da8d1e64e66
-  zh: e054b0d54e29f899
+  en: 15f2edc72c0a0b38
+  zh: d77f4ed60998396b
 /deepseek-ai-dsh-session-query/model-experience/kv-cache-effect:
   en: ca75c51c89c2c9b0
   zh: f57cc48a1b5cbfa9

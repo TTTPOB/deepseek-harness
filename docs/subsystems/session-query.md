@@ -6,6 +6,21 @@ Query vocabulary over the live-preferred logical session corpus. The [Service De
 
 Source: [`packages/session-query/session-query/src/types.ts`](../../packages/session-query/session-query/src/types.ts)
 
+<a id="synchronous-session-sampling"></a>
+## Synchronous Session sampling
+
+`captureSession(id, capture, options)` resolves a live or unpublished store-prepared Session and calls `capture(reader, observation)` in the same synchronous segment that selects it. The public [`SessionCaptureReader`](../../packages/session-query/session-query/src/types.ts) exposes readonly identity, inherited count, log length, ordered `SessionSurface`, request header/context, and per-event message interpretation. TypeScript rejects mutators, nested metadata writes, node-array writes, and Promise-like callback results. The runtime reader is the original full Session, not a wrapper.
+
+The callback must copy its required output before returning: do not yield, mutate the Session, retain the observation, or return borrowed Session references or containers. Query releases its observation in `finally`, including callback failure. Callback errors propagate unchanged; source resolution and cancellation use the existing observation errors. `observeSession` continues to return a caller-owned lease.
+
+Walk `reader.surface.nodes` in positional order, read each sequence through `observation.readEvents`, and call `reader.deriveEventMessage(event)`. A null message still occupies its node position; do not zip nodes with the filtered `deriveMessages` history. Copy replacement/content generations and route metadata in this callback when the output needs them.
+
+`projectionMode: none` avoids projection work; `all` computes the paired projection snapshot synchronously on this same Session. Both modes retain store restore validation. Cold capture does not enter or announce the Session, activate an Agent, or write persistence. It shares the existing single-entry-per-id preparation cache with public observations: reuse requires the same persistence identity, source revision, and store preparation mode. Canonical query analysis can replace that entry; capture does not extend the cache.
+
+Keep the observation source cut, meter-returned `logRevision`, and replacement/content generations as distinct facts. Cold observations include synthetic interrupted closers; the prepared Session can additionally contain an end-seed marker absent from the observation. Capture reads the current logical Session, not an arbitrary historical cut.
+
+A consumer using the unchanged token-meter can concentrate `reader as Session` in one private meter adapter called only inside capture. This is valid because Query supplies the original complete Session, preserving the meter's Session-keyed memory cache. Query has no meter dependency. Meter independently interprets the log and its attachment routing, so previews and token values need separate basis labels; same-session sampling does not promise identical text. Source authorization belongs to the consumer, and a first cold capture and measurement can still inspect the complete log/surface.
+
 ## Logical records
 
 `SessionRecord` is returned by the cross-corpus list. It exposes source availability independently from the cloned live-preferred header. `SessionEventRecord` is a lightweight raw-log projection; classification uses the same `foldSurface()` transitions as model-history derivation.
