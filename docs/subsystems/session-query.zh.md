@@ -11,15 +11,23 @@
 
 `captureSession(id, capture, options)` 解析 live 或未发布的 store-prepared Session，并在选定它的同一同步段调用 `capture(reader, observation)`。公开的 [`SessionCaptureReader`](../../packages/session-query/session-query/src/types.ts) 提供只读身份、继承计数、日志长度、有序 `SessionSurface`、请求 header/context 及逐事件消息解释。TypeScript 拒绝 mutator、嵌套元数据写入、节点数组写入以及返回 Promise-like 的回调。运行时 reader 是原始完整 Session，不是包装对象。
 
-回调必须在返回前复制所需输出：不能 yield、修改 Session、retain observation，或返回借用的 Session 引用或容器。Query 在 `finally` 释放自己的 observation，包括回调失败时。回调错误原样传播；源解析与取消沿用现有 observation 错误。`observeSession` 仍返回由调用方拥有的租约。
+窄接口隐藏 `Readonly<Session>` 仍会暴露的写入方法。它是编译期约束，不对 JavaScript 或主动绕过类型检查的调用提供运行时写入隔离。TypeScript 无法保证引用只在回调期间使用；调用方必须遵守所有权规则。
+
+回调必须在返回前复制所需输出：不能 yield、修改 Session、创建或激活 Agent、retain observation，或返回借用的 Session 引用或容器。Query 在 `finally` 释放自己的 observation，包括回调失败时。回调错误原样传播；源解析与取消沿用现有 observation 错误，不自动重试 provider。`observeSession` 仍返回由调用方拥有的租约。
+
+Query 负责源解析、取消、准备和租约，使消费方无需重复恢复；消费方负责展示 DTO、计量与压缩政策。同步回调避免分别读取 Surface 和计量时发生状态变化。先 await `observeSession` 再取得最新 Session，或复用旧 observation，不能保证同次采样。
 
 按位置顺序遍历 `reader.surface.nodes`，经 `observation.readEvents` 读取各 seq，再调用 `reader.deriveEventMessage(event)`。null 消息仍占据节点位置；不能把节点与已过滤的 `deriveMessages` 历史 zip。输出需要 replacement/content generation 和路由元数据时，在此回调中一并复制。
 
-`projectionMode: none` 避免 projection 工作；`all` 在同一个 Session 上同步计算配对的 projection snapshot。两种模式均保留 store 恢复校验。cold capture 不 enter 或 announce Session、不激活 Agent，也不写持久存储。它与公共 observation 共用现有的每 id 单 entry 准备缓存：复用要求 persistence identity、源 revision 及 store preparation mode 均相同。canonical query 分析可以替换该 entry；capture 不扩展缓存。
+`projectionMode: none` 避免 projection 工作；`all` 在同一个 Session 上同步计算配对的 projection snapshot。已记录的上下文汇总不能代替与当前 Surface 对齐的逐节点计量。两种模式均保留 store 恢复校验。
+
+cold capture 不 enter 或 announce Session、不激活 Agent，也不写持久存储。它与公共 observation 共用现有的每 id 单 entry 准备缓存：复用要求 persistence identity、源 revision 及 store preparation mode 均相同。canonical query 分析可以替换该 entry，但不能作为等价的 capture 来源；capture 始终使用 store 准备，不扩展缓存。
 
 分别记录 observation 的 source cut、meter 返回的 `logRevision` 及 replacement/content generation。cold observation 包含 synthetic interrupted closers；prepared Session 还可能包含 observation 中没有的 end-seed marker。capture 读取当前逻辑 Session，而非任意历史 cut。
 
-使用未修改 token-meter 的消费方可以把 `reader as Session` 集中在一个仅在 capture 内调用的私有 meter 适配函数中。该做法依据 Query 传入原始完整 Session，因此保持 meter 以 Session 为键的内存缓存。Query 不依赖 meter。meter 独立解释日志及附件路由，因此预览与 token 值需要分别标明依据；同 Session 采样不承诺文本相同。源授权由消费方负责，首次 cold capture 与计量仍可能检查完整日志/surface。
+使用未修改 token-meter 的消费方可以把 `reader as Session` 集中在一个仅在 capture 内调用的私有 meter 适配函数中，而不是作为接受任意 reader 的公开转换入口。该做法依据 Query 传入原始完整 Session，因此保持 meter 以 Session 为键的内存缓存，无需运行时包装或修改 meter 接口。Query 不依赖 meter。meter 独立解释日志及其 image/offload 和附件路由，因此预览与 token 值需要分别标明依据；同 Session 采样不承诺文本相同，也不承诺与最终 provider wire request 的文本或计量值等价。
+
+源授权由 I/O 消费方在采样前负责，而不是交给投影调用方已持有数据的纯函数。首次 cold capture 与计量仍可能检查完整日志/surface；限制输出窗口不代表按窗口磁盘 I/O 或常数时间的 capture。
 
 ## 逻辑记录
 

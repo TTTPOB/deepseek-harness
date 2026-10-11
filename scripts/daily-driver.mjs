@@ -61,7 +61,7 @@ if (command === 'release') {
   const sums = join(root, 'dist/daily-driver/SHA256SUMS')
   writeFileSync(sums, assets.map(path => `${createHash('sha256').update(readFileSync(path)).digest('hex')}  ${basename(path)}\n`).join(''))
   run('gh', ['release', 'create', tag, ...assets, sums, '--verify-tag', '--title', tag, '--latest=false',
-    '--notes', `Verified ${selection} source and isolated built artifacts at ${git(['rev-parse', 'HEAD'])}. Packages: ${checks.selected.map(pkg => `${pkg.name}@${pkg.version}`).join(', ')}. Installation and Host activation require separate authorization.`])
+    '--notes', `${selection} packages from source ${git(['rev-parse', 'HEAD'])}. Packages: ${checks.selected.map(pkg => `${pkg.name}@${pkg.version}`).join(', ')}. Installation and Host activation require separate authorization.`])
 } else {
   ({ prepare, verify, build, smoke })[command]()
 }
