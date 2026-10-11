@@ -1,6 +1,6 @@
 # Agent Note: SessionQuery 的同步只读采样入口
 
-Status: proposed
+Status: implemented
 
 [English](2026-10-10-session-query-synchronous-capture.md) | 中文
 
@@ -8,17 +8,17 @@ Status: proposed
 
 通用上下文地图需要同时取得当前 Surface（模型可见消息投影）的节点顺序、消息预览、路由信息及计量。分别读取 Surface 和计量会取得不同状态；树外 consumer 自行恢复历史 Session 则重复 Query 的源解析、冷准备和租约管理。
 
-现有 [observation 决策](../../implemented/architecture/2026-08-25-session-observations-and-projection-owned-client-state.zh.md)已经确定同源读取与未发布 prepared Session 的所有权；[增量内存分析决策](../../implemented/architecture/2026-10-09-session-query-incremental-memory-analysis.zh.md)进一步区分 canonical 分析与 Session 的最新状态。本提案补充同步 Session 采样能力，不取代两份决策，也不恢复[拟删除的便利 API](../simplification/2026-09-19-trim-session-query-convenience-api.zh.md)。
+现有 [observation 决策](../../implemented/architecture/2026-08-25-session-observations-and-projection-owned-client-state.zh.md)已经确定同源读取与未发布 prepared Session 的所有权；[增量内存分析决策](../../implemented/architecture/2026-10-09-session-query-incremental-memory-analysis.zh.md)进一步区分 canonical 分析与 Session 的最新状态。本决策补充同步 Session 采样能力，不取代两份决策，也不恢复[拟删除的便利 API](../../proposed/simplification/2026-09-19-trim-session-query-convenience-api.zh.md)。
 
-## Proposal
+## Decision
 
-在自有 SessionQuery fork 中增加窄的 `captureSession` 入口。源解析与读取准备可以异步；确定 live 或 prepared Session 后，在一个同步、只读回调中完成采样，返回由 consumer 拥有的固定 DTO（数据传输对象），finally 释放读取租约。
+自有 SessionQuery fork 提供用于同步采样的 `captureSession`。源解析与读取准备可以异步；确定 live 或 prepared Session 后，Query 调用一个同步、只读回调，返回由 consumer 拥有的 DTO（数据传输对象），并在 `finally` 释放读取租约。
 
 Query 负责源解析、取消、准备模式、observation cut 与租约；consumer 负责复制所需节点、预览与元数据，并调用现有 token-meter。Query 不依赖 token-meter、地图 DTO 或主动压缩政策。地图与计量的 consumer 设计见 [session-tools ADR 0004](../../../../../dsh-session-tools/docs/adr/0004-context-map-and-metering.md)。
 
 ### TypeScript 只读视图与计量适配
 
-回调参数使用窄的 TypeScript 读取接口，仅暴露采样需要的读取方法及只读属性、集合，省略 append 等写入方法。
+回调参数使用窄的 `SessionCaptureReader` TypeScript 读取接口，仅暴露采样需要的读取方法及只读属性、集合，省略 append 等写入方法。
 
 运行时传入 Query 选中的原始完整 Session 实例，通过窄接口提供 TypeScript 层面的只读约束。
 
@@ -26,9 +26,9 @@ Query 负责源解析、取消、准备模式、observation cut 与租约；cons
 
 ### 采样与所有权
 
-回调期间不 yield、不写 Session、不创建或激活 agent（智能体），也不将 Session、observation 或可变容器带出回调。复制有序节点、请求 header/context、replacement/content generation、需要的不可变消息及计量结果；逐节点计量必须与采样节点顺序对齐。
+回调期间不 yield、不写 Session、不创建或激活 agent（智能体），也不将 Session、observation 或借用的可变容器带出回调。复制有序节点、请求 header/context、replacement/content generation、需要的不可变消息及计量结果；逐节点计量必须与采样节点顺序对齐。
 
-回调返回独立拥有的 DTO，Query 在回调结束、抛错或取消时释放租约。节点和预览在回调内完成采集；沿用现有 Query 错误类别，不自动重试 provider 失败。
+回调返回独立拥有的 DTO，Query 在回调结束或抛错时释放自己的租约。源取消在采样前拒绝；回调错误原样传播。节点和预览在回调内完成采集，源失败沿用现有 Query 错误类别，不自动重试 provider。
 
 捕获的是历史会话现在的逻辑 Surface，不提供任意过去的 `as_of_seq`。cold prepared Session 保持未发布，不 enter/announce、不创建 agent、不写目标持久日志；读取准备及 meter 内存缓存可以更新。首次 cold 读取仍可能恢复完整日志，meter 仍可能遍历整个 Surface；限制展示窗口不代表按窗口磁盘 I/O。
 
@@ -36,9 +36,9 @@ Query 负责源解析、取消、准备模式、observation cut 与租约；cons
 
 源 observation cut、计量的 `logRevision`、replacement/content generation 分别记录，不因 revision 数值不同就判定失配。cold 修复可能包含 synthetic interrupted closers；prepared Session 可能还有 end-seed marker，不能把逻辑 cut 描述为磁盘原始尾部。
 
-采样固定沿现有 store-definition 读取准备路径，不增加 public prepareMode 开关。异步源解析完成后，在 resolve/consumeLive 的同一同步段中，将已选中的 live Session 或 entry.session 与本次 observation 传给 consumer，finally 释放租约；不能 await observeSession 后再取最新 Session，也不接收旧 observation 做当前采样。canonical Surface/trace 分析保留原用途，不作为 store Session 的等价物，见 [源解析及准备](../../../../packages/session-query/session-query/src/observation.ts#L152-L268)。
+采样固定沿现有 store-definition 读取准备路径，不增加 public prepareMode 开关。异步源解析完成后，在 resolve/consumeLive 的同一同步段中，将已选中的 live Session 或 entry.session 与本次 observation 传给 consumer，finally 释放租约；不能 await observeSession 后再取最新 Session，也不接收旧 observation 做当前采样。canonical Surface/trace 分析保留原用途，不作为 store Session 的等价物，见 [源解析及准备](../../../../packages/session-query/session-query/src/observation.ts#L156-L291)。
 
-复用同模式、同源版本且仍有效的 prepared 对象，地图不自行二次恢复。现 cache 按 sid 保存单个 entry 并检查 mode/revision；模式切换、版本变化或淘汰可能重新准备，见 [缓存检查](../../../../packages/session-query/session-query/src/observation.ts#L311-L334)。
+Query 复用同模式、同源版本且仍有效的 prepared 对象，地图不自行二次恢复。现 cache 按 sid 保存单个 entry 并检查 mode/revision；模式切换、版本变化或淘汰可能重新准备，见 [缓存检查](../../../../packages/session-query/session-query/src/observation.ts#L334-L357)。
 
 按 session.surface.nodes 的 seq 逐项取事件并解释消息，保留无消息且计量为零的节点，不把过滤空消息的 deriveMessages 数组直接与节点 zip，见 [消息派生](../../../../packages/core/session/src/index.ts#L835-L880)。meter 同步读取同一个 Session 的日志，独立 fold 原事件并应用其 image/offload 与附件路由逻辑；不要求 Session 激活，也不直接使用 Session 的任意插件解释结果。因此节点按 index/seq 对齐，预览与计量值分别标 basis，不承诺计量所依据的文本完全相同，见 [meter 采样](../../../../packages/llm/token-meter/src/index.ts#L146-L190)及 [meter fold](../../../../packages/llm/token-meter/src/surface-fold.ts#L107-L127)。
 
@@ -60,15 +60,17 @@ Query 负责源解析、取消、准备模式、observation cut 与租约；cons
 
 **只使用现有 context pressure projection。** 汇总不提供与当前 Surface 对齐的逐节点计量值，不能支撑通用区段地图，因此不采用。
 
-## Acceptance criteria
+## Verification
 
-- live/cold 均通过已有源解析与 store 准备路径，同步取得节点、消息和计量；历史会话不激活 agent、不写持久日志；同模式、同源版本且对象仍有效时复用已有准备，不承诺跨模式切换零恢复。
-- 验证 store/canonical 准备差异、old cut、内存 end-seed、synthetic closers、空节点与图像 offload，明确 source cut 与 meter revision 的含义。
-- 后续 append/replacement 不改变已返回 DTO；取消、回调失败、dispose/HMR（热模块替换）不泄漏租约或让旧调用重新填充已撤销缓存。
-- Query 不新增 meter 依赖；公开读取接口省略写入方法，属性和集合使用只读类型。类型测试覆盖读取可用、写入调用被拒；实际采样测试覆盖传入原 Session、内部适配可调用未修改的 meter。正式公开类型、JSDoc、所属子系统文档与所有调用方一起更新，并验证发布包中的公共导入。
+- [Capture 与 observation 回归测试](../../../../packages/session-query/session-query/tests/observation.spec.ts)覆盖原始 Session 身份、未修改的 meter 调用、live/cold 采样、store/canonical 准备差异、old cut、内存 end-seed marker、synthetic closers、空节点、图像 offload，以及 append/replacement 后 DTO 的稳定性。
+- 同组回归测试覆盖调用方拥有的 observation 租约、回调失败清理、stat/read 期间取消，以及服务 dispose 后不回填已撤销缓存。同模式有效 preparation 复用原 Session；切换模式可能再次恢复。
+- [编译器 probe](../../../../packages/session-query/session-query/tests/capture-types.spec.ts)以实际源码类型编译公开包根导入：读取、品牌 id 与 unknown 工具 schema 值保持可用；异步回调及嵌套元数据、消息或节点写入被拒绝。包构建也对 producer 实现执行严格编译。
+- fork4 tarball 的独立检查通过 plain Node 公开包根导入及原 Session capture，以及 NodeNext 公开声明的 readonly 节点和异步回调拒绝。这些检查解析既有 workspace peer；它们不证明干净安装解析或发布完成。
 
-## Risks
+## Consequences
+
+consumer 无需重复 Query 准备或保留读取租约，即可组合节点、预览、路由及未修改 meter 的输出。Query 不新增 meter 依赖或额外缓存，公共 observation 保持由调用方拥有的租约。源授权仍归 IO consumer，而非纯投影函数。
 
 同次采样保证观察同一 Session，不保证预览就是 meter 计量所依据的文本，也不保证最终 provider wire request 的文本及计量值完全一致。consumer 必须标明预览与计量依据。TypeScript 无法在编译期保证引用只在回调期间使用，引用生命周期依赖调用方遵守采样与所有权规则。
 
-冷读取与计量仍有全量成本，此入口减少重复准备和 payload 克隆，不承诺常数时间。
+冷读取与计量仍有全量成本，此入口减少重复准备和 payload 克隆，不承诺常数时间。已验证的 fork4 源码及本地 tarball 不代表已发布 release。

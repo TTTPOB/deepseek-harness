@@ -1,0 +1,31 @@
+# Bilingual-pair consistency record for 2026-10-10-session-query-synchronous-capture.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-10-session-query-synchronous-capture.md
+/agent-note-synchronous-read-only-sessionquery-capture:
+  en: 2d33e59aeae03352
+  zh: 154f1e587927b1f4
+/agent-note-synchronous-read-only-sessionquery-capture/problem:
+  en: 86691450c2b07e4d
+  zh: 8e2c61a65ac5c593
+/agent-note-synchronous-read-only-sessionquery-capture/decision:
+  en: dd944aa2a776b121
+  zh: 270ebc685b215aeb
+/agent-note-synchronous-read-only-sessionquery-capture/decision/typescript-read-only-view-and-metering-adapter:
+  en: edf2756119335b7b
+  zh: 875c408b07df015c
+/agent-note-synchronous-read-only-sessionquery-capture/decision/sampling-and-ownership:
+  en: c4e333e10dad47e4
+  zh: c930639e540af3f8
+/agent-note-synchronous-read-only-sessionquery-capture/decision/cuts-and-preparation-modes:
+  en: 99ac52dacad60fe1
+  zh: 19d9a858df16fba3
+/agent-note-synchronous-read-only-sessionquery-capture/alternatives-considered:
+  en: a5e627b646cab79d
+  zh: 965486b209832a3a
+/agent-note-synchronous-read-only-sessionquery-capture/verification:
+  en: 6636e29d56fbcde2
+  zh: 6c1f593c9cd12eb3
+/agent-note-synchronous-read-only-sessionquery-capture/consequences:
+  en: d8c2e4fe20a4e5fe
+  zh: f39411646de42bb0
