@@ -91,6 +91,18 @@ describe('Typert-backed Cordis catalog', () => {
     )
   })
 
+  it('renders Session capture with its synchronous callback constraint and classified reading interface', { timeout: 480_000 }, () => {
+    const query = projection().model.services.find(service => service.key === 'sessionQuery')
+    if (query === undefined) throw new Error('SessionQuery service is missing')
+    const capture = query.methods.find(method => method.signature.startsWith('captureSession<'))
+    if (capture === undefined) throw new Error('Session capture method is missing')
+    expect(capture.signature).toContain('session: SessionCaptureReader')
+    expect(capture.signature).toContain('Value extends PromiseLike<unknown> ? never : unknown')
+    const rendered = renderPageRegion('capture-consumer.md', [{ ...query, methods: [capture] }], [], CORDIS_CATALOG_POLICY)
+    expect(rendered).toContain('[SessionCaptureReader](session-query.md)')
+    expect(rendered).not.toContain('[PromiseLike](')
+  })
+
   it('includes referenced framework enums in the runtime declaration closure', () => {
     const { projector, model } = projection()
     const rendered = projector.renderRuntimeApi(model)

@@ -2221,6 +2221,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a caller-owned observation lease.',
       },
       {
+        signature: 'captureSession<Value>( sessionId: SessionId, capture: (session: SessionCaptureReader, observation: SessionObservation) => Value & (Value extends PromiseLike<unknown> ? never : unknown), options: SessionObservationOptions = {}, ): Promise<Value>',
+        description: 'Sample the current live or unpublished prepared Session in one synchronous callback. Uses store message definitions, with no Agent activation or persistent writes. The runtime reader is the original full Session. Do not mutate it, yield, retain its observation, or return borrowed containers; return independently owned data. A cold observation excludes the end-seed marker added by preparation; Session seq includes it. The lease releases in finally on success or callback failure. Cold cancellation uses the observation error taxonomy; callback exceptions propagate unchanged.',
+        parameters: [{ name: 'sessionId', description: 'logical Session identity; caller owns source authorization.' }, { name: 'capture', description: 'synchronous callback over the selected Session and its source observation.' }, { name: 'options', description: 'cancellation and projection selection; no preparation-mode override.' }],
+        returns: 'independently owned callback output after releasing the observation lease.',
+      },
+      {
         signature: 'abstract searchSessions( request: SessionSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionSearchPage<SessionSearchHit>>',
         description: 'Search the live-preferred logical corpus and group by session.',
         parameters: [{ name: 'request', description: 'query text, metadata filters, page size, and cursor.' }, { name: 'exec', description: 'optional cancellation control.' }],
@@ -6435,6 +6441,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionCancelValue',
     declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n}',
+  },
+  {
+    name: 'SessionCaptureReader',
+    declaration: 'export interface SessionCaptureReader {\n    readonly id: SessionId;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly seq: SessionLogOffset;\n    readonly surface: SessionSurface;\n    requestHeader(): CaptureReadonly<ReturnType<Session[\'requestHeader\']>>;\n    requestContext(): CaptureReadonly<ReturnType<Session[\'requestContext\']>>;\n    deriveEventMessage(event: SessionEvent): CaptureReadonly<ReturnType<Session[\'deriveEventMessage\']>>;\n}',
   },
   {
     name: 'SessionControlBaseline',

@@ -407,6 +407,21 @@ Exact reads, filters, and traces are backend-independent concrete behavior. A ba
 observeSession( sessionId: SessionId, options: SessionObservationOptions = {}, ): Promise<SessionObservation>
 
 /**
+ * Sample the current live or unpublished prepared Session in one synchronous callback.
+ * Uses store message definitions, with no Agent activation or persistent writes.
+ * The runtime reader is the original full Session. Do not mutate it, yield, retain
+ * its observation, or return borrowed containers; return independently owned data.
+ * A cold observation excludes the end-seed marker added by preparation; Session seq includes it.
+ * The lease releases in finally on success or callback failure. Cold cancellation
+ * uses the observation error taxonomy; callback exceptions propagate unchanged.
+ * @param sessionId - logical Session identity; caller owns source authorization.
+ * @param capture - synchronous callback over the selected Session and its source observation.
+ * @param options - cancellation and projection selection; no preparation-mode override.
+ * @returns independently owned callback output after releasing the observation lease.
+ */
+captureSession<Value>( sessionId: SessionId, capture: (session: SessionCaptureReader, observation: SessionObservation) => Value & (Value extends PromiseLike<unknown> ? never : unknown), options: SessionObservationOptions = {}, ): Promise<Value>
+
+/**
  * Search the live-preferred logical corpus and group by session.
  * @param request - query text, metadata filters, page size, and cursor.
  * @param exec - optional cancellation control.

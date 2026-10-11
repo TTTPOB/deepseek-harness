@@ -163,7 +163,7 @@ Read these pages when the package-level contract is not enough. They move from t
 <a id="model-experience"></a>
 ## Model Experience
 
-None; the trusted query service registers nothing model-facing. Callers own authorization and any model-visible presentation.
+None, as this service registers no model-facing tools and leaves model-visible presentation to consumers.
 
 #### KV Cache effect
 

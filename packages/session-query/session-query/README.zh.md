@@ -163,7 +163,7 @@ prepared 条目仅在持久化 identity、revision 及 preparation mode 相同�
 <a id="model-experience"></a>
 ## 模型体验
 
-无；可信查询服务不注册面向模型的内容。调用方负责授权及任何模型可见呈现。
+无，因为本服务不注册面向模型的工具，模型可见呈现由消费方负责。
 
 #### KV Cache 影响
 
