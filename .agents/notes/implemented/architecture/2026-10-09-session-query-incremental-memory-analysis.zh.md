@@ -48,7 +48,7 @@ Trace 在选定前缀上先检查目标存在，再 canonical fold/preparation�
 | SQLite / persistence / codecs | 保持搜索索引、磁盘格式、完整 cold 读取、恢复及校验职责。 |
 | 全历史消费方 | 保持完整 preparation 语义；controller/GUI history 不是有界局部读取。 |
 
-List/Detail 采用有界原字段读取，不为每页或搜索命中请求全 surface/trace。消费方默认值保持[真实历史有界抽样](<../../../../../dsh-session-tools/docs/reading-budgets.md>)确认的数值；省略 `surfaces` 时搜索 current、shadowed、log-only 中已有的全部索引文档。[SQLite 文档构建](<../../../../packages/session-query/session-query/src/documents.ts>)索引提取文本，不提供完整 source/shadow 关系或 surface 位置顺序。本决策不新增公共关系 API、持久活动树、SQLite schema 变更或存储迁移。消费方继续只经公开 query 读取，绝不打开 session 文件。
+List/Detail 采用有界原字段读取，不为每页或搜索命中请求全 surface/trace。消费方默认值遵循[消费方配置与预算](<../../../../../dsh-session-tools/README.md#配置与预算>)；省略 `surfaces` 时搜索 current、shadowed、log-only 中已有的全部索引文档。[SQLite 文档构建](<../../../../packages/session-query/session-query/src/documents.ts>)索引提取文本，不提供完整 source/shadow 关系或 surface 位置顺序。本决策不新增公共关系 API、持久活动树、SQLite schema 变更或存储迁移。消费方继续只经公开 query 读取，绝不打开 session 文件。
 
 ## 曾考虑的替代方案
 
