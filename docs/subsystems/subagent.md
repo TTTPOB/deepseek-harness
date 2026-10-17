@@ -400,11 +400,11 @@ type SubagentDescendantListEntry = SubagentListEntry & {
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
-<a id="ctxsubagentmodelselection--subagentmodelselectionconfig"></a>
+<a id="ctxsubagentmodelselection--subagentmodelselectionsettingssource"></a>
 
-### `ctx.subagentModelSelection` — `SubagentModelSelectionConfig`
+### `ctx.subagentModelSelection` — `SubagentModelSelectionSettingsSource`
 
-Singleton settings owner read when delegation tools are composed for a Session.
+Read source for the current user preference.
 
 ```ts cordis-catalog
 /**
@@ -414,7 +414,7 @@ Singleton settings owner read when delegation tools are composed for a Session.
 current(): SubagentModelSelectionSettings
 ```
 
-Source: [`packages/subagent/tool-subagent/src/model-selection-settings.ts`](../../packages/subagent/tool-subagent/src/model-selection-settings.ts)
+Source: [`packages/subagent/subagent/src/model-selection.ts`](../../packages/subagent/subagent/src/model-selection.ts)
 
 <a id="ctxsubagents--subagentruntime"></a>
 

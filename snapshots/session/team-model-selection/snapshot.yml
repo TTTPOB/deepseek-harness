@@ -1,0 +1,8 @@
+version: 1
+scenario: team-model-selection
+profile: headless
+composition: team-model-selection
+recording: authored
+header:
+  class: team-model-selection
+  pin: true

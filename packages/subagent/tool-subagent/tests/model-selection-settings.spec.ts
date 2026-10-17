@@ -19,7 +19,7 @@ import SubagentModelSelectionConfig from '../src/model-selection-settings.ts'
 import {
   subagentModelSelectionPolicy,
   subagentModelSelectionProjectionDefinition,
-} from '../src/model-selection-state.ts'
+} from '@deepseek-ai/dsh-subagent'
 import { callSubagent, text } from './harness.ts'
 
 const ALLOWED_MODELS = [{ provider: 'alpha', model: 'fast-model' }]

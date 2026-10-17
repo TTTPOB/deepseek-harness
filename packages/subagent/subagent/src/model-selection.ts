@@ -1,4 +1,4 @@
-/** Child LLM route selection for the subagent tool. */
+/** Child LLM route selection for delegated subagents. */
 
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
@@ -23,6 +23,30 @@ export const AllowedModelRouteSchema: z<AllowedModelRoute> = z.object({
 export interface ModelSelectionPolicy {
   /** Exact provider/model routes authorized for explicit selection. */
   readonly routes: readonly AllowedModelRoute[]
+}
+
+/** Current user preference that seeds a new top-level Session's model-selection policy. */
+export interface SubagentModelSelectionSettings {
+  /** Whether newly composed top-level Sessions receive model-selectable delegation. */
+  enabled: boolean
+  /** Exact child LLM routes offered to those Sessions. */
+  allowedModels: AllowedModelRoute[]
+}
+
+/** Read source for the current user preference. */
+export interface SubagentModelSelectionSettingsSource {
+  /**
+   * Read a detached selection preference for the next eligible Session composition.
+   * @returns the enabled state and exact allowed routes.
+   */
+  current(): SubagentModelSelectionSettings
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** User preference sampled when a new Session receives delegation tools. */
+    subagentModelSelection: SubagentModelSelectionSettingsSource
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 /** Public Agent Teams identities, durable records, and service request values. */
 
+import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
@@ -167,7 +168,14 @@ export interface SpawnTeammateRequest {
   readonly description: string
   readonly prompt: ContentBlock[]
   readonly context: 'fresh' | 'fork'
+  /** Continuable-subagent provider that executes the child; not its LLM provider. */
   readonly provider: string
+  /**
+   * Optional child LLM route overrides forwarded to the executing provider.
+   * Omitted values follow the provider's own inheritance, and passing any
+   * value requires that provider's `agentOptions` capability.
+   */
+  readonly agentOptions?: AgentOptions
   readonly signal: AbortSignal
 }
 

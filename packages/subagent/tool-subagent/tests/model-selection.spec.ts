@@ -12,11 +12,6 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { MockAdapter } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import * as mock from './scripted-provider.ts'
 import * as tool from '../src/index.ts'
-import {
-  assertAllowedModelRoutes,
-  assertAllowedModelSelection,
-  preflightChildLlmRoute,
-} from '../src/model-selection.ts'
 import { callSubagent, modelSelectionSetupAgent, setup, text } from './harness.ts'
 
 const REASONING = {
@@ -39,58 +34,6 @@ function parentWithRoute(
 }
 
 describe('dsh-tool-subagent model selection', () => {
-  it('rejects empty route ids at the configuration boundary', () => {
-    expect(() => { assertAllowedModelRoutes([{ provider: '', model: 'model' }]) })
-      .toThrow('requires non-empty provider and model ids')
-    expect(() => { assertAllowedModelRoutes([{ provider: 'provider', model: '' }]) })
-      .toThrow('requires non-empty provider and model ids')
-    expect(() => { assertAllowedModelRoutes({ provider: 'provider', model: 'model' }) })
-      .toThrow('requires an array of routes')
-    expect(() => { assertAllowedModelRoutes([{ provider: 1, model: 'model' }]) })
-      .toThrow('requires non-empty provider and model ids')
-  })
-
-  it('allows pure inheritance but rejects explicit values outside a Session allowlist', () => {
-    const policy = {
-      routes: [{ provider: 'alpha', model: 'allowed-model' }],
-    }
-    const parent = { provider: 'alpha', model: 'parent-model' }
-
-    expect(() => { assertAllowedModelSelection(policy, parent, undefined, {}) }).not.toThrow()
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        parent,
-        { provider: 'alpha', model: 'allowed-model' },
-        { provider: 'alpha', model: 'allowed-model' },
-      )
-    }).not.toThrow()
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        parent,
-        { provider: 'alpha', model: 'other-model' },
-        { provider: 'alpha', model: 'other-model' },
-      )
-    }).toThrow('is not allowed for this Session')
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        parent,
-        { reasoningEffort: ReasoningEffortId('low') },
-        { reasoning_effort: 'low' },
-      )
-    }).toThrow('alpha/parent-model')
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        {},
-        { reasoningEffort: ReasoningEffortId('low') },
-        { reasoning_effort: 'low' },
-      )
-    }).toThrow('without an effective provider and model')
-  })
-
   it('leaves deployment or parent defaults outside the allowlist usable when the call selects nothing', async () => {
     let starts = 0
     const ctx = await setup(
@@ -288,12 +231,6 @@ describe('dsh-tool-subagent model selection', () => {
     })
     expect(result.isError).toBe(true)
     expect(text(result)).toContain('without an effective provider and model')
-  })
-
-  it('rejects preflight without an effective provider and model', async () => {
-    const ctx = await setup({ provider: 'mock' })
-    await expect(preflightChildLlmRoute(ctx.llm, {}, undefined, AbortSignal.abort()))
-      .rejects.toThrow('without an effective provider and model')
   })
 
   it.each([

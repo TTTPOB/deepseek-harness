@@ -14,30 +14,23 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import {
+  assertAllowedModelSelection,
   assertSubagentMaxDepth,
   delegationDepthOf,
-  parentAgentOptionsForDelegation,
-} from '@deepseek-ai/dsh-subagent'
-import type { SubagentProvider } from '@deepseek-ai/dsh-subagent'
-import {
-  assertAllowedModelSelection,
   hasConfiguredLlmSelection,
   hasDelegationModelRequest,
+  parentAgentOptionsForDelegation,
   preflightChildLlmRoute,
   requestedAgentOptions,
-} from './model-selection.ts'
-import type { DelegationModelRequest, ModelSelectionPolicy } from './model-selection.ts'
+  selectSubagentModelSelectionPolicy,
+  subagentModelSelectionProjectionDefinition,
+} from '@deepseek-ai/dsh-subagent'
+import type { DelegationModelRequest, ModelSelectionPolicy, SubagentProvider } from '@deepseek-ai/dsh-subagent'
 import { registerListSubagentModels } from './list-models.ts'
 import { SubagentPresetSelection, type PresetSelectionConfig, type PresetSelectionRequest } from './preset-selection.ts'
 import type {} from './model-selection-settings.ts'
-import {
-  recordSubagentModelSelection,
-  subagentModelSelectionProjectionDefinition,
-  subagentModelSelectionPolicy,
-} from './model-selection-state.ts'
 
 export const name = 'tool-subagent'
 export const inject = ['tools', 'subagents', 'systemPrompt', 'sessionProjections']
@@ -410,35 +403,13 @@ export async function apply(ctx: Context, config: Config, session?: Session): Pr
       + '@deepseek-ai/dsh-tool-subagent/model-selection-settings in the Host scope',
     )
   }
-  const selectForSession = (target: Session): ModelSelectionPolicy | undefined => {
-    if (!modelSelectionCapable || settings === undefined) return undefined
-    const freshSession = target.firstLiveSeq === 0
-      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-      && target.eventAt(SessionSeq(0))?.type !== 'session/end-seed'
-    let allowedModels = subagentModelSelectionPolicy(ctx.sessionProjections, target)
-    if (allowedModels === undefined) {
-      const parentId = target.header.origin === 'subagent'
-        ? target.header.parentSession
-        : undefined
-      if (parentId !== undefined) {
-        const sessions = ctx.get('sessions')
-        if (sessions === undefined) {
-          throw new Error('tool-subagent: child model-selection inheritance requires the Session registry')
-        }
-        const parent = sessions.get(parentId)
-        allowedModels = parent === undefined
-          ? undefined
-          : subagentModelSelectionPolicy(ctx.sessionProjections, parent)
-      } else if (freshSession) {
-        const current = settings.current()
-        allowedModels = current.enabled ? current.allowedModels : undefined
-      }
-    }
-    if (allowedModels !== undefined) {
-      recordSubagentModelSelection(ctx.sessionProjections, target, allowedModels)
-    }
-    return allowedModels === undefined ? undefined : { routes: allowedModels }
-  }
+  const selectionSettings = modelSelectionCapable ? settings : undefined
+  const selectForSession = (target: Session): ModelSelectionPolicy | undefined =>
+    selectSubagentModelSelectionPolicy(
+      { projections: ctx.sessionProjections, sessions: ctx.get('sessions') },
+      target,
+      selectionSettings,
+    )
 
   if (session !== undefined) {
     install(ctx, selectForSession(session))

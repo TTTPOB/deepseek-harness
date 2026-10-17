@@ -126,17 +126,20 @@ export class TeamRoster {
   list(membership: TeamMembership): TeamMemberView[] {
     const { root } = membership
     const state = this.journal.state(root)
+    const leadModel = latestModel(root)
     const result: TeamMemberView[] = [{
       id: root.id,
       name: 'lead',
       role: 'lead',
       status: availability(root),
-      ...root.options.model === undefined ? {} : { model: root.options.model },
+      ...leadModel === undefined ? {} : { model: leadModel },
       diagnostics: [],
     }]
     for (const member of state.members) {
       const live = this.ctx.agents.get(member.id)
-      const model = live?.options.model ?? root.options.model
+      // A teammate's model comes from its own Agent only. An unloaded child
+      // has no current route, and the Lead's route describes no other member.
+      const model = latestModel(live)
       result.push({
         id: member.id,
         name: member.name,
@@ -269,6 +272,7 @@ export class TeamRoster {
         request: {
           prompt: request.prompt,
           parent: root,
+          ...request.agentOptions === undefined ? {} : { agentOptions: request.agentOptions },
         },
         signal,
       })
@@ -419,6 +423,7 @@ export class TeamRoster {
   /** Build one runtime member row after successful creation. */
   private memberView(member: TeamMemberSnapshot & { readonly phase: 'active' }): TeamMemberView {
     const live = this.ctx.agents.get(member.id)
+    const model = latestModel(live)
     return {
       id: member.id,
       name: member.name,
@@ -427,7 +432,7 @@ export class TeamRoster {
       description: member.description,
       provider: member.provider,
       context: member.context,
-      ...live?.options.model === undefined ? {} : { model: live.options.model },
+      ...model === undefined ? {} : { model },
       diagnostics: [],
     }
   }
@@ -474,4 +479,16 @@ export class TeamRoster {
 /** Turn availability is independent of whether the Agent is loaded. */
 function availability(agent: Agent | undefined): 'running' | 'inactive' {
   return agent?.status === 'running' ? 'running' : 'inactive'
+}
+
+/**
+ * Latest model of one live Agent: a request-time selection owns the logged
+ * route after the first request, while creation options only supply the
+ * fallback before it. An unloaded Agent has no model to report.
+ * @param agent - live Team member, or undefined when its Agent is not loaded.
+ * @returns the model actually in use, or undefined when unknown.
+ */
+function latestModel(agent: Agent | undefined): string | undefined {
+  if (agent === undefined) return undefined
+  return agent.session.requestHeader()?.config.model ?? agent.options.model
 }

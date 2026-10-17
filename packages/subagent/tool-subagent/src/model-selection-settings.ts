@@ -3,26 +3,14 @@ import type { Volatile } from '@deepseek-ai/cordis'
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import {
-  AllowedModelRouteSchema,
-  assertAllowedModelRoutes,
-  type AllowedModelRoute,
-} from './model-selection.ts'
+import { AllowedModelRouteSchema, assertAllowedModelRoutes } from '@deepseek-ai/dsh-subagent'
+import type {
+  AllowedModelRoute,
+  SubagentModelSelectionSettings,
+  SubagentModelSelectionSettingsSource,
+} from '@deepseek-ai/dsh-subagent'
 
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    /** User preference sampled when a new Session receives delegation tools. */
-    subagentModelSelection: SubagentModelSelectionConfig
-  }
-}
-
-/** Stored user preference; the shipped composition defaults it off. */
-export interface SubagentModelSelectionSettings {
-  /** Whether newly composed top-level Sessions receive model selection. */
-  enabled: boolean
-  /** Exact child LLM routes offered to newly composed top-level Sessions. */
-  allowedModels: AllowedModelRoute[]
-}
+export type { SubagentModelSelectionSettings } from '@deepseek-ai/dsh-subagent'
 
 /** Optional deployment base for the preference. */
 export interface Config {
@@ -33,7 +21,7 @@ export interface Config {
 }
 
 /** Singleton settings owner read when delegation tools are composed for a Session. */
-export class SubagentModelSelectionConfig extends Service {
+export class SubagentModelSelectionConfig extends Service implements SubagentModelSelectionSettingsSource {
   static Config = z.object({
     enabled: z.boolean().default(false).volatile(),
     allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile(),

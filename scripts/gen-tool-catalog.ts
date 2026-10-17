@@ -576,11 +576,12 @@ const TOOL_PACKAGES: ToolPackage[] = [
     pkg: '@deepseek-ai/dsh-experimental-tool-agent-team',
     dir: 'tool-agent-team',
     source: 'packages/experimental/tool-agent-team/src/index.ts',
-    requires: ['ctx.tools', 'ctx.systemPrompt', 'ctx.agentTeams', 'an exact live Team member Agent'],
+    requires: ['ctx.tools', 'ctx.systemPrompt', 'ctx.agentTeams', 'ctx.sessions', 'ctx.sessionProjections', 'ctx.subagents', 'an exact live Team member Agent'],
     writes: ['tool/call', 'team/member', 'team/task', 'agent/inbox/spliced', 'user/message on inbox claim', 'tool/result'],
     async mount(ctx) {
       await ctx.plugin(AgentRegistry)
       await ctx.plugin(SessionStore)
+      await ctx.plugin(SubagentRuntime)
       const session = ctx.sessions.create(SessionId('tool-catalog-team-lead'))
       let agent!: Agent
       const membership = {
@@ -608,7 +609,7 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     scope: ctx => catalogChildScopes.get(ctx) as Agent,
     note:
-      'All nine tools are scoped to implicit Team Leads and durable teammates. The shipped dsh-base bundle keeps the package disabled; the documented Agent Teams profile patch enables it while disabling the legacy continuable-child control names.',
+      'The nine default tools are scoped to implicit Team Leads and durable teammates. Enabling `modelSelectionSettings` adds `list_agent_models` and per-call LLM selection on `spawn_teammate`, using the Session policy shared with ordinary Subagent tools. The default schema above keeps model selection off. The shipped dsh-base bundle keeps the package disabled; the documented Agent Teams profile patch enables it while disabling the legacy continuable-child control names.',
   },
   {
     pkg: '@deepseek-ai/dsh-tool-todo',

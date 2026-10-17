@@ -558,6 +558,91 @@ describe('Team identity and provisioning', () => {
     journal.state = state
     await child.dispose()
   })
+
+  it('forwards child agentOptions to a fresh teammate', async () => {
+    const { ctx, lead } = await setup([textResponse('lead answer'), 'hang', textResponse('settled')])
+    lead.followup(createUserMessage({ content: content('lead turn'), source: { kind: 'user' } }))
+    await lead.whenIdle()
+    const fresh = await ctx.agentTeams.spawnTeammate(lead, {
+      name: 'fresh-route',
+      description: 'fresh route',
+      prompt: content('wait'),
+      context: 'fresh',
+      provider: 'spawn',
+      agentOptions: { provider: 'mock', model: 'fresh-model' },
+      signal: SIGNAL,
+    })
+    const freshAgent = await waitRunning(ctx, fresh.member.id)
+    // The roster provider stays the execution provider; the model is the child's.
+    expect(fresh.member).toMatchObject({ provider: 'spawn', model: 'fresh-model' })
+    expect(freshAgent.options).toMatchObject({ provider: 'mock', model: 'fresh-model' })
+    ctx.agentTeams.interrupt(lead, 'fresh-route')
+    await waitNoAgent(ctx, fresh.member.id)
+    await lead.whenIdle()
+  })
+
+  it('forwards child agentOptions to a fork teammate', async () => {
+    const { ctx, lead, adapter } = await setup([textResponse('lead answer'), 'hang', textResponse('settled')])
+    lead.followup(createUserMessage({ content: content('lead turn'), source: { kind: 'user' } }))
+    await lead.whenIdle()
+    const forked = await ctx.agentTeams.spawnTeammate(lead, {
+      name: 'fork-route',
+      description: 'fork route',
+      prompt: content('review'),
+      context: 'fork',
+      provider: 'fork',
+      agentOptions: { provider: 'mock', model: 'fork-model' },
+      signal: SIGNAL,
+    })
+    const forkAgent = await waitRunning(ctx, forked.member.id)
+    expect(forked.member).toMatchObject({ provider: 'fork', context: 'fork', model: 'fork-model' })
+    expect(forkAgent.options).toMatchObject({ provider: 'mock', model: 'fork-model' })
+    expect(adapter.requests.find(request => request.sessionId === forked.member.id)?.model)
+      .toBe('fork-model')
+    ctx.agentTeams.interrupt(lead, 'fork-route')
+    await waitNoAgent(ctx, forked.member.id)
+    await lead.whenIdle()
+  })
+
+  it('reports each member own latest model and omits it once unloaded', async () => {
+    const { ctx, lead } = await setup(['hang', textResponse('finished'), textResponse('settled')])
+    const loaded = await ctx.agentTeams.spawnTeammate(lead, {
+      name: 'loaded-worker',
+      description: 'loaded worker',
+      prompt: content('wait'),
+      context: 'fresh',
+      provider: 'spawn',
+      agentOptions: { provider: 'mock', model: 'child-model' },
+      signal: SIGNAL,
+    })
+    const child = await waitRunning(ctx, loaded.member.id)
+    expect(ctx.agentTeams.listMembers(lead)[1]).toMatchObject({ model: 'child-model' })
+    // Creation options are not the latest route; a request-time selection owns it.
+    child.session.append('request/header', {
+      header: { config: { provider: 'mock', model: 'switched-model' } },
+      reason: 'change',
+    })
+    expect(ctx.agentTeams.listMembers(lead)[1]).toMatchObject({ model: 'switched-model' })
+    const finished = await ctx.agentTeams.spawnTeammate(lead, {
+      name: 'finished-worker',
+      description: 'finished worker',
+      prompt: content('finish'),
+      context: 'fresh',
+      provider: 'spawn',
+      agentOptions: { provider: 'mock', model: 'finished-model' },
+      signal: SIGNAL,
+    })
+    await waitNoAgent(ctx, finished.member.id)
+    const rows = ctx.agentTeams.listMembers(lead)
+    expect(rows[0]).toMatchObject({ name: 'lead', model: 'mock' })
+    expect(rows[1]).toMatchObject({ name: 'loaded-worker', model: 'switched-model' })
+    expect(rows[2]).toMatchObject({ name: 'finished-worker' })
+    expect(rows[2]).not.toHaveProperty('model')
+    ctx.agentTeams.interrupt(lead, 'loaded-worker')
+    await waitNoAgent(ctx, loaded.member.id)
+    expect(ctx.agentTeams.listMembers(lead)[1]).not.toHaveProperty('model')
+    await lead.whenIdle()
+  })
 })
 
 describe('Team shared task DAG', () => {

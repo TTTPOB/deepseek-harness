@@ -122,6 +122,32 @@ export {
   SubagentDepthError,
 } from './child-agent.ts'
 export type { ChildComposition, DelegatedPolicyOverrides } from './child-agent.ts'
+export {
+  AllowedModelRouteSchema,
+  assertAllowedModelRoutes,
+  assertAllowedModelSelection,
+  hasConfiguredLlmSelection,
+  hasDelegationModelRequest,
+  modelRouteKey,
+  preflightChildLlmRoute,
+  requestedAgentOptions,
+} from './model-selection.ts'
+export type {
+  AllowedModelRoute,
+  DelegationModelRequest,
+  ModelSelectionPolicy,
+  SubagentModelSelectionSettings,
+  SubagentModelSelectionSettingsSource,
+} from './model-selection.ts'
+export {
+  recordSubagentModelSelection,
+  selectSubagentModelSelectionPolicy,
+  subagentModelSelectionPolicy,
+  subagentModelSelectionProjectionDefinition,
+} from './model-selection-state.ts'
+export type { SubagentModelSelectionScope } from './model-selection-state.ts'
+export { listSubagentModels } from './model-discovery.ts'
+export type { SubagentModelDiscoveryRequest } from './model-discovery.ts'
 export type { AgentMessageSource, SubagentSettledMessageSource } from './continuation-messages.ts'
 export type * from './control-types.ts'
 export type { SubagentDescendantListEntry } from './list-children.ts'

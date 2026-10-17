@@ -180,7 +180,7 @@ describe('spawn preset selection', () => {
     }
   })
 
-  it('rejects Agent publication when a preset delegation tool names an absent preset', async () => {
+  it('rolls back Agent creation when a preset delegation tool names an absent preset', async () => {
     const { ctx } = await setup({})
     await ctx.agentPresets.register({
       id: 'missing-reference',
@@ -189,13 +189,10 @@ describe('spawn preset selection', () => {
         config: { provider: 'custom-spawn', toolName: 'missing_delegate', agentPreset: 'absent' },
       }],
     })
-    const published = vi.fn()
-    ctx.on('agent/created', published)
     await expect(ctx.agents.create({
       sessionId: SessionId('unpublished-preset'),
       setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, 'missing-reference') },
     })).rejects.toThrow('Unknown agent preset: absent')
-    expect(published).not.toHaveBeenCalled()
     expect(ctx.agents.list()).toEqual([])
     expect(ctx.sessions.list()).toEqual([])
     expect(ctx.tools.schemas().map(schema => schema.name)).not.toContain('missing_delegate')

@@ -59,7 +59,7 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 Ask the Lead to create a teammate: give it a unique lowercase name such as `reviewer` and describe its job. A teammate starts fresh with no memory of the Lead's conversation, or as a fork that inherits the Lead's completed turns; the creation request chooses which. Teammate names are permanent — even a teammate whose creation failed keeps its name, and no name is ever reused.
 
-The roster shows every member with its role (`lead` or `teammate`) and current status: `running`, `inactive` (no turn is executing, whether loaded or stored), `provisioning`, or `failed`. A member that is not loaded receives its messages when it wakes.
+The roster shows every member with its role (`lead` or `teammate`) and current status: `running`, `inactive` (no turn is executing, whether loaded or stored), `provisioning`, or `failed`. A member that is not loaded receives its messages when it wakes. A loaded member's row also reports its own latest model — the route recorded by its most recent request, or its creation options before the first request. An unloaded member has no current route, so its row omits `model` rather than borrowing the Lead's.
 
 Only the Lead can create teammates or interrupt them.
 
@@ -123,7 +123,7 @@ The [Agent Teams Agent Note](../../../.agents/notes/implemented/feature/2026-08-
 
 ### Team identity and roster
 
-Every ordinary runtime root is the implicit Lead of a Team whose `TeamId` equals its `SessionId`; there is no creation event, and durable Team state begins with the first member or task record. `spawnTeammate()` first appends and flushes a `provisioning` member record, then asks the configured provider to create the reserved child; a provider failure appends a durable `failed` member. A fresh child starts with no Lead history; a fork child captures the Lead's completed-turn prefix once. Recovery reconciles an unterminated provisioning record against the child's independently persisted Session: a matching direct-parent and continuable descriptor plus a recorded initial user message produces `active`, and anything else produces `failed`. If recovery wins a same-process race, the creator accepts the terminal state or reports `TEAM_PROVISIONING_CONFLICT` and drains the child. Names are reserved by the first provisioning record and never reused.
+Every ordinary runtime root is the implicit Lead of a Team whose `TeamId` equals its `SessionId`; there is no creation event, and durable Team state begins with the first member or task record. `spawnTeammate()` first appends and flushes a `provisioning` member record, then asks the configured provider to create the reserved child; a provider failure appends a durable `failed` member. The request's optional `agentOptions` is forwarded to that provider unchanged, and `provider` continues to name the execution backend rather than the child LLM provider. A fresh child starts with no Lead history; a fork child captures the Lead's completed-turn prefix once. Recovery reconciles an unterminated provisioning record against the child's independently persisted Session: a matching direct-parent and continuable descriptor plus a recorded initial user message produces `active`, and anything else produces `failed`. If recovery wins a same-process race, the creator accepts the terminal state or reports `TEAM_PROVISIONING_CONFLICT` and drains the child. Names are reserved by the first provisioning record and never reused.
 
 ### Direct messages and historical compatibility
 
@@ -190,6 +190,20 @@ Each peer delivery adds the sender prefix plus message content to the target his
 #### KV Cache effect
 
 Peer messages append after the target's reusable history prefix. Cold resume reuses the persisted conversation before appending the new message.
+
+### Roster model labels
+
+#### What the model sees
+
+`spawn_teammate` and `list_agents` results include `model` only when the member is loaded and its own route is known: the model recorded by its latest request, or its creation options before the first request. An unloaded member omits the field instead of inheriting the Lead's route.
+
+#### Token effect
+
+One `model` value per roster row where known; an omitted value adds no token.
+
+#### KV Cache effect
+
+The label is appended with the tool result after the existing reusable history prefix.
 
 ## Known Limitations and Deferred Work
 

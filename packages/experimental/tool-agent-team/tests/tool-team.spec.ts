@@ -805,7 +805,9 @@ describe('dsh-tool-team', () => {
     expect(text(result)).toContain('unknown tool "list_agents"')
     expect('default' in toolTeam).toBe(false)
     expect(toolTeam.name).toBe('tool-agent-team')
-    expect(toolTeam.inject).toEqual(['agents', 'agentTeams', 'tools', 'systemPrompt'])
+    expect(toolTeam.inject).toEqual([
+      'agents', 'agentTeams', 'tools', 'systemPrompt', 'sessions', 'sessionProjections', 'subagents',
+    ])
   })
 
   it('uses configured fresh and fork provider names', async () => {

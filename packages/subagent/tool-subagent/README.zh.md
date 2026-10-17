@@ -71,9 +71,12 @@ kind: "package-reference"
 
 在 [preset 插件列表](../../preset/agent-preset-registry/README.zh.md)中配置 persona 与工具。包含 `persona` 或 `toolFilter` 的工具配置在加载时会报迁移错误。本地子级采用共享的 [preset 恢复规则](../subagent/README.zh.md#restoring-child-composition)。
 
+<a id="selecting-a-child-llm"></a>
 ### 选择子级 LLM
 
 设置 `modelSelectionSettings: true`，即可在组合每个全新顶层 Session 时读取宿主的 `subagent-model-selection` 偏好。没有已记录策略的恢复 Session 会保持禁用，包括显式为空的恢复。启用后，非空的精确 provider/model 路由列表会记录进 Session、由子 Session 继承，后续设置编辑不会改变它。工具随后公开可选的 `provider`、`model` 与 `reasoning_effort` 字段，并注册共享的 `list_subagent_models` 工具。此模式要求后端声明 `agentOptions`；两个进程内后端和 DSH SDK 支持该能力，而 ACP、Codex 与 Claude Code 会拒绝它，而不是忽略它。
+
+路由合并、白名单执行、实时预检、Session 策略冻结与发现逻辑都是 [`dsh-subagent`](../subagent/README.zh.md#shared-model-selection-policy) 的共享导出；本工具只注册面向模型的字段与 `list_subagent_models`，其 `model-selection-settings` 入口只拥有宿主偏好服务。
 
 一次调用需同时提供 `provider` 与 `model`；当配置值、父 agent 值或提供方持有的默认值能提供路由时，也可只提供推理等级。静态的 `provider.agentRouteDefaults` 在存在时构成提供方／模型基线；工具配置与模型字段会在路由相关强度合并和确切路由预检前覆盖它。没有这些默认值的提供方会使用父 agent 最新已记录请求中的兼容值，再使用父级首次请求前的创建选项，并保留配置的 `maxTokens`。更改路由但未显式提供推理等级时，会清除继承的路由自有等级，使所选模型解析自己的默认值。实时 LLM 适配器在创建子 agent 前校验有效路由。目录成员资格只提供建议，因此适配器接受时，模型可以使用未列出的 id。
 
@@ -109,10 +112,8 @@ kind: "package-reference"
 |---|---|
 | [`src/index.ts`](src/index.ts) | 工具注册、提供方生命周期镜像、activation 请求 |
 | [`src/preset-selection.ts`](src/preset-selection.ts) | 配置的 preset 校验、模型白名单与描述引导 |
-| [`src/model-selection.ts`](src/model-selection.ts) | 请求／配置合并与实时 LLM 路由预检 |
-| [`src/model-selection-settings.ts`](src/model-selection-settings.ts) | 为新 Session 读取的宿主所有 opt-in 设置 |
-| [`src/model-selection-state.ts`](src/model-selection-state.ts) | 记录并继承已读取决定的 Session 事件 |
-| [`src/list-models.ts`](src/list-models.ts) | `list_subagent_models` 运行时发现工具 |
+| [`src/model-selection-settings.ts`](src/model-selection-settings.ts) | 为新 Session 读取的宿主所有 opt-in 设置；路由策略、Session 冻结与发现逻辑来自 `dsh-subagent` |
+| [`src/list-models.ts`](src/list-models.ts) | 基于共享发现核心注册 `list_subagent_models` |
 
 </details>
 

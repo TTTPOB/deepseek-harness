@@ -71,9 +71,12 @@ The configured default and allowlist must name declared presets. A tool inside a
 
 Compose persona and tools in the [preset plugin list](../../preset/agent-preset-registry/README.md). Tool configuration containing `persona` or `toolFilter` fails at load with a migration error. Local children use the shared [preset restoration rules](../subagent/README.md#restoring-child-composition).
 
+<a id="selecting-a-child-llm"></a>
 ### Selecting a child LLM
 
 Set `modelSelectionSettings: true` to sample the Host's `subagent-model-selection` preference when each fresh top-level Session is composed. A restored Session without a recorded policy remains disabled, including an explicitly empty restore. When enabled, the non-empty exact provider/model route list is recorded in the Session, inherited by child Sessions, and unchanged by later settings edits. The tool then exposes optional `provider`, `model`, and `reasoning_effort` fields and registers the shared `list_subagent_models` tool. This mode requires a backend that advertises `agentOptions`; both in-process backends and DSH SDK support it, while ACP, Codex, and Claude Code reject it rather than ignore it.
+
+Route merging, allowlist enforcement, live preflight, the frozen Session policy, and discovery are shared exports of [`dsh-subagent`](../subagent/README.md#shared-model-selection-policy); this tool registers the model-facing fields and `list_subagent_models`, and its `model-selection-settings` entry owns only the Host preference service.
 
 A call supplies `provider` and `model` together, or supplies only an effort when configured, parent, or provider-owned defaults provide the route. Static `provider.agentRouteDefaults`, when present, form the provider/model baseline; tool configuration and model fields overlay it before route-aware effort merging and exact-route preflight. Providers without these defaults use compatible values from the parent's latest logged request, then the parent's creation options before its first request, while retaining the configured `maxTokens`. Changing the route without an explicit effort clears the inherited route-owned effort, so the selected model resolves its default. The live LLM adapter validates the effective route before child creation. Catalog membership remains advisory, so a model can use an unlisted id when its adapter accepts it.
 
@@ -109,10 +112,8 @@ The tool's description derives from `provider.inheritsParentContext`: a fresh ch
 |---|---|
 | [`src/index.ts`](src/index.ts) | Tool registration, provider lifecycle mirroring, activation requests |
 | [`src/preset-selection.ts`](src/preset-selection.ts) | Configured preset validation, model allowlist, and description guidance |
-| [`src/model-selection.ts`](src/model-selection.ts) | Request/config merge and live LLM route preflight |
-| [`src/model-selection-settings.ts`](src/model-selection-settings.ts) | Host-owned opt-in setting sampled for new Sessions |
-| [`src/model-selection-state.ts`](src/model-selection-state.ts) | Session event that records and inherits the sampled decision |
-| [`src/list-models.ts`](src/list-models.ts) | `list_subagent_models` runtime discovery tool |
+| [`src/model-selection-settings.ts`](src/model-selection-settings.ts) | Host-owned opt-in setting sampled for new Sessions; routing policy, Session freezing, and discovery come from `dsh-subagent` |
+| [`src/list-models.ts`](src/list-models.ts) | `list_subagent_models` registration over the shared discovery core |
 
 </details>
 

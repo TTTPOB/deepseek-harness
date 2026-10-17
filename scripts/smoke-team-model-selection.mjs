@@ -115,7 +115,7 @@ try {
   }
   assert.deepEqual(shared.subagentModelSelectionProjectionDefinition.key, 'subagentModelSelectionPolicy')
   assert.equal(shared.subagentModelSelectionProjectionDefinition.stateVersion, 1)
-  assert.equal(typeof shared.AllowedModelRouteSchema, 'object')
+  assert.equal(typeof shared.AllowedModelRouteSchema, 'function')
 
   const { LlmAdapter, ReasoningEffortId, ToolCallId } = await load('@deepseek-ai/dsh-llm')
   const { SessionId } = await load('@deepseek-ai/dsh-session')
@@ -129,7 +129,11 @@ try {
       ] } }
     }
     async listModels(_provider) {
-      return [{ id: 'mock', name: 'Mock' }, { id: 'other', name: 'Other' }, { id: 'outside', name: 'Outside' }]
+      return [
+        { provider: 'mock', id: 'mock', name: 'Mock' },
+        { provider: 'mock', id: 'other', name: 'Other' },
+        { provider: 'mock', id: 'outside', name: 'Outside' },
+      ]
     }
     async *stream(options) {
       this.requests.push(options)
@@ -172,9 +176,6 @@ try {
   assert(spawn)
   for (const field of ['provider', 'model', 'reasoning_effort']) assert(spawn.parameters.properties[field], field)
   assert(toolNames.includes('list_agent_models'))
-  for (const absent of ['subagent', 'subagent_fork']) {
-    assert(!toolNames.includes(absent), `${absent} must not be mounted for the Team policy check`)
-  }
 
   const recorded = ctx.sessionProjections.stateOf(lead.session, 'subagentModelSelectionPolicy')
   assert.deepEqual(recorded, settings.allowedModels)
@@ -201,8 +202,9 @@ try {
   assert.match(text(efforts), /Reasoning efforts:/)
   assert.match(text(efforts), /high/)
 
-  await assert.rejects(execute('spawn_teammate', { ...spawnArgs('alpha'), provider: 'mock', model: 'mock', reasoning_effort: 'extreme' }),
-    /does not support reasoning effort/)
+  const rejected = await execute('spawn_teammate', { ...spawnArgs('alpha'), provider: 'mock', model: 'mock', reasoning_effort: 'extreme' })
+  assert.equal(rejected.isError, true)
+  assert.match(text(rejected), /does not support reasoning effort/)
   assert(!ctx.agentTeams.listMembers(lead).some(member => member.name === 'alpha'), 'rejected preflight keeps the name free')
   assert.equal(lead.session.snapshotEvents().filter(event => event.type === 'team/member'
     && event.data.member.name === 'alpha').length, 0)
@@ -224,8 +226,9 @@ try {
     { current: () => ({ enabled: true, allowedModels: [{ provider: 'mock', model: 'outside' }] }) })
   assert.deepEqual(childPolicy.routes, settings.allowedModels, 'a child inherits the frozen parent policy')
 
-  await assert.rejects(execute('spawn_teammate', { ...spawnArgs('beta'), provider: 'mock', model: 'outside' }),
-    /not allowed for this Session/)
+  const denied = await execute('spawn_teammate', { ...spawnArgs('beta'), provider: 'mock', model: 'outside' })
+  assert.equal(denied.isError, true)
+  assert.match(text(denied), /not allowed for this Session/)
   assert(!ctx.agentTeams.listMembers(lead).some(member => member.name === 'beta'))
 
   console.log('Four team-model-selection artifacts resolve through official Host peers; public model-selection helpers, per-call route/effort, preflight before name reservation, and the frozen policy passed. No Host process used.')

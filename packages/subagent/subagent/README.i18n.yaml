@@ -33,8 +33,11 @@
   en: a740e5e9bdd661d9
   zh: 712a5458fc8b3615
 /deepseek-ai-dsh-subagent/use-this-package/messaging-interrupting-and-discovering:
-  en: 050177fbbaade432
-  zh: 99f2b9f98088314d
+  en: de75eed48f3349c5
+  zh: 5a8a050043d0ebb0
+/deepseek-ai-dsh-subagent/use-this-package/shared-model-selection-policy:
+  en: b7d163ba6ea268a7
+  zh: d16ed4f71bc6d094
 /deepseek-ai-dsh-subagent/use-this-package/failure-and-recovery:
   en: 245fb0d5c3df5ccf
   zh: e69eed9e5070ce25
@@ -45,8 +48,8 @@
   en: ed526b6f34a3d6bf
   zh: 47a90717b89d4c79
 /deepseek-ai-dsh-subagent/understand-the-implementation/source-map:
-  en: 410b6215e3a29221
-  zh: d17d6ea102fe8f87
+  en: 3f821ccb2fabfdf1
+  zh: 687567c7737d9d34
 /deepseek-ai-dsh-subagent/understand-the-implementation/provider-preparation-and-structured-output:
   en: f78c5e931f3a3676
   zh: 3c63f637dbaa8101

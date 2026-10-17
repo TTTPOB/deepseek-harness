@@ -68,6 +68,11 @@ kind: "package-reference"
 
 每个确切在线 Agent 都可以对直接可继续 child 使用 `sendMessage()`；驻留的可继续 child 还可以对自己的直接 parent 使用它。正在工作的目标通过 Steer 在最近 step 接收 Agent 消息；空闲目标启动轮次，且只有直接 child 可以冷恢复。parent 也可以随时中断正在运行的后代或列举自己的子级。浏览器发出的继续执行 prompt 会独立选择 Queue 或 Steer，并且可以携带图片部分：Host 先通过附件存储完成整批图片的准入与持久化，子级 inbox 才接受这条消息；当子级声明的模型不接受图片输入时拒绝投递。 直接子级发现读取 parent 自有的 `subagentCatalog` projection。`listChildren(parentSessionId, signal?)` 持有一次优先实时来源的 Session 观察，异步返回目录，不读取子级日志。它转发取消信号，并在物化后释放观察。物化以 O(D) 时间保留 D 条事实的父日志事件顺序。外部条目是叶节点，不需要观察子 Session。后代发现按父事件顺序递归读取子级目录，每个可达 Session 观察一次。无法读取目录的分支会被跳过，并返回诊断；两条路径都不加载或恢复子级 Agent。
 
+<a id="shared-model-selection-policy"></a>
+### 共享的模型选择策略
+
+注册自有面向模型工具的委派消费方共享本包的路由策略，而不必重复实现。`selectSubagentModelSelectionPolicy()` 在组合某个 Session 的工具时冻结其策略：已记录的策略优先，因此恢复的 Session 保留原路由；子代理子级继承委派父级已记录的策略；只有全新的顶层 Session 才会读取当前用户偏好。策略只记录一次，后续设置编辑与 spawn 都不会改变在线或已恢复的 Session。`requestedAgentOptions()`、`assertAllowedModelSelection()`、`preflightChildLlmRoute()` 与 `parentAgentOptionsForDelegation()` 负责合并并执行所选路由；`listSubagentModels()` 渲染与 `list_subagent_models` 相同的 provider、model 与推理等级目录，并按冻结的路由过滤。可选的偏好服务仍位于 [`dsh-tool-subagent`](../tool-subagent/README.zh.md#selecting-a-child-llm) 的 `model-selection-settings` 入口；这些辅助函数不会在每次 spawn 时读取它。
+
 ### 失败与恢复
 
 缺少 `agents` 服务时，启动请求以 `CONTINUATION_UNAVAILABLE` 拒绝；运行时可用但父级缺失或被替换时，以 `UNAUTHORIZED` 拒绝。未实现任何执行方法的提供方会在注册时以 `UNSUPPORTED_CAPABILITY` 被拒绝；请求不受支持的能力会以同一码使创建失败。调用方信号仅取消尚未发布的工作；发布后通过 `dispose()` 取消该次 activation，并等待其后代（包括正在启动的后代）及其资源清理完成。`result` 在清理与通知结束后完成，携带输出、可选结构化数据与停止原因；结果捕获故障在清理后使其拒绝。清理失败使 `dispose()` 拒绝，并将生命周期结束事件标记为失败；结果 promise 与父级通知保留已捕获的执行结果。
@@ -103,6 +108,9 @@ kind: "package-reference"
 | [`src/descriptor.ts`](src/descriptor.ts) | 版本化的 `subagent/descriptor` 会话事件词汇 |
 | [`src/catalog.ts`](src/catalog.ts) | parent 自有的 `subagent/catalog` 事件与分块 host projection |
 | [`src/child-agent.ts`](src/child-agent.ts) | 子级组装、委派策略、深度辅助函数 |
+| [`src/model-selection.ts`](src/model-selection.ts) | 共享的子级路由合并、白名单执行与实时 LLM 预检 |
+| [`src/model-selection-state.ts`](src/model-selection-state.ts) | 持久化的 `subagent/model-selection-policy` 事件、projection 与 Session 策略冻结 |
+| [`src/model-discovery.ts`](src/model-discovery.ts) | 面向模型的发现工具所用的 `listSubagentModels` 核心 |
 | [`src/list-children.ts`](src/list-children.ts) | 直接与递归的 parent 目录读取 |
 | [`src/control.ts`](src/control.ts) | 浏览器控制请求校验与稳定失败分码 |
 | [`src/control-types.ts`](src/control-types.ts) | client-safe 的目录行、控制面请求、回执与失败 |

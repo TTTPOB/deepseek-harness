@@ -24,8 +24,8 @@
   en: a820f021cfea5d87
   zh: 7cbaadaf808971d3
 /deepseek-ai-dsh-experimental-agent-team/use-this-package/teammates:
-  en: 5a314d1f80ecd31b
-  zh: c34e6a93dd1e2045
+  en: 7e9be25b181d1c54
+  zh: 7a6affdbf9c18b1f
 /deepseek-ai-dsh-experimental-agent-team/use-this-package/messages-between-teammates:
   en: 7d55ac289b8da711
   zh: 6a15f941bb44356f
@@ -48,8 +48,8 @@
   en: d96ba512b8327751
   zh: 21481c29cf5af19a
 /deepseek-ai-dsh-experimental-agent-team/understand-the-implementation/team-identity-and-roster:
-  en: 2389048c1a494ed3
-  zh: 7e72acd6b83ea248
+  en: a0fbd418ac08c1af
+  zh: b20d834853844f37
 /deepseek-ai-dsh-experimental-agent-team/understand-the-implementation/direct-messages-and-historical-compatibility:
   en: 67cc4e92adda8baa
   zh: 5abdb2415e414b9d
@@ -86,6 +86,18 @@
 /deepseek-ai-dsh-experimental-agent-team/model-experience/peer-messages/kv-cache-effect:
   en: af2993419835b838
   zh: b2a4fea055d5cdf4
+/deepseek-ai-dsh-experimental-agent-team/model-experience/roster-model-labels:
+  en: b51235ac63bec797
+  zh: 50b44904237c2636
+/deepseek-ai-dsh-experimental-agent-team/model-experience/roster-model-labels/what-the-model-sees:
+  en: f9687c0f687f09e0
+  zh: 811a9f4dc75184d5
+/deepseek-ai-dsh-experimental-agent-team/model-experience/roster-model-labels/token-effect:
+  en: bae7b0a9bee146e5
+  zh: 0410f1711411168b
+/deepseek-ai-dsh-experimental-agent-team/model-experience/roster-model-labels/kv-cache-effect:
+  en: 97dc3fe5a2ca9f82
+  zh: 135c27c6af9a0262
 /deepseek-ai-dsh-experimental-agent-team/known-limitations-and-deferred-work:
   en: 2b6bbe3e4242d932
   zh: c1b33474c62f9674
