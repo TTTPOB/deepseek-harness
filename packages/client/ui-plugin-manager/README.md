@@ -148,6 +148,10 @@ These pages cover the sidebar, the Remote calls, and the Host-side manager.
 
 -----
 
+### Fork behavior
+
+`ctx.pluginNavigation.openModal(): void` opens the existing manager over the current page without selecting a panel or Session. The main panel and modal share one `plugins.manager` Factory and navigation store, including contributed marketplace tabs and configuration slots. Only one occurrence renders at a time. Repeated calls retain the current modal detail; closing resets the list and Installed tab. `openBundle(name)` targets the modal when open and otherwise selects the main panel. Native Modal owns Escape and focus restoration.
+
 <a id="model-experience"></a>
 ## Model Experience
 

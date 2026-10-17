@@ -240,6 +240,27 @@ export interface HostConnectionHandle {
   admit(request: ConnectionTrustRequest): PeerAdmission
 
   /**
+   * Await Cloudflare Access verification for non-loopback requests, preserving existing Peers.
+   * @param request - HTTP or upgrade request with trust and authentication headers.
+   * @returns the admitted Peer or rejection status.
+   */
+  admitAsync(request: ConnectionTrustRequest): Promise<PeerAdmission>
+
+  /**
+   * Await ingress verification, then claim the same idempotent socket lease as admitConnection.
+   * @param request - authenticated upgrade request.
+   * @returns the Peer and release operation, or rejection status.
+   */
+  admitConnectionAsync(request: ConnectionTrustRequest): Promise<ConnectionAdmission>
+
+  /**
+   * Read the verified assertion expiry for a long-lived transport.
+   * @param request - request previously admitted through Access.
+   * @returns absolute expiry in milliseconds, or undefined for other authentication.
+   */
+  accessExpiresAt(request: ConnectionTrustRequest): number | undefined
+
+  /**
    * Create an independent in-process Peer, disposed with the Context that read `ctx.connection`.
    * @param options - fixed principal and optional interaction participation (default `answer`).
    * @returns a new Peer distinct from every other Peer.
@@ -264,6 +285,14 @@ export interface HostConnectionHandle {
    * @returns true only when the frontend may serve index.html.
    */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
+
+  /**
+   * Await Access authentication for trusted GET document navigation; local login retains its cookie exchange.
+   * @param request - root or configured-index request.
+   * @param response - response owned when the result is false.
+   * @returns whether the frontend may render the index.
+   */
+  authorizeIndexAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean>
 
   /**
    * Add the fresh process token to an ordinary Web application URL.

@@ -149,6 +149,8 @@ function renderTab(
     useStore: bindSnapshotSelector(navigation), actions: navigation.actions,
     ...standard,
     t,
+    renderFactorySlot: () => null,
+    useFactorySlot: () => { throw new Error('The manager declares no local Factory positions') },
     resolveText,
     ...actions,
     usePluginManager: bindSnapshotSelector(store),
@@ -230,7 +232,7 @@ describe('PluginManagerPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discover install' }))
     expect(actions.installFrom).toHaveBeenCalledWith({ spec: 'dsh-a@1.0.0', registry: 'https://r.example/', title: 'Alpha', version: '1.0.0' })
     fireEvent.click(screen.getByRole('button', { name: 'Discover open' }))
-    expect(navigation.getSnapshot()).toEqual({ tab: 'installed', view: { kind: 'package', name: 'dsh-better-sidebar' } })
+    expect(navigation.getSnapshot()).toEqual({ modalOpen: false, tab: 'installed', view: { kind: 'package', name: 'dsh-better-sidebar' } })
     expect(document.querySelector('[data-plugin-detail="dsh-better-sidebar"]')).not.toBeNull()
     // A detail page hides the tabs; a contributed tab that leaves the ledger falls back to Installed.
     expect(screen.queryByRole('tablist')).toBeNull()
@@ -1144,7 +1146,7 @@ describe('PluginManagerPage', () => {
     it('starts on the main list when the navigation store is recreated', () => {
       const first = createNavigationStore().create()
       first.actions.setView({ kind: 'more' })
-      expect(createNavigationStore().create().getSnapshot()).toEqual({ tab: 'installed', view: { kind: 'list' } })
+      expect(createNavigationStore().create().getSnapshot()).toEqual({ modalOpen: false, tab: 'installed', view: { kind: 'list' } })
     })
 
     it('counts an official plugin as content: the empty line waits for a page with nothing at all', () => {

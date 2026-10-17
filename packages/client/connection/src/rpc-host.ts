@@ -11,9 +11,10 @@ import {
 } from './rpc.ts'
 import { clientRequestSchema } from './rpc-schema.ts'
 import { bridge } from './http-bridge.ts'
-import { isRemoteAuthority, isTrustedApiRequest } from './api-request-trust.ts'
+import { isRemoteAuthority, isTrustedApiRequest, isTrustedIndexRequest } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
+import type { CloudflareAccess } from './cloudflare-access.ts'
 import { Peer } from './peer.ts'
 import type {
   PeerAdmission,
@@ -70,6 +71,7 @@ declare module '@deepseek-ai/cordis' {
 export class HostConnectionService extends Service implements HostConnectionHandle {
   /** The Peer every authenticated browser connection shares. */
   readonly browserPeer: PeerScope
+  private readonly accessExpiries = new WeakMap<ConnectionTrustRequest, number>()
   private readonly peers = new Map<PeerId, PeerRecord>()
   private readonly owner: Context
   private disposed = false
@@ -83,11 +85,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
    * @param browserAuth - process token and persistent browser-session owner.
+   * @param access - optional verified ingress for non-loopback authorities.
    */
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    private readonly access?: CloudflareAccess,
   ) {
     super(ctx, 'connection')
     this.owner = ctx
@@ -128,7 +132,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /** Browser requests share an owner Peer; API HTTP does not depend on an attached socket. */
   admit(request: ConnectionTrustRequest): PeerAdmission {
     if (!this.isTrusted(request)) return { rejection: 403 }
-    if (this.disposed) return { rejection: 401 }
+    if (this.disposed || this.requiresAccess(request)) return { rejection: 401 }
+    return this.admitCredential(request)
+  }
+
+  private admitCredential(request: ConnectionTrustRequest): PeerAdmission {
     const secure = this.owner.get('webServer')?.protocol === 'https:'
     if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
     const id = this.browserAuth.authenticateApi(request, secure)
@@ -145,6 +153,10 @@ export class HostConnectionService extends Service implements HostConnectionHand
   admitConnection(request: ConnectionTrustRequest): ConnectionAdmission {
     const admission = this.admit(request)
     if ('rejection' in admission) return admission
+    return this.claimConnection(admission)
+  }
+
+  private claimConnection(admission: { readonly peer: PeerScope }): ConnectionAdmission {
     const record = this.peers.get(admission.peer.id)
     if (record === undefined) return { ...admission, release: () => Promise.resolve() }
     if (record.ownsSocket) return { rejection: 409 }
@@ -159,6 +171,64 @@ export class HostConnectionService extends Service implements HostConnectionHand
         return released
       },
     }
+  }
+
+  /** Await ingress verification without changing API Peer identity or authority. */
+  async admitAsync(request: ConnectionTrustRequest): Promise<PeerAdmission> {
+    if (!this.isTrusted(request)) return { rejection: 403 }
+    const access = this.access
+    if (access === undefined || !this.requiresAccess(request)) return this.admit(request)
+    const expiry = await access.verify(request)
+    if (expiry === undefined || this.disposed) return { rejection: 401 }
+    this.accessExpiries.set(request, expiry)
+    const secure = this.owner.get('webServer')?.protocol === 'https:'
+    if (this.browserAuth.authenticateApi(request, secure) !== undefined) return this.admitCredential(request)
+    return { peer: this.browserPeer }
+  }
+
+  /** Await ingress verification before claiming the upstream socket lease. */
+  async admitConnectionAsync(request: ConnectionTrustRequest): Promise<ConnectionAdmission> {
+    const admission = await this.admitAsync(request)
+    return 'rejection' in admission ? admission : this.claimConnection(admission)
+  }
+
+  /** Read the verified assertion expiry for a long-lived transport. */
+  accessExpiresAt(request: ConnectionTrustRequest): number | undefined {
+    return this.accessExpiries.get(request)
+  }
+
+  private requiresAccess(request: ConnectionTrustRequest): boolean {
+    const host = request.headers instanceof Headers ? request.headers.get('host') : request.headers.host
+    return this.access !== undefined && (typeof host !== 'string' || isRemoteAuthority(host))
+  }
+
+  /** Await Access for read-only document navigation; all other index requests retain browser login. */
+  async authorizeIndexAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean> {
+    const access = this.access
+    if (access === undefined || !this.requiresAccess(request)) return this.authorizeIndex(request, response)
+    const carrier = this.owner.get('webServer')
+    const trusted = isTrustedIndexRequest(request, this.trustedHosts, carrier?.host, carrier?.protocol ?? 'http:')
+    const expiry = trusted ? await access.verify(request) : undefined
+    if (expiry === undefined || this.disposed) {
+      response.writeHead(trusted ? 401 : 403, { 'cache-control': 'no-store' })
+      response.end()
+      return false
+    }
+    return this.browserAuth.authorizeAccessIndex(request, response)
+  }
+
+  /** Require the same ingress assertion for API launch-token exchanges. */
+  async authorizeConnectAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<void> {
+    const access = this.access
+    if (access === undefined || !this.requiresAccess(request)) return this.authorizeConnect(request, response)
+    const trusted = this.isTrusted(request)
+    const expiry = trusted ? await access.verify(request) : undefined
+    if (expiry === undefined || this.disposed) {
+      response.writeHead(trusted ? 401 : 403, { 'cache-control': 'no-store' })
+      response.end()
+      return
+    }
+    this.authorizeTrustedConnect(request, response)
   }
 
   private isTrusted(request: ConnectionTrustRequest): boolean {
@@ -178,6 +248,15 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param response - response owned to completion.
    */
   authorizeConnect(request: ConnectionIndexRequest, response: ConnectionIndexResponse): void {
+    if (this.requiresAccess(request)) {
+      response.writeHead(401, { 'cache-control': 'no-store' })
+      response.end()
+      return
+    }
+    this.authorizeTrustedConnect(request, response)
+  }
+
+  private authorizeTrustedConnect(request: ConnectionIndexRequest, response: ConnectionIndexResponse): void {
     if (!this.isTrusted(request) || this.disposed) {
       response.writeHead(this.disposed ? 401 : 403)
       response.end(this.disposed ? 'unauthorized' : 'forbidden')
@@ -191,6 +270,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * Authenticate an index request; native TLS listeners mint Secure cookies.
    */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
+    if (this.requiresAccess(request)) {
+      response.writeHead(401, { 'cache-control': 'no-store' })
+      response.end()
+      return false
+    }
     return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')
   }
 
@@ -261,7 +345,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
       kind: 'prefix',
       path: channel,
       handler: async (req, res) => {
-        const admission = this.admit(req)
+        const admission = await this.admitAsync(req)
         if ('rejection' in admission) {
           res.writeHead(admission.rejection)
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')

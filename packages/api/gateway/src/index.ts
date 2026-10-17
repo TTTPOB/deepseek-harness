@@ -263,8 +263,8 @@ export class TypertGatewayService extends Service implements TypertGateway {
           }
           const route: WebUpgradeRoute = {
             path: REMOTE_STREAM_MUX_PATH,
-            handler: (req, socket, head) => {
-              const admission = webCtx.connection.admitConnection(req)
+            handler: async (req, socket, head) => {
+              const admission = await webCtx.connection.admitConnectionAsync(req)
               if ('rejection' in admission) {
                 rejectRemoteStreamUpgrade(socket, admission.rejection)
                 return
@@ -281,6 +281,21 @@ export class TypertGatewayService extends Service implements TypertGateway {
               const closed = (): void => {
                 socket.removeListener('error', release)
                 release()
+              }
+              const expiresAt = webCtx.connection.accessExpiresAt(req)
+              if (expiresAt !== undefined) {
+                const disposeExpiry = webCtx.effect(() => {
+                  let timer: ReturnType<typeof setTimeout>
+                  const expire = (): void => {
+                    const remaining = expiresAt - Date.now()
+                    if (remaining <= 0) { socket.destroy(); return }
+                    timer = setTimeout(expire, Math.min(remaining, MAX_TIMER_DELAY_MS))
+                    timer.unref()
+                  }
+                  expire()
+                  return () => { clearTimeout(timer); socket.destroy() }
+                }, 'api-gateway: Access WebSocket expiry')
+                socket.once('close', () => { void disposeExpiry() })
               }
               socket.on('error', release)
               socket.once('close', closed)

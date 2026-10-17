@@ -87,6 +87,10 @@ Read these when the serving contract is not enough: the seat owner's contract, t
 
 -----
 
+### Fork behavior
+
+Index authorization awaits `ctx.connection.authorizeIndexAsync` before rendering; successful HTML responses use `cache-control: no-store`. Static assets remain public. Access authentication and read-only navigation rules belong to [Connection](../../client/connection/README.md); the page adds no settings-persistence permission global.
+
 <a id="model-experience"></a>
 ## Model Experience
 

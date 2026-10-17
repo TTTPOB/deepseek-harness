@@ -91,9 +91,11 @@ async function request(
 ): Promise<{ status: number; type: string | null; body: string }> {
   if (port === undefined) throw new Error('frontend-static test: the listener has not bound a port')
   const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, init)
+  const type = response.headers.get('content-type')
+  expect(response.headers.get('cache-control')).toBe(response.status === 401 || type === 'text/html; charset=utf-8' ? 'no-store' : null)
   return {
     status: response.status,
-    type: response.headers.get('content-type'),
+    type,
     body: await response.text(),
   }
 }

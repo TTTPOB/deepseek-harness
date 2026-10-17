@@ -10,10 +10,12 @@ type View =
   | { readonly kind: 'row'; readonly name: string; readonly rowId: string; readonly from?: 'more' }
 
 /** `installed` is the page's own tab; any other value is the id of a `plugins.tab` entry. */
-type NavigationState = { view: View; tab: string }
+type NavigationState = { view: View; tab: string; modalOpen: boolean }
 type NavigationActions = {
   setView: (draft: NavigationState, view: View) => void
   setTab: (draft: NavigationState, tab: string) => void
+  openModal: (draft: NavigationState) => void
+  closeModal: (draft: NavigationState) => void
 }
 
 /**
@@ -22,10 +24,21 @@ type NavigationActions = {
  */
 export function createNavigationStore(): EngineStoreHandle<NavigationState, NavigationActions> {
   return defineStore({
-    init: (): NavigationState => ({ view: { kind: 'list' }, tab: 'installed' }),
+    init: (): NavigationState => ({ view: { kind: 'list' }, tab: 'installed', modalOpen: false }),
     actions: {
       setView: (draft, view: View) => { draft.view = view },
       setTab: (draft, tab: string) => { draft.tab = tab },
+      openModal: (draft) => {
+        if (draft.modalOpen) return
+        draft.view = { kind: 'list' }
+        draft.tab = 'installed'
+        draft.modalOpen = true
+      },
+      closeModal: (draft) => {
+        draft.modalOpen = false
+        draft.view = { kind: 'list' }
+        draft.tab = 'installed'
+      },
     },
   })
 }
