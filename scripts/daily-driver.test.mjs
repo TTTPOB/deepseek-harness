@@ -5,6 +5,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { load as parseYaml } from 'js-yaml'
 import { manifest, packageManager, plan, root, selections } from './daily-driver-plan.mjs'
 import { artifactClosure, stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 
@@ -23,11 +24,15 @@ test('artifact names follow individual manifests and a subset does not shrink th
   assert(release.tests.includes('packages/core/session/tests'))
   assert.throws(() => plan('core', ['packages/client/connection']))
   assert.throws(() => plan('retired-batch'))
+  const team = plan('team-model-selection', ['packages/subagent/tool-subagent'])
+  assert.equal(team.selected.length, 1)
+  assert.equal(team.packages.length, 4)
+  assert.throws(() => plan('team-model-selection', ['packages/client/connection']))
 })
 
 test('capability groups track rc.1 owners and toolchain', async () => {
   assert.equal(packageManager, 'pnpm@11.28.5')
-  assert.deepEqual(Object.keys(selections), ['session-query', 'core', 'access'])
+  assert.deepEqual(Object.keys(selections), ['session-query', 'core', 'team-model-selection', 'access'])
   assert.deepEqual(plan('core').packages.map(pkg => pkg.directory), [
     'packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent',
     'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team',
@@ -38,6 +43,19 @@ test('capability groups track rc.1 owners and toolchain', async () => {
   assert(closure.some(pkg => pkg.directory === 'packages/core/session'))
   assert(closure.some(pkg => pkg.directory === 'packages/session-query/session-query'))
   assert.equal(new Set(closure.map(pkg => pkg.name)).size, closure.length)
+  const team = plan('team-model-selection')
+  assert.deepEqual(team.packages.map(pkg => pkg.directory), [
+    'packages/subagent/subagent', 'packages/subagent/tool-subagent',
+    'packages/experimental/agent-team', 'packages/experimental/tool-agent-team',
+  ])
+  assert.deepEqual(team.tests, [
+    'packages/subagent/subagent/tests', 'packages/subagent/tool-subagent/tests',
+    'packages/experimental/agent-team/tests', 'packages/experimental/tool-agent-team/tests',
+  ])
+  assert(!team.packages.some(pkg => pkg.directory === 'packages/llm/llm-pi-ai'))
+  const teamClosure = artifactClosure(team.packages)
+  for (const pkg of team.packages) assert(teamClosure.some(candidate => candidate.name === pkg.name))
+  assert.equal(new Set(teamClosure.map(pkg => pkg.name)).size, teamClosure.length)
   assert.deepEqual(plan('access').packages.map(pkg => pkg.directory), [
     'packages/client/connection', 'packages/host/frontend-static', 'packages/api/gateway',
     'packages/client/ui-plugin-manager', 'packages/client/ui-sidebar-terminal',
@@ -49,6 +67,11 @@ test('capability groups track rc.1 owners and toolchain', async () => {
       await access(join(root, path))
     }
   }
+})
+
+test('release workflow exposes every capability selection in plan order', async () => {
+  const workflow = parseYaml(await readFile(join(root, '.github/workflows/daily-driver-release.yml'), 'utf8'))
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.selection.options, Object.keys(selections))
 })
 
 test('consumer overrides and build permissions belong to its workspace, including an explicit Pi tarball', async () => {
@@ -76,8 +99,12 @@ test('consumer overrides and build permissions belong to its workspace, includin
 })
 
 test('smokes reject incomplete artifact sets before installation', () => {
-  for (const script of ['smoke-session-query.mjs', 'smoke-core-packages.mjs', 'smoke-access-navigation.mjs', 'smoke-subagent.mjs']) {
-    const args = script === 'smoke-session-query.mjs' ? ['query.tgz', 'jsonl.tgz', 'sqlite.tgz'] : []
+  for (const script of ['smoke-session-query.mjs', 'smoke-core-packages.mjs', 'smoke-team-model-selection.mjs', 'smoke-access-navigation.mjs', 'smoke-subagent.mjs']) {
+    const args = script === 'smoke-session-query.mjs'
+      ? ['query.tgz', 'jsonl.tgz', 'sqlite.tgz']
+      : script === 'smoke-team-model-selection.mjs'
+        ? ['subagent.tgz', 'tool-subagent.tgz', 'agent-team.tgz', 'tool-agent-team.tgz']
+        : []
     const result = spawnSync(process.execPath, [join(root, 'scripts', script), ...args], { encoding: 'utf8', timeout: 10_000 })
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /Usage: node scripts\/smoke-/)

@@ -19,6 +19,11 @@ export const selections = {
     tests: ['packages/core/agent/tests', 'packages/preset/agent-preset-registry/tests', 'packages/subagent/subagent/tests', 'packages/llm/llm-pi-ai/tests', 'packages/mcp/mcp-client/tests', 'packages/experimental/tool-agent-team/tests'],
     smoke: 'smoke-core-packages.mjs',
   },
+  'team-model-selection': {
+    packages: ['packages/subagent/subagent', 'packages/subagent/tool-subagent', 'packages/experimental/agent-team', 'packages/experimental/tool-agent-team'],
+    tests: ['packages/subagent/subagent/tests', 'packages/subagent/tool-subagent/tests', 'packages/experimental/agent-team/tests', 'packages/experimental/tool-agent-team/tests'],
+    smoke: 'smoke-team-model-selection.mjs',
+  },
   access: {
     packages: ['packages/client/connection', 'packages/host/frontend-static', 'packages/api/gateway', 'packages/client/ui-plugin-manager', 'packages/client/ui-sidebar-terminal'],
     tests: ['packages/client/connection/tests', 'packages/host/frontend-static/tests', 'packages/api/gateway/tests', 'packages/client/ui-plugin-manager/tests', 'packages/client/ui-sidebar-terminal/tests'],

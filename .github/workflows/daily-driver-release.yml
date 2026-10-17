@@ -8,7 +8,7 @@ on:
         type: choice
         required: true
         default: session-query
-        options: [session-query, core, access]
+        options: [session-query, core, team-model-selection, access]
       tag:
         description: Existing immutable daily-driver-* tag at the selected source ref
         type: string
