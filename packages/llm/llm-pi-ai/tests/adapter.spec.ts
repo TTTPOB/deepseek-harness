@@ -357,6 +357,26 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/v1/responses'])
   })
 
+  it('applies a configured error-code rule to a Responses stream failure', async () => {
+    const server = await mockServer([{ events: [JSON.stringify({
+      type: 'response.failed',
+      response: { status: 'failed', error: { code: 'upstream_error', message: 'Upstream service temporarily unavailable' } },
+    })] }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        openai: {
+          apiKeyEnv: 'PI_TEST_KEY',
+          baseURL: `${server.url}/v1`,
+          errorCodeRules: [{ match: '^upstream_error:', code: 'SERVER' }],
+        },
+      },
+    })
+    const result = await assemble(ctx, { provider: 'openai', model: 'gpt-4.1', messages: [] })
+    expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
+  })
+
   it('forces one wire request for an SDK-retryable provider failure', async () => {
     const server = await mockServer([
       {
