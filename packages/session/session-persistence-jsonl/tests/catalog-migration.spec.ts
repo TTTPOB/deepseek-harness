@@ -19,6 +19,46 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
+it('shares concurrent discovery of one directory but rejects the same id in another directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-catalog-refresh-'))
+  roots.push(root)
+  const ctx = new Context()
+  contexts.push(ctx)
+  await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+  const id = SessionId('parent')
+  const header = { type: 'session', version: 3, id, createdAt: 1, isSeeded: false, delegationDepth: 0 }
+  const path = generationLogPath(root, undefined, id, 3, 'none')
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, JSON.stringify(header) + '\n')
+  const persistence = ctx.sessionPersistence as typeof ctx.sessionPersistence & {
+    refreshRelatedCatalog(signal?: AbortSignal): Promise<void>
+    readGenerationHeader(...args: never[]): Promise<SessionHeader | undefined>
+  }
+  const readHeader = persistence.readGenerationHeader.bind(persistence)
+  const barrier = Promise.withResolvers<undefined>()
+  let reads = 0
+  const headers = vi.spyOn(persistence, 'readGenerationHeader').mockImplementation(async (...args) => {
+    const result = await readHeader(...args)
+    // Both refreshes must observe the uncatalogued directory before either publishes it.
+    if (++reads === 2) barrier.resolve(undefined)
+    await barrier.promise
+    return result
+  })
+  const outcomes = await Promise.allSettled([
+    persistence.refreshRelatedCatalog(), persistence.refreshRelatedCatalog(),
+  ])
+  expect(headers).toHaveBeenCalledTimes(2)
+  expect(outcomes).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }])
+  headers.mockRestore()
+
+  const duplicate = generationLogPath(root, '/other-project', id, 3, 'none')
+  await mkdir(dirname(duplicate), { recursive: true })
+  await writeFile(duplicate, JSON.stringify({ ...header, cwd: '/other-project' }) + '\n')
+  await expect(persistence.refreshRelatedCatalog()).rejects.toThrow(
+    'duplicate JSONL session id "parent" appears in multiple project directories',
+  )
+})
+
 describe.each(['none', 'zstd'] as const)('historical catalog publication (%s)', (compression) => {
   async function fixture() {
     const root = await mkdtemp(join(tmpdir(), 'dsh-catalog-migration-'))
@@ -100,6 +140,61 @@ describe.each(['none', 'zstd'] as const)('historical catalog publication (%s)', 
     expect((await f.ctx.sessionPersistence.list()).find(row => row.header.id === f.parent)?.revision).toBe(added)
     await f.write('child', [f.descriptor, { type: 'feedback/record', seq: 1, time: 3, data: {} }], true)
     expect(await revision()).not.toBe(added)
+  })
+
+  it('refreshes one listing catalog for multiple historical parents and keeps standalone stats fresh', async () => {
+    const f = await fixture()
+    const other = SessionId('other-parent')
+    await f.write(other, [])
+    const persistence = f.ctx.sessionPersistence as typeof f.ctx.sessionPersistence & {
+      refreshRelatedCatalog(signal?: AbortSignal): Promise<void>
+      readGenerationHeader(...args: never[]): Promise<SessionHeader | undefined>
+    }
+    const refresh = vi.spyOn(persistence, 'refreshRelatedCatalog')
+    const headers = vi.spyOn(persistence, 'readGenerationHeader')
+    const observe = async (count: number) => {
+      refresh.mockClear()
+      headers.mockClear()
+      const rows = await persistence.list()
+      expect(refresh).toHaveBeenCalledTimes(1)
+      expect(headers).toHaveBeenCalledTimes(count)
+      expect(rows).toHaveLength(count)
+      return new Map(rows.map(row => [row.header.id, row.revision]))
+    }
+    const freshStat = async () => {
+      refresh.mockClear()
+      const row = await persistence.stat(f.parent)
+      expect(refresh).toHaveBeenCalledTimes(1)
+      return row!.revision
+    }
+    const first = await observe(2)
+    expect(await observe(2)).toEqual(first)
+    const childPath = await f.write('child', [f.descriptor], true)
+    const added = await freshStat()
+    expect(added).not.toBe(first.get(f.parent))
+    const withChild = await observe(3)
+    expect(withChild.get(f.parent)).toBe(added)
+    expect(withChild.get(other)).toBe(first.get(other))
+
+    await f.write('child', [], true, 4)
+    const generationChanged = await freshStat()
+    expect(generationChanged).not.toBe(added)
+    const withSuccessor = await observe(3)
+    expect(withSuccessor.get(f.parent)).toBe(generationChanged)
+    expect(withSuccessor.get(other)).toBe(first.get(other))
+
+    await rm(dirname(childPath), { recursive: true })
+    expect(await freshStat()).toBe(first.get(f.parent))
+    expect(await observe(2)).toEqual(first)
+  })
+
+  it('keeps historical revisions unchanged for unrelated session additions and appends', async () => {
+    const f = await fixture()
+    const revision = (await f.ctx.sessionPersistence.stat(f.parent))!.revision
+    await f.write('unrelated', [])
+    expect((await f.ctx.sessionPersistence.stat(f.parent))!.revision).toBe(revision)
+    await f.write('unrelated', [{ type: 'feedback/record', seq: 0, time: 3, data: {} }])
+    expect((await f.ctx.sessionPersistence.list()).find(row => row.header.id === f.parent)?.revision).toBe(revision)
   })
 
   it('reports malformed native catalog data without migration terminology', async () => {
