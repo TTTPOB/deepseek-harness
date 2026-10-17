@@ -4,7 +4,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { createSettlementMessage, withContinuableReturnGuidance } from '../src/continuation-messages.ts'
 
 describe('continuable return guidance', () => {
-  it('uses settlement for final reports and send_message only for early findings', () => {
+  it('tells the child to send its result to the parent before finishing', () => {
     const content = withContinuableReturnGuidance(SessionId('parent'), [
       { type: 'text', text: 'Do the task.' },
     ])
@@ -12,9 +12,9 @@ describe('continuable return guidance', () => {
 
     expect(guidance).toMatchObject({ type: 'text' })
     if (guidance?.type !== 'text') throw new Error('expected text guidance')
-    expect(guidance.text).toContain('settlement will automatically notify the parent')
-    expect(guidance.text).toContain('Use send_message only when information genuinely needs to reach the parent before you settle')
-    expect(guidance.text).toContain('do not end the turn until your final report is complete')
+    expect(guidance.text).toContain('Before you finish, send your result to that agent with')
+    expect(guidance.text).toContain('Send earlier messages as well when a finding changes what the parent should do next')
+    expect(guidance.text).toContain('sending a message does not end your turn')
   })
 })
 
