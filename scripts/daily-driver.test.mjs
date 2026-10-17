@@ -136,6 +136,14 @@ export class SubagentManager {
   })
 }
 
+test('core release refuses missing Pi qualification before contacting GitHub', () => {
+  const result = spawnSync(process.execPath, ['scripts/daily-driver.mjs', 'release', 'core'], {
+    cwd: root, encoding: 'utf8', env: { ...process.env, DSH_PI_AI_TARBALL: '' },
+  })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Core release requires DSH_PI_AI_TARBALL/)
+})
+
 for (const scenario of ['existing-release', 'failed-prepare']) {
   test(`${scenario} never creates or edits a release`, async () => {
     const temporary = await mkdtemp(join(tmpdir(), 'daily-driver-release-test-'))
@@ -149,7 +157,7 @@ for (const scenario of ['existing-release', 'failed-prepare']) {
       const result = spawnSync(process.execPath, ['scripts/daily-driver.mjs', 'release', 'core'], {
         cwd: root, encoding: 'utf8', timeout: 30_000,
         env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, COMMAND_LOG: log,
-          GH_REPO: 'fixture/repository', RELEASE_TAG: 'daily-driver-test' },
+          GH_REPO: 'fixture/repository', RELEASE_TAG: 'daily-driver-test', DSH_PI_AI_TARBALL: '/unused/fixture-pi.tgz' },
       })
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, scenario === 'existing-release' ? /never overwrite/ : /prepare-failed/)

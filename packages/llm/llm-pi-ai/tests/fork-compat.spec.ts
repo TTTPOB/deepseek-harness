@@ -1,4 +1,5 @@
 /** Gateway declarations through the target pi-ai fork's real Responses serializer. */
+import { readFileSync } from 'node:fs'
 import { afterEach, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -10,7 +11,11 @@ import { closeMockServers, mockServer } from './mock-server.ts'
 
 afterEach(closeMockServers)
 
-it.each([undefined, 'input', 'instructions'] as const)(
+const piVersion: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('@earendil-works/pi-ai')), 'utf8')).version
+const forkAvailable = piVersion.includes('-fork')
+if (!forkAvailable) console.info(`Skipping fork Responses serializer checks: resolved pi-ai ${piVersion}; provide DSH_PI_AI_TARBALL to daily-driver core verify to qualify the fork.`)
+
+it.skipIf(!forkAvailable).each([undefined, 'input', 'instructions'] as const)(
   'serializes the configured Responses system prompt format %s', async (systemPromptFormat) => {
     const server = await mockServer([{ status: 401, body: '{"error":{"message":"fixture rejection"}}' }])
     const ctx = new Context()

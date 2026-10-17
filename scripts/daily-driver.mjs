@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { manifest, plan, root } from './daily-driver-plan.mjs'
 import { artifactClosure } from './daily-driver-artifacts.mjs'
+import { withPiFork } from './daily-driver-pi.mjs'
 
 const [command, selection, ...directories] = process.argv.slice(2)
 assert(['prepare', 'verify', 'build', 'smoke', 'release'].includes(command) && selection,
@@ -19,9 +20,13 @@ const source = action => node(['scripts/daily-driver-source.mjs', action,
   ...(action === 'build' ? artifactClosure(checks.packages) : checks.packages).map(pkg => pkg.directory)])
 function prepare() { source('install') }
 function verify() {
-  node(['--test', 'scripts/daily-driver-source.test.mjs', 'scripts/daily-driver.test.mjs'])
-  pnpm(['run', 'build:native-system'])
-  pnpm(['exec', 'vitest', 'run', '--maxWorkers=2', ...checks.tests])
+  const check = () => {
+    node(['--test', 'scripts/daily-driver-source.test.mjs', 'scripts/daily-driver.test.mjs', 'scripts/daily-driver-pi.test.mjs'])
+    pnpm(['run', 'build:native-system'])
+    pnpm(['exec', 'vitest', 'run', '--maxWorkers=2', ...checks.tests])
+  }
+  if (selection === 'core' && process.env.DSH_PI_AI_TARBALL) withPiFork(process.env.DSH_PI_AI_TARBALL, check)
+  else check()
 }
 function build() {
   // Client programs consume generated Host Remote declarations.
@@ -53,6 +58,7 @@ function releaseIdentity() {
   return tag
 }
 if (command === 'release') {
+  if (selection === 'core') assert(process.env.DSH_PI_AI_TARBALL, 'Core release requires DSH_PI_AI_TARBALL; serializer qualification must not be skipped')
   assert(process.env.GH_REPO, 'Set GH_REPO to the release repository')
   const tag = releaseIdentity()
   prepare()
