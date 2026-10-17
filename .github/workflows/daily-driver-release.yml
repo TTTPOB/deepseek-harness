@@ -1,0 +1,62 @@
+name: Daily-driver release
+
+on:
+  workflow_dispatch:
+    inputs:
+      selection:
+        description: Current capability to validate
+        type: choice
+        required: true
+        default: session-query
+        options: [session-query, core, access]
+      tag:
+        description: Existing immutable daily-driver-* tag at the selected source ref
+        type: string
+        required: true
+      packages:
+        description: Optional space-separated package directories to publish (default entire selection)
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-driver-release
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  DSH_TELEMETRY_DISABLED: '1'
+  NODE_OPTIONS: --max-old-space-size=3072
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Validate, build, smoke and publish immutable assets
+        env:
+          SELECTION: ${{ inputs.selection || 'session-query' }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SELECTED_PACKAGES: ${{ inputs.packages }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a packages <<< "$SELECTED_PACKAGES"
+          node scripts/daily-driver.mjs release "$SELECTION" "${packages[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-driver-release-artifacts
+          path: dist/daily-driver/*
+          if-no-files-found: error
