@@ -245,6 +245,7 @@ interface FactorySlot {
 export class AgentRegistry extends Service {
   private store = new Map<SessionId, AgentEntry>()
   private factory: FactorySlot | undefined
+  private readonly setups = new Set<AgentSetup>()
   private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
@@ -382,6 +383,32 @@ export class AgentRegistry extends Service {
   }
 
   /**
+   * Register setup run before each create/resume caller setup.
+   * @param setup - contribution composed into unpublished Agent setup.
+   * @returns disposer owned by the registering plugin fiber.
+   */
+  registerSetup(setup: AgentSetup): () => void {
+    if (this.setups.has(setup)) throw new Error('Agent setup is already registered')
+    this.setups.add(setup)
+    return this.ctx.effect(() => () => { this.setups.delete(setup) }, 'agents.setup()')
+  }
+
+  private composeSetup(caller: AgentSetup | undefined): AgentSetup | undefined {
+    const contributions = [...this.setups]
+    if (contributions.length === 0) return caller
+    return async (agentCtx, agent) => {
+      const commits: AgentSetupCommit[] = []
+      for (const setup of contributions) {
+        const commit = await setup(agentCtx, agent)
+        if (commit) commits.push(commit)
+      }
+      const commit = await caller?.(agentCtx, agent)
+      if (commit) commits.push(commit)
+      return { commit: () => { for (const item of commits) item.commit() } }
+    }
+  }
+
+  /**
    * Create and publish a new agent through the registered factory.
    * Distinct from {@link register} (which records an already-constructed
    * agent): this constructs the agent and its session. Rejects if no factory is
@@ -392,6 +419,8 @@ export class AgentRegistry extends Service {
    */
   async create(options: CreateAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
+    const composed = this.composeSetup(options.setup)
+    if (composed) options = { ...options, setup: composed }
     // Re-trace a Service-backed factory through the accessing context
     // explicitly. This preserves AgentLoop's dependency origin while binding
     // its effects to ownerCtx; plain factories receive ownerCtx as an explicit
@@ -411,6 +440,8 @@ export class AgentRegistry extends Service {
    */
   async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
+    const composed = this.composeSetup(options.setup)
+    if (composed) options = { ...options, setup: composed }
     const { target } = this.requireFactory()
     const receiver = getTraceable(ownerCtx, target)
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver

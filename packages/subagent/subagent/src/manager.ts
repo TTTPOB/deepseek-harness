@@ -1234,6 +1234,10 @@ export class SubagentManager {
     options: ChildDeliveryOptions,
   ): Promise<MessageId> {
     this.assertAdmitting(parent)
+    const resident = this.resident.get(childId)
+    if (resident !== undefined) {
+      this.authorizeLineage(parent, childId, resident.parent.id)
+    }
     const releaseHold = this.holdOwnership(parent, childId)
     try {
       return await this.deliverFollowup(parent, childId, content, options)

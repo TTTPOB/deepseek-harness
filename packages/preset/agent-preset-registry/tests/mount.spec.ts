@@ -90,14 +90,14 @@ it('does not replace the declaring Loader entry subtree or persist runtime tree 
   for (const scope of scopes) await scope.dispose()
 })
 
-it('reports grouped and conditional plugin rows from the activated tree', async () => {
+it('inventories grouped conditional declarations without mounting', async () => {
   const ctx = await harness()
   onTestFinished(() => ctx.fiber.dispose())
   await declare(ctx, { id: 'standard', plugins: [{ name: 'cordis:group', group: true, config: [
     { id: 'off', name: 'missing', disabled: { __jsExpr: 'true' } },
   ] }] })
   const [composition] = await ctx.agentPresets.compositionInventory()
-  expect(composition!.rows).toEqual([{ entryId: 'off', moduleName: 'missing', enabled: false, condition: 'true' }])
+  expect(composition!.rows).toEqual([{ entryId: 'off', moduleName: 'missing', enabled: 'conditional', condition: 'true' }])
 })
 
 it('mounts a profile-denied row disabled and the same row active once exempted', async () => {
