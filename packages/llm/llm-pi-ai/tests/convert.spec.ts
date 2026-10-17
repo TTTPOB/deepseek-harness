@@ -925,6 +925,26 @@ describe('mapStopReason / mapUsage', () => {
       .toEqual({ kind: 'error', failure: { message: errorMessage, code } })
   })
 
+  it('applies operator error-code rules before built-ins and after fallthrough', () => {
+    const text = 'upstream_error: Upstream service temporarily unavailable'
+    const override = [Object.freeze({ pattern: /^upstream_error:/, code: 'SERVER', after: false })]
+    expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: text }), undefined, override))
+      .toEqual({ kind: 'error', failure: { message: text, code: 'SERVER' } })
+
+    // A rule without `after` replaces a built-in decision.
+    const demote = [Object.freeze({ pattern: /^server_error:/, code: 'PI_AI_ERROR', after: false })]
+    expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: 'server_error: boom' }), undefined, demote))
+      .toMatchObject({ kind: 'error', failure: { code: 'PI_AI_ERROR' } })
+
+    // `after` rules only run when the built-in classifier finds nothing.
+    const fallback = [Object.freeze({ pattern: /^upstream_error:/, code: 'TIMEOUT', after: true })]
+    expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: text }), undefined, fallback))
+      .toMatchObject({ kind: 'error', failure: { code: 'TIMEOUT' } })
+    const shadowed = [Object.freeze({ pattern: /^server_error:/, code: 'TIMEOUT', after: true })]
+    expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: 'server_error: boom' }), undefined, shadowed))
+      .toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
+  })
+
   it.each([
     'other side closed',
     'HTTP2 request did not get a response',

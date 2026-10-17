@@ -35,6 +35,8 @@ kind: "package-reference"
 
 ### 配置提供方路由
 
+每个 profile 可以设置 `errorCodeRules`，把终止错误文本映射成失败码。规则按顺序先于内置分类器执行，首个命中者胜，因此部署可以替换内置判断；`after: true` 只在内置分类器回落到 `PI_AI_ERROR` 时才执行。失败码限定为本适配器会报告的那些，保证 profile 的重试策略仍然匹配。正则只看到提供方返回的错误文本。
+
 每个 profile 都可以设置 `retryPolicy`；省略时使用 normal mode、最多重试五次。`apiKeyEnv` 是按请求经 harness 凭据 seam 解析的凭据引用，因此配置文件绝不包含密钥；解析为空的引用会让请求以 `MISSING_CREDENTIAL` 失败。省略它会让路由保持已配置但无密钥（configured-but-keyless）状态，对已安装目录路由而言即交由 pi-ai 提供方原生的环境发现。
 
 ```yaml
@@ -51,6 +53,9 @@ kind: "package-reference"
         retryPolicy:
           mode: normal
           maxRetries: 3
+        errorCodeRules:
+          - match: '^upstream_error:'
+            code: SERVER
       anthropic:
         apiKeyEnv: ANTHROPIC_API_KEY
         models:
@@ -87,6 +92,7 @@ kind: "package-reference"
 | `requestImageMaxBytes` | `1 MiB` | 每张请求图片在 base64 扩展前的编码字节目标 |
 | `maxRequestImageBytes` | `20 MiB` | base64 图片载荷总上限，保留图片超过时请求以 `IMAGE_OFFLOAD_REQUIRED` 失败 |
 | `retryPolicy` | normal，5 次重试 | 由 `dsh-llm-retry` 执行的提供方自有重试策略 |
+| `errorCodeRules` | 无 | 先于内置分类器执行的文本到失败码规则；`after: true` 只兜底 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-llm-pi-ai)是每个受支持字段及其 JSDoc 的穷尽式真源。
 

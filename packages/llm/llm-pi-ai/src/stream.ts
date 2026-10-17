@@ -39,7 +39,27 @@ export function mapUsage(usage: PiUsage): TokenUsage {
 // wrapper a bare `terminated`, so we are left pattern-matching terse words here.
 // If pi-ai ever forwards the original Error (or a fetch/dispatcher hook that lets
 // us capture the cause ourselves), classify on `code`/`cause` instead of text.
-function classifyPiAiError(message: string): string {
+/** One compiled operator rule mapping terminal error text to a failure code. */
+export interface ErrorCodeRule {
+  /** Compiled pattern tested against the terminal error text. */
+  readonly pattern: RegExp
+  /** Failure code reported when the pattern matches. */
+  readonly code: string
+  /** Test only after the built-in classifier falls through to `PI_AI_ERROR`. */
+  readonly after: boolean
+}
+
+function classifyPiAiError(message: string, rules: readonly ErrorCodeRule[] = []): string {
+  // Operator rules run first so a deployment can replace a built-in decision;
+  // `after` rules only fill the built-in fallthrough.
+  for (const rule of rules) if (!rule.after && rule.pattern.test(message)) return rule.code
+  const builtin = classifyBuiltinPiAiError(message)
+  if (builtin !== 'PI_AI_ERROR') return builtin
+  for (const rule of rules) if (rule.after && rule.pattern.test(message)) return rule.code
+  return 'PI_AI_ERROR'
+}
+
+function classifyBuiltinPiAiError(message: string): string {
   if (/\b(?:401|403)\b/.test(message)) return 'AUTH'
   if (isQuotaExceededError(message)) return QUOTA_EXCEEDED_CODE
   if (/\b429\b|rate.?limit/i.test(message)) return 'RATE_LIMIT'
@@ -73,13 +93,15 @@ function classifyPiAiError(message: string): string {
  * Map a terminal pi-ai event to the harness finish reason.
  * @param message - the assistant message carried by the `done` or `error` event.
  * @param contextWindow - resolved catalog capacity for usage-based overflow detection.
+ * @param errorCodeRules - operator classification rules, first match wins before built-ins.
  * @returns the mapped harness reason. Recognized error text, `stop` usage above
  *   `contextWindow`, and zero-output `length` usage that fills the window map
  *   to `CONTEXT_WINDOW_EXCEEDED`; a `stop` with no content blocks maps to an
  *   `EMPTY_RESPONSE` error, while terminal `pending` and `deferred` states map
  *   to non-retryable `PI_AI_ERROR` failures.
  */
-export function mapStopReason(message: AssistantMessage, contextWindow?: number): FinishReason {
+export function mapStopReason(message: AssistantMessage, contextWindow?: number,
+  errorCodeRules: readonly ErrorCodeRule[] = []): FinishReason {
   const piAiOverflow = isContextOverflow(message, contextWindow)
   const harnessOverflow = message.stopReason === 'error'
     && message.errorMessage !== undefined
@@ -124,7 +146,7 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
     }
     case 'error': {
       const text = message.errorMessage ?? 'pi-ai stream error'
-      return { kind: 'error', failure: { message: text, code: classifyPiAiError(text) } }
+      return { kind: 'error', failure: { message: text, code: classifyPiAiError(text, errorCodeRules) } }
     }
   }
 }
@@ -138,6 +160,7 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  * @param callerSignal - caller cancellation state; an aborted caller makes any
  *   in-band terminal error an aborted finish.
  * @param requestedModel - request model identity recorded for durable replay.
+ * @param errorCodeRules - operator classification rules applied to terminal error text.
  * @returns the harness chunks, ending with `usage` then `finish`; throws
  *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event.
  */
@@ -146,6 +169,7 @@ export async function* toStreamChunks(
   contextWindow?: number,
   callerSignal?: AbortSignal,
   requestedModel?: string,
+  errorCodeRules: readonly ErrorCodeRule[] = [],
 ): AsyncGenerator<StreamChunk> {
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
   // in stream order), but we track ids per index for tool calls.
@@ -211,7 +235,7 @@ export async function* toStreamChunks(
         yield { type: 'usage', usage: mapUsage(event.message.usage) }
         yield {
           type: 'finish',
-          reason: mapStopReason(event.message, contextWindow),
+          reason: mapStopReason(event.message, contextWindow, errorCodeRules),
           replayState: toPiReplayState(event.message, requestedModel),
         }
         return
@@ -224,6 +248,7 @@ export async function* toStreamChunks(
           reason: mapStopReason(
             callerSignal?.aborted ? { ...event.error, stopReason: 'aborted' } : event.error,
             contextWindow,
+            errorCodeRules,
           ),
         }
         return

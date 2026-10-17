@@ -19,7 +19,7 @@ import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import { resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
+import { QUOTA_EXCEEDED_CODE, resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
 import type { ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import {
@@ -43,6 +43,20 @@ import type {
   RouteCatalog,
 } from './catalog.ts'
 import { buildProvider, supportedProtocols } from './provider.ts'
+import type { ErrorCodeRule } from './stream.ts'
+
+/** Failure codes an operator rule may assign; the set the built-in classifier returns. */
+const ERROR_CODE_RULES = ['AUTH', QUOTA_EXCEEDED_CODE, 'RATE_LIMIT', 'INVALID_REQUEST', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'PI_AI_ERROR'] as const
+
+/** One operator rule mapping terminal error text to a failure code. */
+export interface PiAiErrorCodeRule {
+  /** Regular expression source tested against the terminal error text. */
+  match: string
+  /** Failure code reported when the pattern matches. */
+  code: (typeof ERROR_CODE_RULES)[number]
+  /** Test only after the built-in classifier falls through to `PI_AI_ERROR`. */
+  after?: boolean
+}
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
@@ -179,13 +193,19 @@ export interface PiAiProviderProfile {
    * the smallest quality-ladder output is used when no quality fits.
    */
   requestImageMaxBytes?: number
+  /**
+   * Ordered overrides for terminal error classification. A rule without `after`
+   * runs before the built-in classifier and the first match wins; `after: true`
+   * runs only when the built-in classifier falls through to `PI_AI_ERROR`.
+   */
+  errorCodeRules?: PiAiErrorCodeRule[]
   /** Provider-owned model-request retry policy; omission uses normal mode with five retries. */
   retryPolicy?: RetryPolicyConfig
 }
 
 /** Validated profile with its route stamped and every adapter-owned default resolved. */
 export interface ResolvedPiAiProviderProfile
-  extends Omit<PiAiProviderProfile, 'apiKeyEnv' | 'retryPolicy' | 'models' | 'displayName'> {
+  extends Omit<PiAiProviderProfile, 'apiKeyEnv' | 'errorCodeRules' | 'retryPolicy' | 'models' | 'displayName'> {
   /** Harness route key and the `Models` collection key (the configuration dict key). */
   provider: string
   /** Resolved display name for selectors and configuration surfaces. */
@@ -202,6 +222,8 @@ export interface ResolvedPiAiProviderProfile
   requestImageMaxBytes: number
   /** Immutable retry policy captured with this provider route. */
   retryPolicy: ResolvedRetryPolicy
+  /** Compiled operator error-code rules captured with this provider route. */
+  errorCodeRules: readonly ErrorCodeRule[]
   /**
    * The pi-ai provider containing this route's serviceable models. Absent when
    * a stored route cannot be constructed; its configuration remains editable.
@@ -329,6 +351,12 @@ const modelProfile: z<PiAiModelProfile> = z.object({
 /** A {@link modelProfile} whose id lives in the `modelOverrides` dict key. */
 const modelOverride: z<PiAiModelOverride> = z.object(modelFields)
 
+const errorCodeRule = z.object({
+  match: z.string(),
+  code: z.union(ERROR_CODE_RULES),
+  after: z.boolean().default(false),
+})
+
 const profile = z.object({
   apiKeyEnv: z.string().role('credential-ref'),
   displayName: z.string(),
@@ -351,6 +379,7 @@ const profile = z.object({
   maxRequestImageBytes: z.number().step(1).min(1).default(DEFAULT_MAX_REQUEST_IMAGE_BYTES),
   requestImagePixelBudget: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET),
   requestImageMaxBytes: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_MAX_BYTES),
+  errorCodeRules: z.array(errorCodeRule).default([]),
   retryPolicy: RetryPolicySchema,
 })
 
@@ -413,6 +442,26 @@ function assertValidHeaders(provider: string, headers: Readonly<Record<string, s
  * @param validation - writes require a complete catalog; stored reads retain catalog diagnostics.
  * @returns validated profiles in configuration order.
  */
+const MAX_ERROR_CODE_RULES = 32
+const MAX_ERROR_CODE_PATTERN_LENGTH = 200
+
+function resolveErrorCodeRules(rules: readonly PiAiErrorCodeRule[], path: string): readonly ErrorCodeRule[] {
+  if (rules.length > MAX_ERROR_CODE_RULES) throw new Error(`${path} must contain at most ${MAX_ERROR_CODE_RULES} rules`)
+  const compiled = rules.map((rule, index) => {
+    if (rule.match.length === 0 || rule.match.length > MAX_ERROR_CODE_PATTERN_LENGTH) {
+      throw new Error(`${path}[${index}].match must be 1-${MAX_ERROR_CODE_PATTERN_LENGTH} characters`)
+    }
+    let pattern: RegExp
+    try {
+      pattern = new RegExp(rule.match)
+    } catch (error) {
+      throw new Error(`${path}[${index}].match must be a valid regular expression`, { cause: error })
+    }
+    return Object.freeze({ pattern, code: rule.code, after: rule.after ?? false })
+  })
+  return Object.freeze(compiled)
+}
+
 export function resolveProfiles(
   providers: Readonly<Record<string, PiAiProviderProfile>> | undefined,
   validation: 'strict' | 'deferred' = 'strict',
@@ -493,7 +542,7 @@ export function resolveProfiles(
       if (validation === 'strict' || !(error instanceof PiAiCatalogError)) throw error
       catalogError ??= error.message
     }
-    const { apiKeyEnv, retryPolicy, models: _models, displayName: _displayName, ...rest } = source
+    const { apiKeyEnv, errorCodeRules, retryPolicy, models: _models, displayName: _displayName, ...rest } = source
     resolved.set(provider, {
       ...rest,
       provider,
@@ -503,6 +552,7 @@ export function resolveProfiles(
       maxRequestImageBytes,
       requestImagePixelBudget,
       requestImageMaxBytes,
+      errorCodeRules: resolveErrorCodeRules(errorCodeRules ?? [], `llm-pi-ai: provider "${provider}" errorCodeRules`),
       retryPolicy: resolveRetryPolicy(retryPolicy, `llm-pi-ai: provider "${provider}" retryPolicy`),
       ...rest.headers === undefined ? {} : { headers: { ...rest.headers } },
       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
