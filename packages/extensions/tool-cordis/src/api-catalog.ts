@@ -137,9 +137,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     methods: [
       {
         signature: 'async register(definition: PresetDefinition): Promise<() => Promise<void>>',
-        description: 'Register and eagerly load a definition; activation failure remains visible in the roster.',
-        parameters: [{ name: 'definition', description: 'Parsed configuration supplied by the declaring plugin.' }],
-        returns: 'Definition disposer after activation or its diagnostic settles; the declaring plugin owns it.',
+        description: 'Register a declaration; mount it on first Agent or cold inspection use.',
+        parameters: [{ name: 'definition', description: 'preset identity, metadata and child plugin declarations.' }],
+        returns: 'an asynchronous disposer that unregisters the declaration and collects unused mounts.',
       },
       {
         signature: 'inspectCompositions(ctx?: Context): AgentPresetInspection[]',
@@ -170,6 +170,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read one declaration\'s child plugin list as YAML, for viewing only.',
         parameters: [{ name: 'agentPreset', description: 'Preset identity.' }],
         returns: 'The declared composition beside its published metadata.',
+      },
+      {
+        signature: 'place(ctx: Context, placement: PresetPlacement): void',
+        description: 'Transfer a workspace lease into the Agent scope before caller setup.',
+        parameters: [{ name: 'ctx', description: 'scoped Agent context that owns the transferred lease.' }, { name: 'placement', description: 'retained workspace placement to release with the Agent scope.' }],
       },
       {
         signature: 'async mount(ctx: Context, id?: string): Promise<AgentPreset>',
@@ -259,6 +264,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Register the agent-creation factory (the loop calls this on construction, effect-scoped). A traced Cordis service is canonicalized to its concrete target; each create/resume call is then traced through that caller\'s context so ownership follows the caller without stacking proxy layers. Throws if a factory is already registered. Returns the disposer; on dispose the factory slot is cleared.',
         parameters: [{ name: 'factory', description: 'the loop-owned factory {@link create}/{@link resume} delegate to.' }],
         returns: 'the disposer that clears the factory slot. The exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order.',
+      },
+      {
+        signature: 'registerSetup(setup: AgentSetup): () => void',
+        description: 'Register setup run before each create/resume caller setup.',
+        parameters: [{ name: 'setup', description: 'contribution composed into unpublished Agent setup.' }],
+        returns: 'disposer owned by the registering plugin fiber.',
       },
       {
         signature: 'async create(options: CreateAgentOptions): Promise<AgentHandle>',
@@ -782,6 +793,24 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the credential\'s Peer, or the rejection status.',
       },
       {
+        signature: 'admitAsync(request: ConnectionTrustRequest): Promise<PeerAdmission>',
+        description: 'Await Cloudflare Access verification for non-loopback requests, preserving existing Peers.',
+        parameters: [{ name: 'request', description: 'HTTP or upgrade request with trust and authentication headers.' }],
+        returns: 'the admitted Peer or rejection status.',
+      },
+      {
+        signature: 'admitConnectionAsync(request: ConnectionTrustRequest): Promise<ConnectionAdmission>',
+        description: 'Await ingress verification, then claim the same idempotent socket lease as admitConnection.',
+        parameters: [{ name: 'request', description: 'authenticated upgrade request.' }],
+        returns: 'the Peer and release operation, or rejection status.',
+      },
+      {
+        signature: 'accessExpiresAt(request: ConnectionTrustRequest): number | undefined',
+        description: 'Read the verified assertion expiry for a long-lived transport.',
+        parameters: [{ name: 'request', description: 'request previously admitted through Access.' }],
+        returns: 'absolute expiry in milliseconds, or undefined for other authentication.',
+      },
+      {
         signature: 'createPeer(options: { readonly principal: Principal; readonly interactions?: \'answer\' | \'none\' }): PeerScope',
         description: 'Create an independent in-process Peer, disposed with the Context that read `ctx.connection`.',
         parameters: [{ name: 'options', description: 'fixed principal and optional interaction participation (default `answer`).' }],
@@ -798,6 +827,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Authenticate one frontend index request, owning a token redirect or 401. The cookie this mints is `Secure` when the mounted Web carrier serves TLS, which only that listener\'s protocol decides.',
         parameters: [{ name: 'request', description: 'root or configured-index HTTP request.' }, { name: 'response', description: 'response owned when the result is false.' }],
         returns: 'true only when the frontend may serve index.html.',
+      },
+      {
+        signature: 'authorizeIndexAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean>',
+        description: 'Await Access authentication for trusted GET document navigation; local login retains its cookie exchange.',
+        parameters: [{ name: 'request', description: 'root or configured-index request.' }, { name: 'response', description: 'response owned when the result is false.' }],
+        returns: 'whether the frontend may render the index.',
       },
       {
         signature: 'authenticatedUrl(baseUrl: string): string',
@@ -2387,6 +2422,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a caller-owned observation lease.',
       },
       {
+        signature: 'captureSession<Value>( sessionId: SessionId, capture: (session: SessionCaptureReader, observation: SessionObservation) => Value & (Value extends PromiseLike<unknown> ? never : unknown), options: SessionObservationOptions = {}, ): Promise<Value>',
+        description: 'Sample the current live or unpublished prepared Session in one synchronous callback. Uses store message definitions, with no Agent activation or persistent writes. The runtime reader is the original full Session. Do not mutate it, yield, retain its observation, or return borrowed containers; return independently owned data. A cold observation excludes the end-seed marker added by preparation; Session seq includes it. The lease releases in finally on success or callback failure. Cold cancellation uses the observation error taxonomy; callback exceptions propagate unchanged.',
+        parameters: [{ name: 'sessionId', description: 'logical Session identity; caller owns source authorization.' }, { name: 'capture', description: 'synchronous callback over the selected Session and its source observation.' }, { name: 'options', description: 'cancellation and projection selection; no preparation-mode override.' }],
+        returns: 'independently owned callback output after releasing the observation lease.',
+      },
+      {
         signature: 'abstract searchSessions( request: SessionSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionSearchPage<SessionSearchHit>>',
         description: 'Search the live-preferred logical corpus and group by session.',
         parameters: [{ name: 'request', description: 'query text, metadata filters, page size, and cursor.' }, { name: 'exec', description: 'optional cancellation control.' }],
@@ -2405,6 +2446,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'deterministic newest-first cloned session records.',
       },
       {
+        signature: 'async pageSessions(request: SessionMetadataPageRequest, signal?: AbortSignal): Promise<SessionSearchPage<SessionRecord>>',
+        description: 'Page newest-first metadata from an immutable snapshot; continuation never re-lists persistence.',
+        parameters: [{ name: 'request', description: 'metadata filters, positive page size, and optional snapshot cursor.' }, { name: 'signal', description: 'cancellation for metadata observation and waiting.' }],
+        returns: 'detached records; expired, evicted, or unloaded snapshots reject with STALE_CURSOR.',
+      },
+      {
+        signature: 'async pageEvents(request: SessionEventPageRequest, signal?: AbortSignal): Promise<SessionEventPage>',
+        description: 'Project only one ascending raw-event page from one live or prepared observation.',
+        parameters: [{ name: 'request', description: 'target, exclusive seq bound, optional types and text, and positive page size.' }, { name: 'signal', description: 'cancellation during cold resolution and page scanning.' }],
+        returns: 'page metadata, exact source header and observed upper seq, and optional continuation.',
+      },
+      {
         signature: 'async readSession(sessionId: SessionId): Promise<SessionLogSnapshot>',
         description: 'Read and replay-validate one complete logical session log without making it live.',
         parameters: [{ name: 'sessionId', description: 'live or persisted session id to read.' }],
@@ -2413,8 +2466,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async filterSessions( filters: readonly SessionResultFilter[], signal?: AbortSignal, ): Promise<SessionRecord[]>',
-        description: 'Filter the complete logical corpus with provider-independent predicates.',
-        parameters: [{ name: 'filters', description: 'ANDed session metadata and availability clauses.' }, { name: 'signal', description: 'optional cancellation for persistence listing.' }],
+        description: 'Filter logical sessions; exact id clauses avoid a complete persistence listing.',
+        parameters: [{ name: 'filters', description: 'ANDed session metadata and availability clauses.' }, { name: 'signal', description: 'optional cancellation for persistence observations.' }],
         returns: 'matching cloned records in deterministic newest-first order.',
       },
       {
@@ -2449,7 +2502,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async readSurface(sessionId: SessionId): Promise<SessionSurfaceSnapshot>',
-        description: 'Read one session\'s complete current model surface from one corpus observation.',
+        description: 'Read original current surface events from an exact cut, reusing owner-held analysis.',
         parameters: [{ name: 'sessionId', description: 'live-preferred session id to read.' }],
         returns: 'cloned header, current surface, and the last sequence number included in the raw-log capture.',
         throws: ['when source resolution fails or the session surface is invalid.'],
@@ -2463,7 +2516,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async traceEvent(request: SessionEventTraceRequest, signal?: AbortSignal): Promise<SessionEventTraceObservation>',
-        description: 'Trace one event\'s direct positional replacements and cited source events.',
+        description: 'Trace direct replacements and citations at an exact cut, advancing only unseen events.',
         parameters: [{ name: 'request', description: 'target session id and event seq.' }, { name: 'signal', description: 'optional cancellation for persisted source resolution.' }],
         returns: 'source header, direct links, and the target\'s positional replacement chain.',
         throws: ['when source resolution fails, the target is absent, or surface/source-event validation fails.'],
@@ -6482,6 +6535,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PresetOption {\n    value: string;\n    name: string;\n    description?: string;\n}',
   },
   {
+    name: 'PresetPlacement',
+    declaration: 'export interface PresetPlacement {\n    readonly key: ScopeKey;\n    readonly ctx: Context;\n    release(): Promise<void>;\n}',
+  },
+  {
     name: 'PresetSpec',
     declaration: 'export interface PresetSpec {\n    sandbox: SandboxMode;\n    approval: ApprovalPolicy;\n    name?: string;\n    description?: string;\n}',
   },
@@ -7058,6 +7115,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n}',
   },
   {
+    name: 'SessionCaptureReader',
+    declaration: 'export interface SessionCaptureReader {\n    readonly id: SessionId;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly seq: SessionLogOffset;\n    readonly surface: SessionSurface;\n    requestHeader(): CaptureReadonly<ReturnType<Session[\'requestHeader\']>>;\n    requestContext(): CaptureReadonly<ReturnType<Session[\'requestContext\']>>;\n    deriveEventMessage(event: SessionEvent): CaptureReadonly<ReturnType<Session[\'deriveEventMessage\']>>;\n}',
+  },
+  {
     name: 'SessionControlBaseline',
     declaration: 'export interface SessionControlBaseline {\n    readonly projections: Readonly<Record<SessionId, SessionProjectionBaseline>>;\n}',
   },
@@ -7096,6 +7157,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionEventMetadataFilter',
     declaration: 'export type SessionEventMetadataFilter = Exclude<SessionEventResultFilter, {\n    kind: \'text\';\n}>;',
+  },
+  {
+    name: 'SessionEventPage',
+    declaration: 'export interface SessionEventPage {\n    session: SessionHeader;\n    items: readonly SessionEventPageItem[];\n    nextAfterSeq?: SessionSeq;\n    capturedThroughSeq: SessionSeqCursor;\n}',
+  },
+  {
+    name: 'SessionEventPageItem',
+    declaration: 'export interface SessionEventPageItem extends Omit<SessionEventRecord, \'surface\'> {\n    text?: string;\n}',
+  },
+  {
+    name: 'SessionEventPageRequest',
+    declaration: 'export interface SessionEventPageRequest {\n    sessionId: SessionId;\n    afterSeq?: SessionSeqCursor;\n    types?: readonly SessionEventType[];\n    limit: number;\n    includeText?: boolean;\n}',
   },
   {
     name: 'SessionEventReadRequest',
@@ -7274,8 +7347,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionMessageProjectionContext {\n    nodes: readonly SessionSeq[];\n    events: readonly SessionEvent[];\n    baseSeq: SessionLogOffset;\n    messages: ReadonlyMap<SessionSeq, Message>;\n}',
   },
   {
+    name: 'SessionMetadataPageRequest',
+    declaration: 'export interface SessionMetadataPageRequest {\n    filters?: readonly SessionResultFilter[];\n    limit: number;\n    cursor?: SessionSearchCursor;\n}',
+  },
+  {
     name: 'SessionObservation',
-    declaration: 'export interface SessionObservation extends Disposable {\n    readonly source: \'live\' | \'prepared\';\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffsetType;\n    readonly events: readonly SessionEvent[];\n    readonly cursor: SessionSeqCursor;\n    readonly revision?: SessionPersistenceRevision;\n    readonly projections?: ProjectionSnapshot;\n    retain(): SessionObservation;\n}',
+    declaration: 'export interface SessionObservation extends Disposable {\n    readonly source: \'live\' | \'prepared\';\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffsetType;\n    readonly events: readonly SessionEvent[];\n    readEvents(from: SessionLogOffsetType, to: SessionLogOffsetType): readonly SessionEvent[];\n    readonly cursor: SessionSeqCursor;\n    readonly revision?: SessionPersistenceRevision;\n    readonly projections?: ProjectionSnapshot;\n    retain(): SessionObservation;\n}',
   },
   {
     name: 'SessionObservationOptions',

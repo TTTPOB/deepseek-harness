@@ -435,7 +435,7 @@ export type Config = LocalConfig
 ## `@deepseek-ai/dsh-client-connection`
 
 - `inject`: `credentials`
-- `source`: [`packages/client/connection/src/index.ts:96`](../packages/client/connection/src/index.ts)
+- `source`: [`packages/client/connection/src/index.ts:97`](../packages/client/connection/src/index.ts)
 
 ```ts config-catalog
 /** Browser authentication, request limits, and connection recovery configuration. */
@@ -449,6 +449,8 @@ export interface ConnectionConfig {
    * an entry here. A non-canonical or non-bare authority fails plugin load.
    */
   trustedHosts?: string[]
+  /** Optional Cloudflare Access ingress; non-loopback requests require a valid assertion. */
+  cloudflareAccess?: CloudflareAccessConfig
   /** Absolute browser and API cookie lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -470,6 +472,14 @@ export interface ConnectionRecoveryConfig {
   generationReadyWarnMs?: number
   /** Deadline in ms for readiness, including physical connection setup. Default: 15000. */
   generationReadyTimeoutMs?: number
+}
+
+/** Deployment-selected Cloudflare Access application. */
+export interface CloudflareAccessConfig {
+  /** Official team issuer, for example https://team.cloudflareaccess.com. */
+  issuer: string
+  /** Application audience tag from Cloudflare Access. */
+  audience: string
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-client-connection -->
@@ -1267,7 +1277,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-tool-agent-team`
 
 - `inject`: `agents` · `agentTeams` · `tools` · `systemPrompt`
-- `source`: [`packages/experimental/tool-agent-team/src/index.ts:17`](../packages/experimental/tool-agent-team/src/index.ts)
+- `source`: [`packages/experimental/tool-agent-team/src/index.ts:18`](../packages/experimental/tool-agent-team/src/index.ts)
 
 ```ts config-catalog
 /** Tool routing configuration. */
@@ -1776,7 +1786,7 @@ export interface Config extends ProtocolConfig {
 ## `@deepseek-ai/dsh-llm-pi-ai`
 
 - `inject`: `llm`
-- `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
+- `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · `OpenAIResponsesCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
 - `source`: [`packages/llm/llm-pi-ai/src/config.ts:222`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
@@ -1959,6 +1969,14 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
+  /** System prompt location on Responses protocols; defaults to input. Requires pi-ai fork. */
+  systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
+  /** Whether the endpoint accepts system updates in history; all protocols whose compat type declares it. */
+  supportsMidConvoSystemMessages?: boolean
+  /** Whether Chat Completions accepts message-anchored tool additions. */
+  supportsMidConvoToolAdditions?: boolean
+  /** Whether Anthropic accepts tool changes in history. */
+  supportsMidConvoToolChanges?: boolean
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
@@ -2022,6 +2040,10 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Whether to serialize client-executed tool search; the three Responses protocols. */
+  supportsToolSearch?: boolean
+  /** Whether to serialize message-anchored additional tools; wins over tool search on Responses protocols. */
+  supportsAdditionalTools?: boolean
 }
 
 /** One request modality a pi-ai model may accept. */
@@ -2189,7 +2211,7 @@ export interface LspLocalServerConfig {
 ## `@deepseek-ai/dsh-mcp-client`
 
 - `inject`: `tools`
-- `source`: [`packages/mcp/mcp-client/src/index.ts:104`](../packages/mcp/mcp-client/src/index.ts)
+- `source`: [`packages/mcp/mcp-client/src/index.ts:106`](../packages/mcp/mcp-client/src/index.ts)
 
 ```ts config-catalog
 /** Configuration for one stdio or Streamable HTTP MCP server. */
@@ -2213,6 +2235,8 @@ export interface StdioConfig {
   env: Record<string, string>
   /** Working directory for the child process. */
   cwd: string
+  /** Maximum stdio read buffer size in bytes; omission preserves the MCP SDK default. */
+  maxBufferSize?: number
   /** Timeout per tool call or resource request in milliseconds. */
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
@@ -2872,7 +2896,7 @@ export interface Config {
 
 - `inject`: `sessions`
 - `refs`: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
-- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:92`](../packages/session-query/session-query-sqlite/src/index.ts)
+- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:95`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 ```ts config-catalog
 /** Combined session-query configuration backed by SQLite full-text search. */
@@ -2903,6 +2927,14 @@ export interface Config extends SessionQueryConfig {
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
   preparedSessionCacheSize?: number
+  /**
+   * Largest persisted log artifact, in bytes, this index reads into memory.
+   * Sessions above it stay out of full-text search and are reported once
+   * through `ctx.logger.warn`; a backend that omits
+   * `SessionPersistenceSnapshot.sizeBytes` is indexed without this bound.
+   * Defaults to 32 MiB.
+   */
+  maxIndexedSessionBytes?: number
 }
 
 /** SQLite module/handle opening phase; `never` disables full-text search entirely. */
