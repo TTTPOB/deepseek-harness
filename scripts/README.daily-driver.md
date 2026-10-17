@@ -21,17 +21,9 @@ Independent plugins qualify their releases in their own repositories. Source del
 
 ## Immutable release
 
-The [release workflow](../.github/workflows/daily-driver-release.yml) is manually dispatched. Select the source ref containing the current workflow, an existing `daily-driver-*` tag at that ref, a capability selection, and optionally space-separated package directories to publish. A core release also requires an immutable qualified Pi tarball URL; the workflow downloads it and sets `DSH_PI_AI_TARBALL`. Local core releases require the same environment input and refuse to publish without serializer qualification. A release tag names the source snapshot, not a shared package version: asynchronously versioned packages can coexist.
+The [release workflow](../.github/workflows/daily-driver-release.yml) is manually dispatched. Select the source ref containing the current workflow, an existing `daily-driver-*` tag at that ref, a capability selection, and optionally space-separated package directories to publish. A core release also requires an immutable qualified Pi tarball URL; the workflow downloads it and sets `DSH_PI_AI_TARBALL`. A release tag names the source snapshot, not a shared package version: asynchronously versioned packages can coexist.
 
-With explicit publishing authorization, the equivalent local command is:
-
-```sh
-GH_REPO=TTTPOB/deepseek-harness RELEASE_TAG=daily-driver-example \
-  node scripts/daily-driver.mjs release session-query \
-  packages/session-query/session-query packages/session-query/session-query-sqlite
-```
-
-The example tag is a placeholder; create and push a new tag only with separate authorization. The command requires the local and remote tag objects to agree and the tag commit to be HEAD. It refuses an existing Release, runs prepare/verify/build/smoke, then creates a Release with exactly the selected tarballs and their `SHA256SUMS`. It never uploads to or edits an existing Release and never moves a tag. Omitting package directories publishes the entire capability selection; selecting a subset still validates and builds the full smoke prerequisites. Existing release assets remain immutable.
+Publish only through the GitHub Actions Release workflow (`.github/workflows/daily-driver-release.yml`); do not build and upload official Release assets locally. See the long-term upgrade manual in the separate configuration repository: `dsh-config/docs/upstream-upgrade.md`. Create and push a new tag only with separate authorization. Omitting package directories publishes the entire capability selection; selecting a subset still validates and builds the full smoke prerequisites. Existing release assets remain immutable.
 
 Adding a release changes manifests and the explicit package selection, not workflow jobs. Add a capability check only for a new behavior that existing checks cannot exercise.
 

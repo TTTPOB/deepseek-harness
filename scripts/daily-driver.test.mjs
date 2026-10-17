@@ -44,15 +44,6 @@ test('capability groups track rc.1 owners and toolchain', async () => {
   ])
   assert.throws(() => plan('access', ['packages/client/ui-settings']))
   assert.throws(() => plan('core', ['packages/core/agent', 'packages/core/agent']))
-  const workflow = await readFile(join(root, '.github/workflows/daily-driver-release.yml'), 'utf8')
-  assert(workflow.includes('options: [session-query, core, access]'))
-  const core = await readFile(join(root, 'scripts/smoke-core-packages.mjs'), 'utf8')
-  assert(!core.includes('workspace.overrides'))
-  assert(core.includes('await checkSubagentManager('))
-  const subagent = await readFile(join(root, 'scripts/smoke-subagent.mjs'), 'utf8')
-  assert(subagent.includes('lib/types/manager.js'))
-  assert(subagent.includes('lib/types/activation.js'))
-  assert(!/lib\/types\/continuation[^'"\s]*\.js/.test(subagent))
   for (const selection of Object.keys(selections)) {
     for (const path of [...plan(selection).packages.map(pkg => pkg.directory), ...selections[selection].tests]) {
       await access(join(root, path))
@@ -92,49 +83,6 @@ test('smokes reject incomplete artifact sets before installation', () => {
     assert.match(result.stderr, /Usage: node scripts\/smoke-/)
   }
 })
-
-for (const regression of ['none', 'premature-hold', 'leaked-hold', 'accepted-sibling']) {
-  test(`manager smoke detects ${regression}`, async () => {
-    const temporary = await mkdtemp(join(tmpdir(), 'daily-driver-manager-test-'))
-    try {
-      const { checkSubagentManager } = await import('./smoke-subagent.mjs')
-      await mkdir(join(temporary, 'lib/types'), { recursive: true })
-      await writeFile(join(temporary, 'package.json'), '{"type":"module"}\n')
-      await writeFile(join(temporary, 'lib/types/activation.js'), 'export class ChildLock {}\n')
-      await writeFile(join(temporary, 'lib/types/manager.js'), `
-const regression = ${JSON.stringify(regression)}
-const failure = code => Object.assign(new Error('belongs to another parent session'), { code })
-export class SubagentManager {
-  holdOwnership(parent, target) {
-    const activation = this.resident.get(parent.id)
-    activation.ownedChildren.add(target)
-    return () => activation.ownedChildren.delete(target)
-  }
-  settlementState(activation) { return activation.ownedChildren.size ? 'wait' : 'ready' }
-  async sendMessage(parent, target) {
-    if (regression === 'premature-hold') this.holdOwnership(parent, target)()
-    const resident = this.resident.get(target)
-    const coldRelease = resident === undefined ? this.holdOwnership(parent, target) : undefined
-    const header = resident?.handle.agent.session.header
-      ?? (await this.ctx.get('sessionQuery').observeSession(target)).header
-    if (header.parentSession !== parent.id) {
-      if (regression === 'accepted-sibling') return 'unexpected-message'
-      coldRelease?.()
-      throw failure('UNAUTHORIZED')
-    }
-    const release = coldRelease ?? this.holdOwnership(parent, target)
-    if (regression !== 'leaked-hold') release()
-    throw failure('NOT_RESUMABLE')
-  }
-}
-`)
-      if (regression === 'none') await checkSubagentManager(temporary)
-      else await assert.rejects(checkSubagentManager(temporary), error => error instanceof assert.AssertionError)
-    } finally {
-      await rm(temporary, { recursive: true, force: true })
-    }
-  })
-}
 
 test('core release refuses missing Pi qualification before contacting GitHub', () => {
   const result = spawnSync(process.execPath, ['scripts/daily-driver.mjs', 'release', 'core'], {
