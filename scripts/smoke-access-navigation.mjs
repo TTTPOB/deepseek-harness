@@ -1,7 +1,7 @@
 /** Exercise paired Access artifacts through the installed official CLI and its real Web Loader. */
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
 import { createRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 
 import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
+import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 const expected = plan('access').packages
 const names = expected.map(pkg => pkg.name)
 const uiNames = names.slice(3)
@@ -57,18 +58,16 @@ function get(origin, path, headers) {
 }
 
 try {
-  for (const tarball of tarballs) await copyFile(tarball, join(runtime, basename(tarball)))
+  await stageArtifactOverrides(runtime, expected, tarballs)
   await writeFile(join(runtime, 'package.json'), JSON.stringify({
     name: 'access-navigation-artifact-smoke', private: true, type: 'module', packageManager: packageManager,
     dependencies: { '@deepseek-ai/dsh': officialVersion },
   }, null, 2) + '\n')
-  const overrides = names.map((name, index) => `  '${name}': 'file:./${basename(tarballs[index])}'`).join('\n')
-  await writeFile(join(runtime, 'pnpm-workspace.yaml'),
-    `packages:\n  - .\nblockExoticSubdeps: false\noverrides:\n${overrides}\n`)
   // The nested project is its own workspace: --ignore-workspace would discard these overrides.
   execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), 'install', '--ignore-scripts'], {
     cwd: runtime, env, stdio: 'pipe', timeout: 600_000, maxBuffer: 4 * 1024 * 1024,
   })
+  stage = 'installed package resolution'
   const local = createRequire(join(runtime, 'package.json'))
   const cliManifest = local.resolve('@deepseek-ai/dsh/package.json')
   const cli = createRequire(cliManifest)
@@ -80,21 +79,25 @@ try {
   const anchors = new Map()
   const manifests = new Map()
   for (const [index, name] of names.entries()) {
+    stage = `built entries for ${name}`
     const consumer = index === 2 ? base : web
     const manifest = await realpath(consumer.resolve(`${name}/package.json`))
     assert.match(manifest, /file\+/)
     const metadata = JSON.parse(await readFile(manifest, 'utf8'))
-    assert.equal(metadata.version, versions[index], name)
+    assert.equal(metadata.version, expected[index].version, name)
     manifests.set(name, metadata)
     anchors.set(name, createRequire(manifest))
     const loaded = await import(pathToFileURL(consumer.resolve(name)).href)
     assert(Object.keys(loaded).length > 0, `${name} has a built Host entry`)
     if (metadata.dsh?.client) {
-      const clientBundle = await readFile(join(dirname(manifest), 'lib/client.js'), 'utf8')
+      const entry = metadata.exports['./client']
+      const browserEntry = typeof entry === 'string' ? entry : entry.browser ?? entry.default
+      const clientBundle = await readFile(join(dirname(manifest), browserEntry), 'utf8')
       assert(clientBundle.includes('__ModuleLoader__'), `${name} has a browser bundle`)
       assert(!clientBundle.includes('require("@deepseek-ai/cosmokit")'), `${name} inlines cosmokit`)
     }
   }
+  stage = 'modal and terminal declarations'
   if (uiNames.length) {
     const manager = dirname(anchors.get(uiNames[0]).resolve(uiNames[0] + '/package.json'))
     assert((await readFile(join(manager, 'lib/types/client/index.d.ts'), 'utf8')).includes('openModal()'),
@@ -103,6 +106,7 @@ try {
     assert((await readFile(join(terminal, 'lib/client.terminal.js'), 'utf8')).includes('__ModuleLoader__'),
       'installed terminal includes its lazy browser chunk')
   }
+  stage = 'shared peer identities'
   for (const name of names.slice(1)) {
     if (manifests.get(name).peerDependencies?.[names[0]]) {
       assert.equal(await realpath(anchors.get(name).resolve(names[0])), await realpath(web.resolve(names[0])), `${name} shares Connection`)
@@ -232,6 +236,9 @@ try {
 } catch (error) {
   // Do not print child output, command objects, request headers, assertion values, or URLs containing tokens.
   console.error(`artifact smoke failed during ${stage}: ${error instanceof assert.AssertionError ? 'acceptance assertion failed (' + error.message.split('\n')[0].replace(/https?:\/\/\S+/g, '[URL]') + ')' : 'operation failed or timed out'}`)
+  if (!(error instanceof assert.AssertionError)) {
+    console.error(`failure kind: ${error?.name ?? 'unknown'}; code: ${error?.code ?? 'none'}; frame: ${error?.stack?.split('\n')[1]?.trim().replace(/https?:\/\/\S+/g, '[URL]') ?? 'unavailable'}`)
+  }
   process.exitCode = 1
 } finally {
   if (child && !closed) {

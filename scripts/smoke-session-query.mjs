@@ -1,28 +1,25 @@
 /** Isolated session-query artifacts, cold official Web Loader, and targeted read smoke. */
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
+import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 const packages = plan('session-query').packages.map(pkg => [pkg.name, pkg.version])
 const tarballs = process.argv.slice(2).map(path => resolve(path))
 assert.equal(tarballs.length, 4,
   'Usage: node scripts/smoke-session-query.mjs <session-query.tgz> <persistence-jsonl.tgz> <session-query-sqlite.tgz> <session.tgz>')
 const runtime = await mkdtemp(join(tmpdir(), 'dsh-session-index-artifact-'))
 try {
-  for (const tarball of tarballs) await copyFile(tarball, join(runtime, basename(tarball)))
+  await stageArtifactOverrides(runtime, plan('session-query').packages, tarballs)
   await writeFile(join(runtime, 'package.json'), JSON.stringify({
     name: 'session-index-artifact-smoke', private: true, type: 'module', packageManager: packageManager,
     dependencies: { '@deepseek-ai/dsh': officialVersion },
   }, null, 2) + '\n')
-  const overrides = packages.map(([name], index) =>
-    `  '${name}': 'file:./${basename(tarballs[index])}'`).join('\n')
-  await writeFile(join(runtime, 'pnpm-workspace.yaml'),
-    `packages:\n  - .\nblockExoticSubdeps: false\noverrides:\n${overrides}\n`)
   // Preserve the caller's user-level store rather than pnpm's temporary-filesystem fallback.
   const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], {
     encoding: 'utf8', timeout: 60_000,
@@ -127,7 +124,7 @@ try {
   const [queryDefinition, persistenceFork, queryFork, sessionFork] = loaded
   assert.equal(sessionFork, sessionModule)
   assert.equal(queryDefinition.default, queryModule.default)
-  assert(persistenceFork.default.prototype instanceof persistenceModule.default)
+  assert.equal(typeof persistenceFork.apply, 'function')
   assert(queryFork.default.prototype instanceof queryModule.default)
   assert(persistenceModule.default.prototype instanceof Service)
   assert.equal(queryFork.SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES, 33554432)
@@ -136,7 +133,8 @@ try {
   try {
     await ctx.plugin(sessionModule.default)
     await ctx.plugin(projectionModule.default)
-    await ctx.plugin(persistenceFork.default, { root: join(runtime, 'sessions'), compression: 'none' })
+    await ctx.plugin(persistenceFork, { root: join(runtime, 'sessions'), compression: 'none' })
+    assert(ctx.sessionPersistence instanceof persistenceModule.default)
     await ctx.plugin(queryFork.default, { path: join(runtime, 'search.db') })
     const counters = { list: 0, stat: 0, open: 0 }
     for (const name of Object.keys(counters)) {

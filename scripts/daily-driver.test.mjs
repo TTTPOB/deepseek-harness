@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { manifest, packageManager, plan, root, selections } from './daily-driver-plan.mjs'
+import { artifactClosure, stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 
 test('artifact names follow individual manifests and a subset does not shrink the smoke closure', () => {
   const checks = plan('session-query', ['packages/session-query/session-query-sqlite'])
@@ -29,9 +30,14 @@ test('capability groups track rc.1 owners and toolchain', async () => {
   assert.deepEqual(Object.keys(selections), ['session-query', 'core', 'access'])
   assert.deepEqual(plan('core').packages.map(pkg => pkg.directory), [
     'packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent',
-    'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client',
+    'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team',
   ])
   assert(plan('core').tests.includes('packages/subagent/subagent/tests'))
+  assert(plan('core').tests.includes('packages/experimental/tool-agent-team/tests'))
+  const closure = artifactClosure(plan('core').packages)
+  assert(closure.some(pkg => pkg.directory === 'packages/core/session'))
+  assert(closure.some(pkg => pkg.directory === 'packages/session-query/session-query'))
+  assert.equal(new Set(closure.map(pkg => pkg.name)).size, closure.length)
   assert.deepEqual(plan('access').packages.map(pkg => pkg.directory), [
     'packages/client/connection', 'packages/host/frontend-static', 'packages/api/gateway',
     'packages/client/ui-plugin-manager', 'packages/client/ui-sidebar-terminal',
@@ -51,6 +57,30 @@ test('capability groups track rc.1 owners and toolchain', async () => {
     for (const path of [...plan(selection).packages.map(pkg => pkg.directory), ...selections[selection].tests]) {
       await access(join(root, path))
     }
+  }
+})
+
+test('consumer overrides and build permissions belong to its workspace, including an explicit Pi tarball', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'daily-driver-overrides-test-'))
+  const previous = process.env.DSH_PI_AI_TARBALL
+  try {
+    const runtime = join(temporary, 'runtime')
+    await mkdir(runtime)
+    const asset = join(temporary, 'fixture.tgz')
+    const pi = join(temporary, 'pi-fixture.tgz')
+    await writeFile(asset, 'fixture')
+    await writeFile(pi, 'pi-fixture')
+    process.env.DSH_PI_AI_TARBALL = pi
+    await stageArtifactOverrides(runtime, [{ name: 'fixture', version: 'fixture' }], [asset])
+    const workspace = JSON.parse(await readFile(join(runtime, 'pnpm-workspace.yaml'), 'utf8'))
+    assert.deepEqual(workspace.overrides, { fixture: 'file:./fixture.tgz', '@earendil-works/pi-ai': 'file:./pi-fixture.tgz' })
+    assert.equal(workspace.allowBuilds['node-pty'], true)
+    assert.equal(workspace.allowBuilds.protobufjs, false)
+    assert.equal(await readFile(join(runtime, 'pi-fixture.tgz'), 'utf8'), 'pi-fixture')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_PI_AI_TARBALL
+    else process.env.DSH_PI_AI_TARBALL = previous
+    await rm(temporary, { recursive: true, force: true })
   }
 })
 
@@ -84,13 +114,15 @@ export class SubagentManager {
   async sendMessage(parent, target) {
     if (regression === 'premature-hold') this.holdOwnership(parent, target)()
     const resident = this.resident.get(target)
+    const coldRelease = resident === undefined ? this.holdOwnership(parent, target) : undefined
     const header = resident?.handle.agent.session.header
       ?? (await this.ctx.get('sessionQuery').observeSession(target)).header
     if (header.parentSession !== parent.id) {
       if (regression === 'accepted-sibling') return 'unexpected-message'
+      coldRelease?.()
       throw failure('UNAUTHORIZED')
     }
-    const release = this.holdOwnership(parent, target)
+    const release = coldRelease ?? this.holdOwnership(parent, target)
     if (regression !== 'leaked-hold') release()
     throw failure('NOT_RESUMABLE')
   }

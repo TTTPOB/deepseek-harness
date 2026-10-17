@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { manifest, plan, root } from './daily-driver-plan.mjs'
+import { artifactClosure } from './daily-driver-artifacts.mjs'
 
 const [command, selection, ...directories] = process.argv.slice(2)
 assert(['prepare', 'verify', 'build', 'smoke', 'release'].includes(command) && selection,
@@ -14,7 +15,8 @@ const run = (bin, args, options = {}) => execFileSync(bin, args, { cwd: root, st
 const node = args => run(process.execPath, args)
 const pnpm = args => run('pnpm', ['--config.verify-deps-before-run=false', ...args])
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
-const source = action => node(['scripts/daily-driver-source.mjs', action, ...checks.packages.map(pkg => pkg.directory)])
+const source = action => node(['scripts/daily-driver-source.mjs', action,
+  ...(action === 'build' ? artifactClosure(checks.packages) : checks.packages).map(pkg => pkg.directory)])
 function prepare() { source('install') }
 function verify() {
   node(['--test', 'scripts/daily-driver-source.test.mjs', 'scripts/daily-driver.test.mjs'])

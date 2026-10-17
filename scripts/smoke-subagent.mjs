@@ -1,12 +1,13 @@
 /** Isolated subagent built-entry and manager message-ownership checks. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { copyFile, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
+import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 
 /** Check the installed manager without starting agents or a Host process. */
 export async function checkSubagentManager(directory) {
@@ -55,7 +56,8 @@ export async function checkSubagentManager(directory) {
   const parked = manager.resident.get(b.id)
   manager.resident.delete(b.id)
   await assert.rejects(manager.sendMessage(a, b.id, content, { signal }), error => error.code === 'UNAUTHORIZED')
-  assert.deepEqual(held, [], 'Cold sibling messages are rejected before acquiring a hold')
+  assert.deepEqual(held, [b.id], 'Cold sibling denial releases its temporary hold')
+  assert.equal(manager.resident.get(a.id).ownedChildren.size, 0)
   assert.deepEqual(observations, [b.id])
   manager.resident.set(b.id, parked)
   for (const child of [a, b]) {
@@ -64,8 +66,8 @@ export async function checkSubagentManager(directory) {
     assert.equal(activation.ownedChildren.size, 0, child.id)
     assert.equal(manager.settlementState(activation, activation.poke), 'ready', child.id)
   }
-  assert.deepEqual(held, ['unresumable-a', 'unresumable-b'], 'Failed cold resume releases each admitted hold')
-  console.log('Subagent manager rejects resident/cold sibling messages before holds and cleans up failed resume holds')
+  assert.deepEqual(held, [b.id, 'unresumable-a', 'unresumable-b'], 'Failed cold resume releases each admitted hold')
+  console.log('Subagent manager authorizes resident siblings before holds and cleans up cold denial/resume holds')
 }
 
 async function main() {
@@ -75,10 +77,8 @@ async function main() {
   const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
   const runtime = await mkdtemp(join(tmpdir(), 'dsh-subagent-artifact-'))
   try {
-    await copyFile(resolve(asset), join(runtime, basename(asset)))
+    await stageArtifactOverrides(runtime, [pkg], [asset])
     await writeFile(join(runtime, 'package.json'), JSON.stringify({ name: 'subagent-artifact-smoke', private: true, type: 'module', packageManager, dependencies: { '@deepseek-ai/dsh': officialVersion } }))
-    await writeFile(join(runtime, 'pnpm-workspace.yaml'), JSON.stringify({ packages: ['.'], blockExoticSubdeps: false,
-      overrides: { [pkg.name]: 'file:./' + basename(asset) } }))
     execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), 'install', '--ignore-scripts'], { cwd: runtime, stdio: 'inherit', timeout: 600_000 })
     const local = createRequire(join(runtime, 'package.json'))
     const cli = createRequire(local.resolve('@deepseek-ai/dsh/package.json'))
