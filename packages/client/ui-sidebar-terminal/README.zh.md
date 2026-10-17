@@ -58,6 +58,10 @@ kind: "package-reference"
 - [Right Sidebar](../../client/ui-sidebar-right/README.zh.md)
 - [Web terminal decision](../../../.agents/notes/implemented/feature/2026-09-09-web-sidebar-terminal.zh.md)
 
+### Fork 行为
+
+触摸为主的手机上，可见全屏终端提供一次性 Ctrl/Alt 以及 Esc、Tab、方向键、Ctrl+C、Ctrl+D。只有匹配提交的 ASCII 文本消费修饰键；粘贴、协议回复和输入法组合过程原样传递。隐藏、失去写权限、失焦或替换模拟器清除修饰键。按键栏保留焦点但不重新唤起键盘。VisualViewport 在测量行数前约束终端表面，后续内容只计一次；桌面、双指缩放及非全屏面板不变。原输出确认及流控保持不变。
+
 <a id="model-experience"></a>
 ## 模型体验
 

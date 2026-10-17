@@ -58,6 +58,10 @@ At plugin startup, terminal-kind entries in the sidebar's complete open-tab inve
 - [Right Sidebar](../../client/ui-sidebar-right/README.md)
 - [Web terminal decision](../../../.agents/notes/implemented/feature/2026-09-09-web-sidebar-terminal.md)
 
+### Fork behavior
+
+On a touch-primary phone, the visible fullscreen terminal provides one-shot Ctrl/Alt and explicit Esc, Tab, arrows, Ctrl+C, and Ctrl+D keys. Only matching committed ASCII text consumes modifiers; paste, protocol replies, and active IME composition pass through unchanged. Hiding the view, losing write control, blur, or emulator replacement clears modifiers. The key row preserves focus without reopening the keyboard. VisualViewport sizing bounds the terminal surface before fitting, counts following content once, and leaves desktop, pinch zoom, and non-fullscreen panes unchanged. Existing output acknowledgement and flow control remain unchanged.
+
 <a id="model-experience"></a>
 ## Model Experience
 
