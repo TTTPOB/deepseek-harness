@@ -1,6 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import { createAssistantMessage, createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import SessionStore, { Session, SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import SessionPersistence, {
   SessionPersistenceCorruptionError,
@@ -18,13 +18,18 @@ import type {
 } from '@deepseek-ai/dsh-session-persistence'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { describe, expect, it, vi } from 'vitest'
-import { SessionObservationReader } from '../src/observation.ts'
+import { SessionObservationReader, analyzeObservation } from '../src/observation.ts'
+import { EventLogAnalysis } from '../src/tracing.ts'
+import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-format-catalog/message-projections'
+import { TestSessionQueryEngine } from './test-service.ts'
+import TokenMeter from '@deepseek-ai/dsh-token-meter'
+import type { SessionCaptureReader, SessionObservation } from '../src/index.ts'
 
 function header(id: string): SessionHeader {
   return { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt: 1, isSeeded: false, cwd: '/workspace' }
 }
 
-function messageEvent(seq: number, text: string): SessionEvent {
+function messageEvent(seq: number, text: string): SessionEvent<'user/message'> {
   return {
     type: 'user/message',
     seq: SessionSeq(seq),
@@ -58,9 +63,9 @@ interface StubCounters {
 
 interface StubHooks {
   /** Runs inside `stat` before it resolves. */
-  onStat?: () => void
+  onStat?: () => void | Promise<void>
   /** Runs inside `read` before it resolves. */
-  onRead?: () => void
+  onRead?: () => void | Promise<void>
   /** Observes the detached values returned by `read`. */
   onReadResult?: (events: SessionEvent[]) => void
   /** Replaces the read result for every open handle. */
@@ -75,14 +80,14 @@ function stubPersistence(
   counters: StubCounters,
   hooks: StubHooks = {},
 ): SessionPersistence {
-  const stat = (
+  const stat = async (
     id: SessionIdType,
     options?: SessionPersistenceStatOptions,
   ): Promise<SessionPersistenceSnapshot | undefined> => {
     counters.stat += 1
     void options
     const entry = store.get(id)
-    hooks.onStat?.()
+    await hooks.onStat?.()
     if (hooks.statFailure !== undefined) {
       // Exercise containment of a backend violating the Error rejection convention.
       // oxlint-disable-next-line typescript/prefer-promise-reject-errors
@@ -103,14 +108,14 @@ function stubPersistence(
       header: structuredClone(entry.header),
       inheritedEventCount: SessionLogOffset(0),
       access,
-      read: (
+      read: async (
         _offset?: number,
         _length?: number,
         options?: SessionHandleReadOptions,
       ): Promise<SessionHandleReadResult> => {
         counters.read += 1
         void options
-        hooks.onRead?.()
+        await hooks.onRead?.()
         if (hooks.readFailure !== undefined) {
           // oxlint-disable-next-line typescript/prefer-promise-reject-errors
           return Promise.reject(hooks.readFailure)
@@ -126,7 +131,7 @@ function stubPersistence(
     }
     return Promise.resolve(handle)
   }
-  return { stat, open } as never
+  return { identity: Symbol('stub persistence'), stat, open } as never
 }
 
 async function readerContext(): Promise<Context> {
@@ -134,6 +139,233 @@ async function readerContext(): Promise<Context> {
   await ctx.plugin(SessionStore)
   return ctx
 }
+
+/** Private consumer adapter: capture always supplies the original complete Session. */
+function measureCaptured(meter: TokenMeter, reader: SessionCaptureReader) {
+  return meter.measure(reader as Session)
+}
+
+function captureNodes(reader: SessionCaptureReader, observation: SessionObservation) {
+  return reader.surface.nodes.map((seq) => {
+    const event = observation.readEvents(SessionLogOffset(seq), SessionLogOffset(seq + 1))[0]!
+    return { seq, message: structuredClone(reader.deriveEventMessage(event)) }
+  })
+}
+
+describe('captureSession synchronous store sampling', () => {
+  it('passes the original live Session and fixes nodes, messages, routing, and meter output before yielding', async () => {
+    const ctx = await readerContext()
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TokenMeter)
+    await ctx.plugin(TestSessionQueryEngine)
+    const live = ctx.sessions.create(SessionId('capture-live'))
+    live.append('request/header', { reason: 'initial', header: { config: { provider: 'mock', model: 'first' } } })
+    live.append('request/context', { provider: 'mock', model: 'first', contextWindow: 1000 })
+    live.append('step/start', { turn: 1, step: 1 })
+    const original = live.append('user/message', messageEvent(0, 'original').data, { surfaceOp: 'append' })
+    live.append('assistant/message', { turn: 1, step: 1, stream: [], message: createAssistantMessage({
+      source: { provider: 'mock', model: 'first' }, content: [],
+    }) }, { surfaceOp: 'append' })
+    let called = false
+    let borrowed: SessionObservation | undefined
+    const pending = ctx.sessionQuery.captureSession(live.id, (reader, observation) => {
+      called = true
+      borrowed = observation
+      expect(reader).toBe(live)
+      return {
+        nodes: captureNodes(reader, observation), cut: observation.cursor,
+        header: structuredClone(reader.requestHeader()), context: structuredClone(reader.requestContext()),
+        replaceGeneration: reader.surface.replaceGeneration, contentGeneration: reader.surface.contentGeneration,
+        measured: measureCaptured(ctx.tokenMeter, reader),
+      }
+    }, { projectionMode: 'none' })
+    expect(called).toBe(true)
+    expect(() => borrowed!.retain()).toThrow('is disposed')
+    live.append('user/message', messageEvent(0, 'replacement').data, {
+      surfaceOp: { op: 'replace', startSeq: original.seq, endSeq: original.seq }, sourceEventSeqs: [original.seq],
+    })
+    live.append('request/context', { provider: 'mock', model: 'later' })
+    const captured = await pending
+    expect(captured.nodes.map(node => node.seq)).toEqual([3, 4])
+    expect(captured.nodes[0]?.message).toMatchObject({ content: [{ text: 'original' }] })
+    expect(captured.nodes[1]?.message).toBeNull()
+    expect(captured.measured.nodes.map(node => node.seq)).toEqual([3, 4])
+    expect(captured.measured.nodes[1]?.tokens).toBe(0)
+    expect(captured.measured.logRevision).toBe(5)
+    expect(captured).toMatchObject({ cut: 4, context: { model: 'first' }, replaceGeneration: 0, contentGeneration: 0 })
+    expect(ctx.tokenMeter['states'].has(live)).toBe(true)
+    expect(ctx.get('agents')).toBeUndefined()
+    await ctx.fiber.dispose()
+  })
+
+  it('reuses store preparations, keeps source cuts separate from markers, and leaves original read leases owned by callers', async () => {
+    const ctx = await readerContext()
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TokenMeter)
+    await ctx.plugin(TestSessionQueryEngine)
+    const meta = header('capture-cold')
+    const stored = { header: meta, events: interruptedLog('cold'), revision: 'r1' }
+    const counters = { stat: 0, open: 0, read: 0 }
+    ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, stored]]), counters))
+    const prepare = vi.spyOn(ctx.sessions, 'prepare')
+    const enter = vi.spyOn(ctx.sessions, 'enter')
+    const announce = vi.spyOn(ctx.sessions, 'announce')
+    const owner = ctx.sessionQuery['_observations']
+    let projectionsExpected = false
+    const sample = (reader: SessionCaptureReader, observation: SessionObservation) => {
+      expect(observation.projections !== undefined).toBe(projectionsExpected)
+      expect(reader).toBe(prepare.mock.results.at(-1)?.value)
+      expect(owner['cache'].get(meta.id)?.refs).toBeGreaterThan(0)
+      expect(reader).toBe(owner['cache'].get(meta.id)?.session)
+      return { nodes: captureNodes(reader, observation), cut: observation.cursor,
+        events: observation.events.map(event => event.type), measured: measureCaptured(ctx.tokenMeter, reader) }
+    }
+    const first = await ctx.sessionQuery.captureSession(meta.id, sample, { projectionMode: 'none' })
+    expect(first.events).toEqual(['turn/start', 'user/message', 'turn/end'])
+    expect(first.cut).toBe(2)
+    expect(first.measured.logRevision).toBe(4)
+    expect(owner['cache'].get(meta.id)?.refs).toBe(0)
+    const session = prepare.mock.results[0]?.value as Session
+    expect(session.eventAt(SessionSeq(3))?.type).toBe('session/end-seed')
+    expect(ctx.tokenMeter['states'].has(session)).toBe(true)
+    const original = await ctx.sessionQuery.observeSession(meta.id, { projectionMode: 'none' })
+    projectionsExpected = true
+    const next = await ctx.sessionQuery.captureSession(meta.id, sample, { projectionMode: 'all' })
+    expect(next).toEqual(first)
+    expect(counters.read).toBe(1)
+    expect(prepare).toHaveBeenCalledOnce()
+    expect(owner['cache'].get(meta.id)?.refs).toBe(1)
+    const retained = original.retain()
+    original[Symbol.dispose]()
+    retained[Symbol.dispose]()
+    expect(owner['cache'].get(meta.id)?.refs).toBe(0)
+    expect(enter).not.toHaveBeenCalled()
+    expect(announce).not.toHaveBeenCalled()
+    expect(ctx.sessions.get(meta.id)).toBeUndefined()
+    expect(ctx.get('agents')).toBeUndefined()
+    expect(stored.events).toHaveLength(2)
+    await ctx.fiber.dispose()
+  })
+
+  it('uses store interpreters while unchanged meter independently folds image offload', async () => {
+    const ctx = await readerContext()
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TokenMeter)
+    await ctx.plugin(TestSessionQueryEngine)
+    const meta = header('capture-definitions')
+    const image = { ...messageEvent(0, ''), data: createUserMessage({ source: { kind: 'user' }, content: [{
+      type: 'image', attachment: {
+        attachmentId: 'sha256:' + 'a'.repeat(64) as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+      },
+    }] }) }
+    const offload: SessionEvent<'image/offload'> = {
+      type: 'image/offload', seq: SessionSeq(1), time: 2,
+      data: { targets: [{ seq: SessionSeq(0), imageIndexes: [0] }] },
+    }
+    const counters = { stat: 0, open: 0, read: 0 }
+    ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, {
+      header: meta, events: [image, offload], revision: 'r1',
+    }]]), counters))
+    await ctx.sessionQuery.readSurface(meta.id)
+    await expect(ctx.sessionQuery.captureSession(meta.id, () => undefined, { projectionMode: 'none' }))
+      .rejects.toMatchObject({ code: 'SESSION_QUERY_CORRUPT_SESSION' })
+    const remove = ctx.sessions.registerMessageProjection({ type: 'image/offload', project: () => new Map() })
+    const captured = await ctx.sessionQuery.captureSession(meta.id, (reader, observation) => ({
+      nodes: captureNodes(reader, observation), measured: measureCaptured(ctx.tokenMeter, reader),
+    }), { projectionMode: 'none' })
+    expect(captured.nodes[0]?.message?.content[0]?.type).toBe('image')
+    expect(captured.measured.nodes.map(node => node.seq)).toEqual([0])
+    expect(captured.measured.surfaceTokens).toBe(ctx.tokenMeter.estimateMessage(image.data))
+    const prepared = ctx.sessionQuery['_observations']['cache'].get(meta.id)!.session
+    expect(ctx.tokenMeter['states'].get(prepared)?.surface[0]?.images[0]?.offloaded).toBe(true)
+    await ctx.sessionQuery.captureSession(meta.id, () => undefined, { projectionMode: 'none' })
+    expect(counters.read).toBe(3)
+    await ctx.sessionQuery.readSurface(meta.id)
+    await ctx.sessionQuery.captureSession(meta.id, () => undefined, { projectionMode: 'none' })
+    expect(counters.read).toBe(5)
+    await remove()
+    await ctx.fiber.dispose()
+  })
+
+  it('releases a failed callback lease and permits eviction without wrapping the callback error', async () => {
+    const ctx = await readerContext()
+    await ctx.plugin(TestSessionQueryEngine, { preparedSessionCacheSize: 1 })
+    const a = header('capture-failure-a')
+    const b = header('capture-failure-b')
+    const counters = { stat: 0, open: 0, read: 0 }
+    ctx.provide('sessionPersistence', stubPersistence(new Map([a, b].map(meta => [meta.id, {
+      header: meta, events: [messageEvent(0, 'cold')], revision: 'r1',
+    }])), counters))
+    const failed = new Error('capture failed')
+    let borrowed: SessionObservation | undefined
+    await expect(ctx.sessionQuery.captureSession(a.id, (_reader, observation) => {
+      borrowed = observation
+      throw failed
+    }, { projectionMode: 'none' })).rejects.toBe(failed)
+    expect(() => borrowed!.retain()).toThrow('is disposed')
+    expect(ctx.sessionQuery['_observations']['cache'].get(a.id)?.refs).toBe(0)
+    await ctx.sessionQuery.captureSession(b.id, () => undefined, { projectionMode: 'none' })
+    await ctx.sessionQuery.captureSession(a.id, () => undefined, { projectionMode: 'none' })
+    expect(counters.read).toBe(3)
+    await ctx.fiber.dispose()
+  })
+
+  it('never invokes capture after cancellation or service disposal during cold resolution', async () => {
+    for (const phase of ['stat', 'read'] as const) {
+      for (const stop of ['abort', 'dispose'] as const) {
+        const ctx = await readerContext()
+        await ctx.plugin(TestSessionQueryEngine)
+        const meta = header('capture-' + phase + '-' + stop)
+        const started = Promise.withResolvers<undefined>()
+        const release = Promise.withResolvers<undefined>()
+        const counters = { stat: 0, open: 0, read: 0 }
+        ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, {
+          header: meta, events: interruptedLog('cold'), revision: 'r1',
+        }]]), counters, { [phase === 'stat' ? 'onStat' : 'onRead']: () => { started.resolve(undefined); return release.promise } }))
+        const abort = new AbortController()
+        const capture = vi.fn(() => 1)
+        const owner = ctx.sessionQuery['_observations']
+        const pending = ctx.sessionQuery.captureSession(meta.id, capture, { signal: abort.signal, projectionMode: 'none' })
+        const rejected = stop === 'abort'
+          ? expect(pending).rejects.toMatchObject({ code: 'SESSION_QUERY_ABORTED' })
+          : expect(pending).rejects.toThrow('reader is disposed')
+        await started.promise
+        if (stop === 'abort') abort.abort(new Error('cancelled'))
+        else await ctx.fiber.dispose()
+        release.resolve(undefined)
+        await rejected
+        expect(capture).not.toHaveBeenCalled()
+        expect(owner['cache'].size).toBe(0)
+        if (stop === 'abort') await ctx.fiber.dispose()
+      }
+    }
+  })
+
+  it('selects an attaching live Session and samples before later promise continuations mutate it', async () => {
+    const ctx = await readerContext()
+    await ctx.plugin(TestSessionQueryEngine)
+    const meta = header('capture-attaching')
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, {
+      header: meta, events: [messageEvent(0, 'cold')], revision: 'r1',
+    }]]), { stat: 0, open: 0, read: 0 }, { onRead: () => { started.resolve(undefined); return release.promise } }))
+    const pending = ctx.sessionQuery.captureSession(meta.id, (reader, observation) => {
+      expect(reader).toBe(live)
+      return { nodes: captureNodes(reader, observation), cut: observation.cursor }
+    }, { projectionMode: 'none' })
+    await started.promise
+    const live = ctx.sessions.create(meta.id)
+    live.append('user/message', messageEvent(0, 'live').data, { surfaceOp: 'append' })
+    release.resolve(undefined)
+    const appended = pending.then(() => { live.append('user/message', messageEvent(0, 'later').data, { surfaceOp: 'append' }) })
+    const captured = await pending
+    await appended
+    expect(captured).toMatchObject({ cut: 0, nodes: [{ seq: 0, message: { content: [{ text: 'live' }] } }] })
+    expect(live.seq).toBe(2)
+    await ctx.fiber.dispose()
+  })
+})
 
 describe('SessionObservationReader live path', () => {
   it('creates independent live leases and rejects retention after disposal', async () => {
@@ -786,6 +1018,199 @@ describe('SessionObservationReader cold projections', () => {
       code: 'SESSION_QUERY_CORRUPT_SESSION',
       message: expect.stringContaining('failed to project') as string,
     })
+    await ctx.fiber.dispose()
+  })
+})
+
+describe('SessionObservationReader canonical query projections', () => {
+  it('advances lazily, rebuilds old cuts, and drops disposed live-object state', async () => {
+    const ctx = await readerContext()
+    const session = Session.create(SessionId('query-live'))
+    const detach = ctx.sessions.enter(session)
+    ctx.sessions.announce(session)
+    const original = session.append('user/message', messageEvent(0, 'original').data, { surfaceOp: 'append' })
+    const reader = new SessionObservationReader(ctx)
+    using old = await reader.read(session.id, { projectionMode: 'none' })
+    const snapshots = vi.spyOn(session, 'snapshotEvents')
+    let shared: EventLogAnalysis | undefined
+    const first = await reader.project(session.id, (_observation, analysis) => {
+      shared = analysis
+      return analysis.surfaceEvents()
+    })
+    expect(snapshots.mock.calls).toEqual([[0, 1]])
+    snapshots.mockClear()
+    session.append('user/message', messageEvent(0, 'replacement').data, {
+      surfaceOp: { op: 'replace', startSeq: original.seq, endSeq: original.seq }, sourceEventSeqs: [original.seq],
+    })
+    session.append('user/message', messageEvent(0, 'citation').data, { surfaceOp: 'append', sourceEventSeqs: [original.seq] })
+    expect(snapshots).not.toHaveBeenCalled()
+    const trace = await reader.project(session.id, (_observation, analysis) => analysis.trace(original.seq))
+    expect(snapshots.mock.calls).toEqual([[1, 3]])
+    expect(trace).toMatchObject({ replacementChain: [1], derivedEventSeqs: [1, 2] })
+    const oldAnalysis = analyzeObservation(old, shared!)
+    expect(oldAnalysis).not.toBe(shared)
+    expect(oldAnalysis.surfaceEvents()).toEqual([original])
+    expect(oldAnalysis.trace(original.seq).replacementChain).toEqual([])
+    expect(first).toEqual([original])
+    expect(shared?.processed).toBe(3)
+    expect(reader['liveAnalyses'].has(session)).toBe(true)
+    detach()
+    expect(reader['liveAnalyses'].has(session)).toBe(false)
+    const replacement = ctx.sessions.create(session.id)
+    replacement.append('user/message', messageEvent(0, 'new object').data, { surfaceOp: 'append' })
+    await expect(reader.project(session.id, (_observation, analysis) => analysis.trace(SessionSeq(0))))
+      .resolves.toMatchObject({ replacementChain: [], derivedEventSeqs: [] })
+    reader.dispose()
+    expect(reader['liveAnalyses'].has(replacement)).toBe(false)
+    await ctx.fiber.dispose()
+  })
+
+  it('reuses one cold revision and rebuilds synthetic tails and new live objects', async () => {
+    const ctx = await readerContext()
+    const meta = header('query-cold-tail')
+    const source = Session.create(meta.id)
+    const callId = ToolCallId('pending')
+    source.append('turn/start', { turn: 1 })
+    source.append('step/start', { turn: 1, step: 1 })
+    source.append('assistant/message', { turn: 1, step: 1, stream: [], message: createAssistantMessage({
+      source: { provider: 'mock', model: 'mock' },
+      content: [{ type: 'tool-call', id: callId, name: 'read', arguments: '{}' }],
+    }) }, { surfaceOp: 'append' })
+    source.append('tool/call', { turn: 1, step: 1, callId, name: 'read', arguments: '{}' })
+    const entry: StoredEntry = { header: meta, events: [...source.snapshotEvents()], revision: 'r1' }
+    const counters = { stat: 0, open: 0, read: 0 }
+    ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, entry]]), counters))
+    const reader = new SessionObservationReader(ctx, 1)
+    let oldLease: Awaited<ReturnType<SessionObservationReader['read']>> | undefined
+    let oldAnalysis: EventLogAnalysis | undefined
+    const first = await reader.project(meta.id, (observation, analysis) => {
+      oldLease = observation.retain()
+      oldAnalysis = analysis
+      return { cut: observation.cursor, events: analysis.surfaceEvents(), trace: analysis.trace(SessionSeq(3)) }
+    })
+    expect(first).toMatchObject({ cut: 6, trace: { derivedEventSeqs: [4] } })
+    expect(first.events.at(-1)).toMatchObject({ type: 'tool/result', seq: 4, data: { message: { isError: true } } })
+    await reader.project(meta.id, (_observation, analysis) => { expect(analysis).toBe(oldAnalysis) })
+    expect(counters.read).toBe(1)
+    source.append('tool/result', { turn: 1, step: 1, message: createToolResultMessage({
+      callId, content: [{ type: 'text', text: 'real result' }], isError: false,
+    }) }, { surfaceOp: 'append' })
+    source.append('step/end', { turn: 1, step: 1 })
+    source.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    entry.events = [...source.snapshotEvents()]
+    entry.revision = 'r2'
+    const second = await reader.project(meta.id, (observation, analysis) => {
+      expect(analysis).not.toBe(oldAnalysis)
+      return { cut: observation.cursor, events: analysis.surfaceEvents(), trace: analysis.trace(SessionSeq(3)) }
+    })
+    expect(counters.read).toBe(2)
+    expect(second).toMatchObject({ cut: 6, trace: { derivedEventSeqs: [] } })
+    expect(second.events.at(-1)).toMatchObject({ seq: 4, data: { message: { isError: false } } })
+    expect(analyzeObservation(oldLease!, oldAnalysis!).surfaceEvents()).toEqual(first.events)
+    oldLease![Symbol.dispose]()
+    const live = ctx.sessions.create(meta.id, {
+      seed: entry.events, meta: { createdAt: meta.createdAt, ...meta.cwd === undefined ? {} : { cwd: meta.cwd } },
+    })
+    const liveSnapshots = vi.spyOn(live, 'snapshotEvents')
+    await reader.project(meta.id, (observation, analysis) => {
+      expect(analysis).not.toBe(oldAnalysis)
+      expect(observation.cursor).toBe(7)
+    })
+    expect(liveSnapshots.mock.calls).toEqual([[0, 8]])
+    reader.dispose()
+    await ctx.fiber.dispose()
+  })
+
+  it('isolates store definitions and preserves interpreter and restore error ordering', async () => {
+    const ctx = await readerContext()
+    const meta = header('query-definitions')
+    const image: SessionEvent = { ...messageEvent(0, ''), data: createUserMessage({ source: { kind: 'user' }, content: [{
+      type: 'image', attachment: {
+        attachmentId: 'sha256:' + 'a'.repeat(64) as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+      },
+    }] }) }
+    const offload: SessionEvent<'image/offload'> = {
+      type: 'image/offload', seq: SessionSeq(1), time: 2,
+      data: { targets: [{ seq: SessionSeq(0), imageIndexes: [0] }] },
+    }
+    const entry: StoredEntry = { header: meta, events: [image, offload], revision: 'r1' }
+    const counters = { stat: 0, open: 0, read: 0 }
+    ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, entry]]), counters))
+    const reader = new SessionObservationReader(ctx)
+    expect(await reader.project(meta.id, (_observation, analysis) => analysis.surfaceEvents())).toEqual([image])
+    await expect(reader.read(meta.id, { projectionMode: 'none' })).rejects.toMatchObject({ code: 'SESSION_QUERY_CORRUPT_SESSION' })
+    const remove = ctx.sessions.registerMessageProjection({ type: 'image/offload', project: () => new Map() })
+    using publicLease = await reader.read(meta.id, { projectionMode: 'none' })
+    expect(publicLease.cursor).toBe(1)
+    expect(counters.read).toBe(3)
+    expect(await reader.project(meta.id, (_observation, analysis) => analysis.surfaceEvents())).toEqual([image])
+    expect(counters.read).toBe(4)
+    entry.events = [image, { ...offload, data: { targets: [{ seq: SessionSeq(0), imageIndexes: [99] }] } }]
+    entry.revision = 'r2'
+    using acceptedByStore = await reader.read(meta.id, { projectionMode: 'none' })
+    expect(acceptedByStore.cursor).toBe(1)
+    await expect(reader.project(meta.id, () => undefined, undefined, SessionSeq(9)))
+      .rejects.toMatchObject({ code: 'SESSION_QUERY_EVENT_NOT_FOUND' })
+    await expect(reader.project(meta.id, () => undefined))
+      .rejects.toMatchObject({ code: 'SESSION_QUERY_INVALID_SURFACE' })
+    const missing = new EventLogAnalysis(meta.id, [])
+    expect(() => { missing.append([image, offload]) }).toThrow(expect.objectContaining({ code: 'SESSION_QUERY_INVALID_SURFACE' }))
+    const definitions = [...currentSessionMessageProjections]
+    const used = new EventLogAnalysis(meta.id, definitions)
+    used.append([image, offload])
+    definitions.length = 0
+    for (const read of [() => used.surfaceEvents(), () => used.trace(SessionSeq(0)), () => { used.append([]) }]) {
+      expect(read).toThrow(expect.objectContaining({ code: 'SESSION_QUERY_INVALID_SURFACE', message: expect.stringContaining('removed or replaced') as string }))
+    }
+    entry.events = [{ type: 'turn/start', seq: SessionSeq(0), time: 1.5, data: { turn: 1 } }]
+    entry.revision = 'r3'
+    await expect(reader.project(meta.id, () => undefined, undefined, SessionSeq(9)))
+      .rejects.toMatchObject({ code: 'SESSION_QUERY_EVENT_NOT_FOUND' })
+    await expect(reader.project(meta.id, () => undefined))
+      .rejects.toMatchObject({ code: 'SESSION_QUERY_CORRUPT_SESSION' })
+    await remove()
+    reader.dispose()
+    await ctx.fiber.dispose()
+  })
+
+  it('projects after async source resolution and never repopulates a disposed reader', async () => {
+    const ctx = await readerContext()
+    const meta = header('query-async')
+    const entry = { header: meta, events: [messageEvent(0, 'cold')], revision: 'r1' }
+    const counters = { stat: 0, open: 0, read: 0 }
+    const hooks: StubHooks = {}
+    ctx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, entry]]), counters, hooks))
+    await ctx.plugin(TestSessionQueryEngine)
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    hooks.onRead = () => { started.resolve(undefined); return release.promise }
+    const pending = ctx.sessionQuery.readSurface(meta.id)
+    await started.promise
+    const live = ctx.sessions.create(meta.id)
+    live.append('user/message', messageEvent(0, 'live').data, { surfaceOp: 'append' })
+    release.resolve(undefined)
+    const appended = pending.then(() => { live.append('user/message', messageEvent(0, 'later').data, { surfaceOp: 'append' }) })
+    const result = await pending
+    await appended
+    expect(result).toMatchObject({ capturedThroughSeq: 0, events: [{ data: { content: [{ text: 'live' }] } }] })
+    expect(live.seq).toBe(2)
+    for (const phase of ['stat', 'read'] as const) {
+      const started = Promise.withResolvers<undefined>()
+      const release = Promise.withResolvers<undefined>()
+      const hooks: StubHooks = { [phase === 'stat' ? 'onStat' : 'onRead']: () => { started.resolve(undefined); return release.promise } }
+      const coldCtx = await readerContext()
+      coldCtx.provide('sessionPersistence', stubPersistence(new Map([[meta.id, entry]]), counters, hooks))
+      await coldCtx.plugin(TestSessionQueryEngine)
+      const owner = coldCtx.sessionQuery['_observations']
+      const retained = coldCtx.sessionQuery.readSurface(meta.id)
+      const rejected = expect(retained).rejects.toThrow('reader is disposed')
+      await started.promise
+      await coldCtx.fiber.dispose()
+      release.resolve(undefined)
+      await rejected
+      expect(owner['cache'].size).toBe(0)
+      expect(owner['disposed']).toBe(true)
+    }
     await ctx.fiber.dispose()
   })
 })

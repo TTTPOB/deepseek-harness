@@ -27,11 +27,17 @@ kind: "package-reference"
 
 当你需要读取或搜索会话历史、而不直接触碰会话服务或存储后端时，从应用代码使用 `ctx.sessionQuery`。该服务由具体后端插件提供——已发布组合挂载 `@deepseek-ai/dsh-session-query-sqlite`（[README](../session-query-sqlite/README.zh.md)）——因此本包从不单独挂载。一旦组合了后端，以下全部能力都可在 `ctx.sessionQuery` 上使用。
 
+增量 query 实现从 `@deepseek-ai/dsh-session` 导入 `SurfaceFoldAccumulator`。请同时安装本包打包后 peer 依赖精确声明的 Session fork 版本和匹配的 SQLite 后端；官方 `0.2.1-rc.1` Session 未导出该 accumulator。
+
 ### 你可以做什么
 
 | 操作 | 你得到什么 |
 |---|---|
 | `listSessions()` | 每个逻辑会话，最新的在前，带 `live` 与 `persisted` 可用性标志及可选 `formatStatus` |
+| `pageSessions(request)` | 带到期语义的不可变快照上的有界元数据页 |
+| `pageEvents(request)` | 有界、seq 升序的原始事件元数据及可选语义文本 |
+| `captureSession(id, capture, options)` | 在同一个选定 Session 上同步复制当前节点、预览、路由与消费方自有计量结果 |
+
 | `readSession(id)` | 经过回放校验的完整原始事件日志，且不会让该会话变为实时 |
 | `filterSessions(filters)` | 匹配 AND 连接的元数据与可用性谓词的会话 |
 | `filterEvents(id, filters)` | 匹配元数据与字面文本谓词的语义事件文档 |
@@ -43,6 +49,21 @@ kind: "package-reference"
 | `searchSessions(request)` / `searchEvents(request)` | 全文搜索分页结果，由挂载的后端实现 |
 
 不带正文的记录只公开 `SessionHeader.isSeeded`。返回事件正文的读取（`readSession`、`readSurface`、`readEvent`）与保留的 `SessionObservation` 值还携带精确 `inheritedEventCount`，因此调用方无需从日志推断切点即可区分继承事件与自有事件。
+
+<a id="paging-and-freshness"></a>
+### 分页与新鲜度
+
+pageSessions({ filters?, limit, cursor? }) 固定最新优先的不可变元数据快照。续页必须保留相同过滤器，可改变 limit；期间插入和删除不移动页位置，已删除记录仍出现在原快照中。游标在快照到期、被容量淘汰、持久化换源或服务重载后以 SESSION_QUERY_STALE_CURSOR 失败；过滤器变化以 SESSION_QUERY_INVALID_CURSOR 失败。消费方必须完整发出一页，不能截短 items 后仍使用其页末游标。
+
+pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观察一次来源，按 seq 升序返回原始事件元数据（包括结构事件），不折叠 surface。afterSeq 是排他的下界，默认 -1；types 使用 OR，空列表无匹配；includeText 默认 false，只有本页发出的事件才提取语义文本。结果携带同次观察的 session header 和 capturedThroughSeq；观察中仍有匹配事件时才返回 nextAfterSeq。续页是新的观察，允许看到新追加事件。
+
+完整列表、非精确 id 筛选和会话 trace 共用持久化 header catalog，成功刷新后在 metadataCacheTtlMs 内复用；每次读取仍叠加当前 live store。默认跨进程或存储变化最多有 5 秒可见性延迟，TTL 到期后的下一次读取重扫存储；TTL 为 0 时每次读取重新列举。持久化实例身份变化立即阻止旧 catalog 复用；本机会话创建和卸载使 catalog 失效，查询服务卸载清空缓存。同时启动的冷列表读取各自拥有取消信号，可能并行扫描；缓存只复用已成功完成的列举。精确 id 筛选及冷事件读取仍逐 id stat。首次列举和到期刷新仍需完整扫描元数据，冷事件首次读取仍需完整加载与 prepare 日志。
+
+### 同步采样
+
+需要在一个同步回调中组合当前 Session 读取并返回独立拥有的结果时，使用 `captureSession`。Query 通过只读 `SessionCaptureReader` 类型传入原始 Session 及配对的源 observation，再在 `finally` 释放租约。不能 yield、修改或保留 Session、retain observation，或返回借用容器。只读节点时使用 `projectionMode: none`，还需已记录 projection 汇总时使用 `all`。源授权仍由调用方负责；回调错误原样传播。
+
+[采样参考](../../../docs/subsystems/session-query.zh.md#synchronous-session-sampling)说明逐节点解释、空节点、私有 meter 适配、source cut 与 meter revision 的区别及 store preparation 复用。cold capture 从不激活 Agent 或写持久存储；首次未命中仍恢复完整日志。
 
 ### 过滤器
 
@@ -58,7 +79,10 @@ kind: "package-reference"
 |---|---|---|
 | `readWindowMax` | `50` | `readEvent` 接受的 `before`/`after` 原始事件数上限 |
 | `persistedReadConcurrency` | `4` | 一次批量标题读取中的并发持久化日志读取数 |
-| `preparedSessionCacheSize` | `5` | 为跨 `observeSession` 读取复用而保留的冷 prepared-Session 观察数 |
+| `preparedSessionCacheSize` | `5` | 为观察和规范 query 分析复用而保留的冷 prepared 条目数 |
+| `metadataCacheTtlMs` | `5000` | 持久化元数据新鲜度窗口（毫秒），0 关闭复用 |
+| `sessionPageSnapshotTtlMs` | `60000` | 会话列表快照固定有效期（毫秒） |
+| `sessionPageSnapshotCapacity` | `8` | 同时保留的会话列表快照数上限 |
 
 ### 失败与恢复
 
@@ -79,9 +103,9 @@ kind: "package-reference"
 本服务建立在一个分离与三项承诺之上：
 
 - **实时优先的逻辑语料库。** 每次读取都解析一个一致的观察：实时 `ctx.sessions` 优先，可选的 `ctx.sessionPersistence` 补充其余部分，冲突的不可变 header 宁可失败也不合并。
-- **脱离存储的结果。** 所有返回的 header、事件与记录都是克隆；不暴露实时状态，也不保留订阅。
+- **自有结果。** 精确读取结果为独立克隆；observation 有显式租约，capture 回调仅在复制自有输出时借用所选 Session。
 - **精确读取具体，搜索抽象。** 读取、过滤与追踪在此只实现一次；两个全文方法是由后端拥有的唯一抽象表面。
-- **一次规范的表层折叠。** `listEvents`、`readSurface` 与 `traceEvent` 使用同一个 `dsh-session` 折叠校验整个日志，因此搜索与追踪和模型历史推导一致。
+- **同一规范表层解释器。** `listEvents`、`readSurface` 与 `traceEvent` 使用 `dsh-session` 转换及 catalog 消息定义；公共观察保持 store 定义的 preparation。
 
 决策历史记录在[统一服务决策](../../../.agents/notes/archived/architecture/2026-07-23-unified-session-query-service.md)、[追踪笔记](../../../.agents/notes/archived/feature/2026-07-13-session-query-tracing.md)与 [SQLite 提供方笔记](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md)中。
 
@@ -98,12 +122,14 @@ kind: "package-reference"
 | [`src/filters.ts`](src/filters.ts) | 提供方无关谓词与字面文本扫描 |
 | [`src/extraction.ts`](src/extraction.ts) | 按事件类型的第一方语义文本提取 |
 | [`src/documents.ts`](src/documents.ts) | 表层感知的语义文档投影 |
-| [`src/tracing.ts`](src/tracing.ts) | 一次性会话血缘与事件关系追踪 |
+| [`src/tracing.ts`](src/tracing.ts) | 增量规范事件分析与会话血缘追踪 |
 | [`src/sources.ts`](src/sources.ts) | 不可变 header 兼容性检查 |
+| [`src/paging.ts`](src/paging.ts) | 有界元数据快照及分页游标 |
+
 
 ### 语料库解析
 
-`SessionCorpus` 通过 fiber 绑定可选的 `ctx.sessionPersistence`，并实时优先解析每次读取：已知实时目标直接快照，不查询持久化；否则先列出会话，再通过短生命周期的读取句柄完整读出日志，并在克隆前重新检查是否出现实时挂载。写入者在轮次中途崩溃的冷日志用 `interruptedTurnClosers` 在内存中补齐——读取从不修改持久化。列表与加载观察之间会断言 header 兼容性。批量标题读取执行一次元数据列表与有界并发读取，把逐会话失败隔离，而取消会拒绝整个批次。
+`SessionCorpus` 通过 fiber 绑定可选的 `ctx.sessionPersistence`，并实时优先解析每次读取：已知实时目标直接快照，不查询持久化；否则只对该 id 执行 `stat`，再通过短生命周期的读取句柄完整读出日志，并在克隆前重新检查实时挂载。冷日志用 `interruptedTurnClosers` 在内存中补齐，读取从不修改持久化；stat 与加载观察之间会断言 header 兼容性。精确 id 筛选先取 id 条款交集，只 stat 这些 id，保留可用性标记与最新优先顺序；不含 id 条款的筛选仍列举语料库。批量标题读取对每个 id 执行有界并发 stat 与日志读取，隔离逐会话失败，而取消会拒绝整个批次。
 
 ### 观察缓存
 
@@ -111,7 +137,11 @@ kind: "package-reference"
 
 ### 读取与追踪
 
-`readSession` 通过 `Session.create` 回放日志，复用恢复的校验。`readSurface`、`listEvents` 与 `traceEvent` 共用一次 `foldSurface` 遍历，把事件分类为 `current`、`shadowed` 或 `log-only`，并校验从零开始且连续的 seq、表层标记的适用性以及替换或引用完整性；任何违规都以 `SESSION_QUERY_INVALID_SURFACE` 失败。追踪是一次性的：会话血缘只读取一次语料库并确定性遍历父级与后代树；事件追踪沿位置替换者跟进到最终节点，同时保持被引用源事件链接不传递。
+`EventLogAnalysis` 在借用的事件引用上增量维护规范 surface、实际替换历史和反向直接来源引用。surface 读取只生成当前事件，trace 只生成目标 record；`eventRecords` 仍物化完整列表。reader 在 `WeakMap<Session, state>` 中持有 live 分析，在 prepared 条目上持有 cold 分析。查询惰性处理 `[processed, cut)`；没有 replacement 的普通引用也会推进反向索引。Session dispose（资源释放）删除弱键；query 服务 dispose 清空 prepared 条目并替换 weak map，进行中的读取不能回填。
+
+`readSurface` 与 `traceEvent` 异步解析来源后，在同一同步段 capture cut、推进分析并复制最终输出，且在 `finally` 释放租约。surface 输出包含按节点位置排序的原事件，保留空消息；image-offload 解释校验日志，但不把投影消息替入输出。事件 trace 先检查目标存在，再执行规范 fold 和 cold preparation；沿实际位置替换追踪，保留直接来源顺序及升序的后来引用。规范 fold 失败仍为 `SESSION_QUERY_INVALID_SURFACE`；cold preparation 仍执行 `Session.fromRestore` 校验。
+
+prepared 条目仅在持久化 identity、revision 及 preparation mode 相同的情况下复用分析。规范 query preparation 使用 catalog 定义，与公共 `observeSession` 的 store 定义隔离。revision 改变时重建完整的补齐前缀，包括 synthetic interrupted closers；新 live Session 也完整重建，包括其 end-seed marker。旧租约 cut 落后于共享分析时临时重建该前缀，而不通过过滤较新的 surface 生成答案。`readSession` 保持完整回放校验，`listEvents` 保持完整 record 列表。
 
 </details>
 
@@ -122,6 +152,7 @@ kind: "package-reference"
 
 当包级约定不够用时阅读以下页面。它们从共享查询词汇逐步进入具体后端与决策证据。
 
+- [规范 query 诊断](tests/performance/README.zh.md)——可复现的合成 CPU、heap 与 clone 量测。
 - [会话查询子系统参考](../../../docs/subsystems/session-query.zh.md)——完整类型级约定：记录、过滤器、搜索页、血缘、有界读取与错误。
 - [dsh-session-query-sqlite](../session-query-sqlite/README.zh.md)——已发布的全文后端及其索引生命周期。
 - [dsh-tool-session-query](../../experimental/tool-session-query/README.zh.md)——构建在本服务之上的面向模型消费方。
@@ -133,7 +164,7 @@ kind: "package-reference"
 <a id="model-experience"></a>
 ## 模型体验
 
-无，因为该可信查询服务只向调用方返回克隆记录，且不注册任何面向模型的内容。
+无，因为本服务不注册面向模型的工具，模型可见呈现由消费方负责。
 
 #### KV Cache 影响
 
@@ -148,7 +179,7 @@ kind: "package-reference"
 
 - **无调用方授权**——这是上下文范围内的可信基础设施；模型工具或 UI 必须限制调用方可检查的会话。
 - **无提供方协调器或回退**——服务在搜索上是抽象的，组合必须挂载具体后端；没有搜索提供方注册表或回退实现。
-- **精确读取回放整个日志**——`readSession`、`readSurface`、`filterEvents` 与事件追踪会加载并校验完整逻辑日志，因此非常大的历史每次调用都要付出完整检查；`listSessions` 保持轻量。
+- **冷缓存未命中仍检查完整日志**——首次 cold 读取和 revision 改变仍加载并恢复完整日志。`readSurface` 与事件 trace 复用 owner 持有的分析；`readSession`、`listEvents` 与 `filterEvents` 仍每次检查完整日志。[合成诊断](tests/performance/README.zh.md)量测复用成本，不构成部署保证。
 - **字面文本扫描，而非全文搜索**——`text` 过滤器用正则表达式扫描提取出的文档且不提供排名；带排名的搜索需要挂载后端。
 
 <a id="dev-note"></a>
