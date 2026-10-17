@@ -71,6 +71,10 @@ Client waterfall Context resolution stays synchronous. A resolver can return a b
 
 Generated declaration merges provide the TypeScript API through the shared `TypertClientRemote` contract. The Client entry contains no Host Service or Host Cordis interface merge, and method lookup and invocation use ordinary objects and functions rather than a JavaScript Proxy.
 
+### Fork behavior
+
+WebSocket ingress awaits `connection.admitConnectionAsync` and retains the upstream idempotent Peer release on error, closure, or failed upgrade. An Access assertion expiry closes its socket and releases the same lease; Remote RBAC checks remain unchanged.
+
 <a id="model-experience"></a>
 ## Model Experience
 

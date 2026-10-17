@@ -71,6 +71,10 @@ Client waterfall 的 Context 解析保持同步。解析器可以返回借用的
 
 生成的声明合并通过共享的 `TypertClientRemote` 约定提供 TypeScript API。Client 入口不包含 Host 服务或 Host Cordis 接口合并；方法查找和调用使用普通对象与函数，而不使用 JavaScript Proxy。
 
+### Fork 行为
+
+WebSocket 入口等待 `connection.admitConnectionAsync`，保留上游在错误、关闭或升级失败时幂等释放 Peer 的机制。Access assertion 到期时关闭 socket 并释放同一租约；Remote RBAC 校验保持不变。
+
 <a id="model-experience"></a>
 ## 模型体验
 

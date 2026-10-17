@@ -115,9 +115,9 @@ describe('operator connect through Loader composition', () => {
   it('releases admission when the underlying socket is destroyed before upgrade', async () => {
     const host = await boot()
     const cookie = await exchange(host, 'none')
-    const admit = host.ctx.connection.admitConnection.bind(host.ctx.connection)
-    const admission = vi.spyOn(host.ctx.connection, 'admitConnection').mockImplementationOnce((request) => {
-      const result = admit(request)
+    const admit = host.ctx.connection.admitConnectionAsync.bind(host.ctx.connection)
+    const admission = vi.spyOn(host.ctx.connection, 'admitConnectionAsync').mockImplementationOnce(async (request) => {
+      const result = await admit(request)
       if (!(request instanceof IncomingMessage)) throw new Error('fixture expected a Node upgrade request')
       request.socket.destroy()
       return result

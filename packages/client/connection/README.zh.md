@@ -64,6 +64,12 @@ HTTPS cookie 名称与签名 audience 包含 `https:` scheme，因此即使 host
 可通过 Host Connection 行的 `config.recovery` 覆盖重试上限、增长因子或握手告警与取消时间；[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-client-connection)列出接受的字段。Host 校验这些值，并将其注入所提供的每个页面。Client 在提供 Connection 前校验启动数据，并在 Gateway 启动循环时采用这些默认值；显式传给 `start()` 的时序覆盖优先。增长因子必须是至少为一的有限数。若就绪、失败、取消或硬期限先于告警发生，该告警会被取消。修改 Host 恢复配置后需重新加载页面。
 
 
+### Fork 行为
+
+可选的 `cloudflareAccess: { issuer: "https://team.cloudflareaccess.com", audience: "application-aud-tag" }` 要求每个非 loopback HTTP 请求、`/connect` 交换和 WebSocket 升级提供来自该官方 HTTPS team issuer 的 RS256 assertion。`jose` 使用 issuer 的 `/cdn-cgi/access/certs` JWKS 验证签名、issuer、audience 和必需的过期时间；cookie 和启动 token 不能绕过 Access。调用方使用等待验证的 `admitAsync`、`admitConnectionAsync`、`authorizeIndexAsync`；同步准入拒绝 Access 入口。API 凭据保留上游 Peer 身份、socket 租约与 Remote 权限检查；验证后的浏览器入口使用既有 owner browser Peer。Gateway 在 assertion 到期时关闭 socket。
+
+只有可信 Host 的 GET index 文档导航（`sec-fetch-mode: navigate`、`sec-fetch-dest: document`）允许跨站或 opaque Origin；API、`/connect` 和升级仍执行完整 Origin/Fetch-Metadata 校验。验证后的 index 不签发第二份 DSH cookie；根路径 token query 重定向到干净的 `./`。公共 authority 仍列入 `trustedHosts`，代理入口使用 HTTPS。不注入设置持久化权限全局值。
+
 <a id="model-experience"></a>
 ## 模型体验
 

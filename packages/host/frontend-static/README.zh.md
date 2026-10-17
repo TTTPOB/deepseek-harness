@@ -87,6 +87,10 @@ kind: "package-reference"
 
 -----
 
+### Fork 行为
+
+Index 渲染前等待 `ctx.connection.authorizeIndexAsync` 验证；成功 HTML 响应使用 `cache-control: no-store`。静态资源仍公开。Access 认证与只读导航规则由 [Connection](../../client/connection/README.zh.md) 定义；页面不添加设置持久化权限全局值。
+
 <a id="model-experience"></a>
 ## 模型体验
 
