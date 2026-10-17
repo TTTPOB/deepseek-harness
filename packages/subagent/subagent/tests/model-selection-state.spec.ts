@@ -43,7 +43,7 @@ describe('subagent model-selection projection', () => {
 
     const first = subagentModelSelectionPolicy(ctx.sessionProjections, session)
     expect(first).toEqual(ALLOWED)
-    first![0]!.provider = 'mutated'
+    Object.assign(first![0]!, { provider: 'mutated' })
     expect(subagentModelSelectionPolicy(ctx.sessionProjections, session)).toEqual(ALLOWED)
 
     session.append('subagent/model-selection-policy', { allowedModels: [{ provider: 'beta', model: 'other' }] })
