@@ -7,8 +7,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { withPiFork } from './daily-driver-pi.mjs'
 
-for (const fails of [false, true]) {
-  test(`Pi source qualification restores canonical files when check fails=${fails}`, () => {
+for (const pinned of [false, true]) for (const fails of [false, true]) {
+  test(`Pi source qualification restores canonical files with pinned=${pinned}, fails=${fails}`, () => {
     const temporary = mkdtempSync(join(tmpdir(), 'daily-driver-pi-test-'))
     const previousPath = process.env.PATH
     try {
@@ -17,7 +17,9 @@ for (const fails of [false, true]) {
       writeFileSync(join(temporary, 'package/package.json'), JSON.stringify({ name: '@earendil-works/pi-ai', version: '1.1.0-fork1' }))
       const tarball = join(temporary, 'pi.tgz')
       execFileSync('tar', ['-czf', tarball, '-C', temporary, 'package/package.json'])
-      const workspace = "overrides:\n  unrelated: '1'\npatchedDependencies:\n  '@earendil-works/pi-ai@1.1.0': patches/pi.patch\n"
+      const workspace = "overrides:\n  unrelated: '1'\n" + (pinned
+        ? "  '@earendil-works/pi-ai': https://github.com/TTTPOB/pi/releases/download/pi-ai-v1.1.0-fork1/pi.tgz\n"
+        : "patchedDependencies:\n  '@earendil-works/pi-ai@1.1.0': patches/pi.patch\n")
       const lock = 'canonical-lock\n'
       writeFileSync(join(temporary, 'pnpm-workspace.yaml'), workspace)
       writeFileSync(join(temporary, 'pnpm-lock.yaml'), lock)

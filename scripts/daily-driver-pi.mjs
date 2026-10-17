@@ -16,9 +16,11 @@ export function withPiFork(tarball, check, directory = root) {
   const workspace = readFileSync(workspacePath, 'utf8')
   const lock = readFileSync(lockPath, 'utf8')
   assert(/^overrides:\s*$/m.test(workspace), 'Source workspace must declare overrides')
-  assert(!/^  ['"]?@earendil-works\/pi-ai['"]?:/m.test(workspace), 'Remove an existing source Pi override before qualification')
-  const qualified = workspace.replace(/^overrides:\s*$/m,
-    `overrides:\n  '@earendil-works/pi-ai': ${JSON.stringify('file:' + source)}`)
+  const override = `  '@earendil-works/pi-ai': ${JSON.stringify('file:' + source)}`
+  const existing = /^  ['"]?@earendil-works\/pi-ai['"]?:[^\n]*$/m
+  const qualified = (existing.test(workspace)
+    ? workspace.replace(existing, override)
+    : workspace.replace(/^overrides:\s*$/m, `overrides:\n${override}`))
     .replace(/^  ['"]?@earendil-works\/pi-ai@1\.1\.0['"]?:[^\n]*\n/m, '')
   const install = frozen => execFileSync('pnpm', [
     '--config.verify-deps-before-run=false', '--filter', '@deepseek-ai/dsh-root',
