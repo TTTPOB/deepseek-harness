@@ -139,6 +139,9 @@ function ensurePersistentSchema(db: DatabaseSync): void {
 }
 
 function ensureTemporarySchema(db: DatabaseSync): void {
+  db.exec(`CREATE TEMP TABLE live_token_lengths(rowid INTEGER PRIMARY KEY, token_count INTEGER NOT NULL);
+    CREATE VIRTUAL TABLE temp.token_probe USING fts5(text, tokenize='unicode61');
+    CREATE VIRTUAL TABLE temp.token_vocab USING fts5vocab(temp,token_probe,instance)`)
   db.exec(`
     CREATE TEMP TABLE IF NOT EXISTS live_sessions (
       id             TEXT PRIMARY KEY,

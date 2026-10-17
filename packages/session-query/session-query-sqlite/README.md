@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use this package to add ranked SQLite FTS5 search across session history, either across sessions or within one session, with cursor pagination. It indexes live and persisted history in a separate derived database, so searches reflect current state without modifying the session-persistence store. Exact reads, filters, and traces remain available through the same query API. Search is opt-in in shipped compositions; configure `openAt` to open the index at startup, on first search, or never. Results match tokens and phrases rather than arbitrary substrings, and each index path has a single process owner.
+Use this package to add ranked SQLite FTS5 search across session history, either across sessions or within one session, with cursor pagination. It indexes live and persisted history in a separate derived database, so searches reflect locally observed state without rewriting persisted history. Exact reads, filters, and traces remain available through the same query API. Search is opt-in in shipped compositions; configure `openAt` to open the index at startup, on first search, or never. Results match tokens and phrases rather than arbitrary substrings, and each index path has a single process owner.
 
 ## Table of Contents
 
@@ -51,6 +51,10 @@ Choose it when you want full-text recall over prior sessions with ranking and pa
 | `readWindowMax` | `50` | Maximum `before`/`after` raw events for the inherited `readEvent()` |
 | `persistedReadConcurrency` | `4` | Concurrent persisted-log reads for inherited batch reads |
 | `preparedSessionCacheSize` | `5` | Cold prepared-Session observations the inherited `observeSession` reader retains for reuse |
+| `metadataCacheTtlMs` | `5000` | Inherited metadata freshness window in milliseconds; 0 disables reuse |
+| `sessionPageSnapshotTtlMs` | `60000` | Inherited listing snapshot lifetime in milliseconds |
+| `sessionPageSnapshotCapacity` | `8` | Inherited listing snapshot capacity |
+| `maxIndexedSessionBytes` | `33554432` | Largest persisted log artifact, in bytes, read into the index; a larger session stays out of search and is reported through `ctx.logger.warn` |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-session-query-sqlite) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -58,7 +62,7 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 `searchSessions` searches the whole corpus and groups results by each session's strongest matching event; `searchEvents` searches one logical session. Queries are literal phrases: they are trimmed and whitespace-normalized, and FTS5 syntax such as quotes, `OR`, `NEAR`, and `*` is treated as data, never as executable query syntax. Metadata filters (session id, cwd, created-at, parent, availability, event seq/time/type/surface) narrow results before ranking. All `current`, `shadowed`, and `log-only` events are searchable by default; pass a surface filter to narrow.
 
-Ranking is deterministic: more actual FTS5 highlighted-match spans first, then shorter documents, with event time, session id, and seq breaking ties. Results carry plain-text snippets bounded by `snippetChars` Unicode code points, with no provider-specific numeric score. Pages continue through an opaque `SessionSearchCursor` bound to the exact normalized request; a cursor becomes stale when its relevant corpus changes (`SESSION_QUERY_STALE_CURSOR`), and a within-session cursor survives changes to unrelated sessions while a cross-session cursor does not.
+Ranking uses BM25 with one historical background for persisted and live matches. Live bodies contribute their latest phrase frequency and token length, but do not change historical statistics; old persisted bodies of live-shadowed sessions remain background only. When history has no indexed tokens, ranking uses the live average token length and a common IDF of 1. A phrase absent from history also uses IDF 1. The common phrase IDF cancels for ranking; both sources round normalized scores to 12 decimal places so inversion noise does not override metadata ties. Event time, session id, and seq break score ties. Results carry plain-text snippets bounded by `snippetChars` Unicode code points, without numeric scores. Opaque cursors bind the exact normalized request; target changes or historical revisions invalidate event pages (`SESSION_QUERY_STALE_CURSOR`). Unrelated live changes preserve event cursors when a historical background exists; without one, live changes invalidate them too. Cross-session cursors invalidate on any corpus change.
 
 The `unicode61` tokenizer matches tokens and phrases, not arbitrary substrings: `AI` does not match the token `BRAID`. Use `ctx.sessionQuery.filterEvents()` with a `text` clause when a literal whitespace-flexible substring scan is required.
 
@@ -85,7 +89,7 @@ This section explains the design decisions behind the backend and points at the 
 The backend is built on one separation and three commitments:
 
 - **Derived index, never the source store.** The FTS rows live in a dedicated disposable database; the session-persistence database is never opened here.
-- **Live-preferred observation.** One serialized state machine compares persistence snapshot revisions, reads only new or changed logs through short-lived read handles, and reconciles in one transaction, so a search reflects the newest stable state.
+- **Live-preferred observation.** One serialized state machine compares persistence snapshot revisions, reads only new or changed logs through short-lived read handles, and reconciles each changed session in its own transaction, so a search reflects the newest stable state.
 - **Generation-bound cursors.** Every corpus change bumps a generation; cursors carry the generation they were created under and fail stale rather than returning a shifted page.
 - **Literal phrases as data.** Caller query text is quoted into one FTS5 phrase so query syntax stays inert, and reserved highlight markers are stripped from documents before indexing.
 
@@ -97,11 +101,16 @@ The design history lives in the [SQLite FTS5 session search note](../../../.agen
 |---|---|
 | [`src/index.ts`](src/index.ts) | Service: config, openAt lifecycle, serialized reconciliation, query execution, cursors |
 | [`src/query.ts`](src/query.ts) | Request normalization, parameterized predicates, snippets, predicate and binding budgets |
+| [`src/bm25.ts`](src/bm25.ts) | Connection-local token probe and historical BM25 calibration |
 | [`src/schema.ts`](src/schema.ts) | Database schema, application-id ownership, in-place reset, owner-only file creation |
 
 ### Index lifecycle
 
-Persisted FTS rows live in a dedicated derived database and survive restarts; live sessions use connection-local TEMP tables that shadow the durable base for the same session and reveal it again when the live owner detaches. Both tables retain the exact inherited cut in numeric `seed_length`; reconstructed headers expose only `isSeeded`, while the cut participates in live fingerprints and persisted source revisions. Each search runs one serialized observation: list persistence snapshots, compare per-session revisions with the indexed rows, read only new or changed logs through a read handle (balancing an interrupted final turn in memory, never writing back), extract semantic documents, and commit the reconciliation in one transaction before running the query. Repeated queries and unchanged reopens read nothing; switching stores or observing new, changed, deleted, or externally repaired sources reconciles on the next stable observation. Source or transaction failure commits nothing and the next search retries.
+Persisted FTS rows survive restarts; connection-local TEMP rows shadow the durable base for live sessions. The first search and persistence-source replacement each list lightweight snapshots once; a restart reuses matching database revisions, while a replacement source is reread even if its revisions collide. During runtime, `session/created`, `session/event`, `session/flush`, and `session/disposed` mark the session and a direct subagent child’s parent dirty. Searches observe only dirty stored ids and project only changed live sessions. A persistence flush precedes dirty stored reads; closing sessions retain their final live projection until durable handoff. Each changed stored session commits separately. Documents compare text, type, time, and surface by `(session_id, seq)` and insert, update, or delete only changed FTS rows, without deleting and reinserting the session. Unchanged searches neither list storage, cold-read logs, nor write the index. Logs above `maxIndexedSessionBytes` evict stale rows and warn without body reads; later observation or transaction failures retain earlier committed sessions.
+
+Ranking materializes complete MATCH candidates with metadata and native BM25 scores before filters, session-best selection, and pagination; it never truncates either source before merging. Event queries restrict both raw branches to the target session before materialization, while calibration and phrase statistics remain global. Full highlighting runs only for the bounded result page. A reusable TEMP unicode61 token probe measures changed live bodies, and a TEMP rowid-to-token-count table updates in the same transaction as live FTS rows. Unchanged bodies are not retokenized; retirement removes their counts.
+
+For one literal phrase in the single indexed text column, public `bm25` calls at weights 1 and 2 recover the phrase IDF. One token-bearing historical body and its probe term frequency calibrate historical average length, without a historical vocabulary scan or persistent schema change. Every successful historical transaction invalidates that calibration, including partial reconciliation progress. Live native scores recover actual phrase frequency (including overlapping occurrences), then use the shared historical average and IDF. This mechanism must be replaced if queries become multiple phrases or additional columns become indexed.
 
 ### Schema ownership
 
@@ -144,6 +153,8 @@ These limits define when this package is a poor fit or needs special operational
 - **Synchronous query execution** — `DatabaseSync` blocks the JavaScript thread during MATCH execution and cannot interrupt a statement already running.
 - **Token recall, not arbitrary substrings** — the `unicode61` tokenizer does not match substrings inside a larger token; use `filterEvents()` for literal scans.
 - **Single-owner derived index** — one service in one process must own each index path; external writers and multi-process sharing are unsupported.
+- **External file changes are not discovered in real time** — another process editing persisted files emits no local lifecycle notification; restart the query service or replace the persistence service to rescan metadata on the first search.
+- **Oversized sessions stay out of search** — the index never reads a stored log artifact above `maxIndexedSessionBytes`; it warns through `ctx.logger.warn` for each one and keeps the rest of the corpus searchable. Crossing the bound also evicts a session that is already indexed, so a query never answers from a row its stored log has outgrown, and lowering the bound evicts every session above it. Raise the limit to include such a session, and expect build cost proportional to its size. A backend that omits `SessionPersistenceSnapshot.sizeBytes` is indexed without this bound.
 
 <a id="dev-note"></a>
 ### Dev Note
