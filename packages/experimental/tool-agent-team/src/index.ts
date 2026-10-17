@@ -3,6 +3,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import { TeamTaskId } from '@deepseek-ai/dsh-experimental-agent-team'
 import type { TeamMemberView } from '@deepseek-ai/dsh-experimental-agent-team'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -407,26 +408,48 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
   }
 }
 
-/** Install Team tools in every live or subsequently published Team member scope. */
+/** Install Team tools for members inside this plugin’s composition scope. */
 export function apply(ctx: Context, config: Config = {}): void {
   const resolved: Required<Config> = {
     interrupt: config.interrupt ?? true,
     freshProvider: config.freshProvider ?? 'spawn',
     forkProvider: config.forkProvider ?? 'fork',
   }
+  const compositionScope = scopeOf(ctx)
   const installed = new Map<Agent, () => void>()
-  const maybeInstall = (agent: Agent): void => {
-    if (installed.has(agent) || ctx.agentTeams.tryMembership(agent) === undefined) return
-    installed.set(agent, install(agent, ctx, resolved))
-  }
-  for (const agent of ctx.agents.list()) maybeInstall(agent)
-  ctx.on('agent/created', ({ agent }) => { maybeInstall(agent) })
-  ctx.on('agent/disposed', ({ agent }) => {
-    installed.get(agent)?.()
+  let disposed = false
+  const remove = (agent: Agent): void => {
+    const dispose = installed.get(agent)
     installed.delete(agent)
-  })
+    dispose?.()
+  }
+  const reconcileAgent = (agent: Agent): void => {
+    if (disposed) return
+    const belongs = compositionScope === undefined || scopeChainOf(scopeOf(agent.ctx)).includes(compositionScope)
+    if (!belongs || ctx.agentTeams.tryMembership(agent) === undefined) {
+      remove(agent)
+      return
+    }
+    if (installed.has(agent)) return
+    // Registration emits tools/change synchronously; reserve before installing.
+    installed.set(agent, () => {})
+    try {
+      installed.set(agent, install(agent, ctx, resolved))
+    } catch (error) {
+      installed.delete(agent)
+      throw error
+    }
+  }
+  const reconcile = (): void => {
+    for (const agent of ctx.agents.list()) reconcileAgent(agent)
+  }
+  ctx.on('agent/created', ({ agent }) => { reconcileAgent(agent) })
+  ctx.on('agent/disposed', ({ agent }) => { remove(agent) })
+  ctx.on('tools/change', reconcile)
   ctx.effect(() => () => {
+    disposed = true
     for (const dispose of installed.values()) dispose()
     installed.clear()
   }, 'tool-team.scopedTools()')
+  reconcile()
 }

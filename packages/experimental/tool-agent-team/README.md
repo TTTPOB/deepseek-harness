@@ -25,7 +25,7 @@ This package lets the model create named teammates, send them messages, inspect 
 <a id="use-this-package"></a>
 ## Use this package
 
-Add this package on top of `@deepseek-ai/dsh-experimental-agent-team` when the model should run a team through tools. Once mounted, every team member — the Lead and each teammate — gets the same nine tools plus the same coordination policy. Each member receives its current role and name through required runtime context; `spawn_teammate` sends the initial task unchanged.
+Add this package on top of `@deepseek-ai/dsh-experimental-agent-team` when the model should run a team through tools. When mounted inside an Agent preset, only Team members whose scope descends from that preset receive the tools and coordination policy. Other presets can keep ordinary subagent controls without name conflicts. A Host-scoped mount applies to all Team members. Each member receives its current role and name through required runtime context; `spawn_teammate` sends the initial task unchanged.
 
 ### When to choose it
 
@@ -99,7 +99,7 @@ One `team:policy` section on the member scope states the shared coordination rul
 
 ### Scoped registration and teardown
 
-`maybeInstall` runs for every live Agent and subscribes to `agent/created`; it skips Agents without Team membership. Disposal of an Agent runs the installed disposer, and plugin HMR disposes every installed scope before reinstall. Each disposer unwinds registrations in reverse order, so a failed install cannot leave a partial scope.
+Installation checks both Team membership and the plugin scope’s presence in the Agent’s scope chain. `agent/created` and `tools/change` reconcile registrations, including blank-session preset switches. Leaving the composition removes the Agent-owned tools and policy. Agent disposal and plugin HMR unwind installed registrations in reverse order; registration reserves the Agent before emitting tool changes to contain synchronous re-entry. The Team domain service remains Host-owned.
 
 </details>
 
