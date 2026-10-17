@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-当模型应该通过工具运行一支团队时，在 `@deepseek-ai/dsh-experimental-agent-team` 之上挂载本包。挂载后，每个团队成员——Lead 与每个 teammate——都会获得相同的九个工具，以及相同的协作策略。`spawn_teammate` 原样发送初始任务；每个成员通过必需的 runtime context 接收当前角色和名字。
+当模型应该通过工具运行一支团队时，在 `@deepseek-ai/dsh-experimental-agent-team` 之上挂载本包。挂载在 Agent preset 内时，只有作用域继承该 preset 的 Team 成员才会获得这些工具与协作策略。其他 preset 可以保留普通 subagent 控件而不发生名字冲突。挂载在 Host 作用域时，会应用于全部 Team 成员。`spawn_teammate` 原样发送初始任务；每个成员通过必需的 runtime context 接收当前角色和名字。
 
 ### 何时选择
 
@@ -99,7 +99,7 @@ member scope 上的一个 `team:policy` 段落说明共享的协作规则；固�
 
 ### 按作用域注册与拆除
 
-`maybeInstall` 对每个 live Agent 运行，并订阅 `agent/created`；它跳过没有 Team 成员关系的 Agent。Agent 的 dispose（资源释放）会运行已安装的 disposer，插件 HMR（热模块替换）会在重新安装前对每个已安装的 scope 执行 dispose。每个 disposer 按逆序撤销注册，因此失败的安装不会留下残缺 scope。
+安装同时检查 Team 成员关系与插件作用域是否存在于 Agent 的作用域链中。`agent/created` 与 `tools/change` 协调注册，也覆盖空白会话的 preset 切换。离开组合会移除 Agent 拥有的工具与策略。Agent 释放与插件 HMR（热模块替换）按逆序撤销注册；注册在触发工具变化前预留 Agent，避免同步重入导致重复安装。Team 领域服务仍由 Host 拥有。
 
 </details>
 

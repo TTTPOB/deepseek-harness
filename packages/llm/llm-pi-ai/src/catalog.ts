@@ -270,23 +270,24 @@ const COMPLETIONS_COMPAT_GATE = {
   zaiToolStream: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
   sendSessionAffinityHeaders: 'withhold',
-  supportsMidConvoSystemMessages: 'withhold',
-  supportsMidConvoToolAdditions: 'withhold',
+  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoToolAdditions: 'offer',
   sessionAffinityFormat: 'withhold',
 } as const satisfies Record<keyof OpenAICompletionsCompat, CompatDisposition>
 
 /** Disposition of every `OpenAIResponsesCompat` field; a drift gate like the one above. */
 const RESPONSES_COMPAT_GATE = {
   supportsDeveloperRole: 'offer',
+  systemPromptFormat: 'offer',
   supportsMaxOutputTokens: 'offer',
   supportsStrictMode: 'offer',
   supportsLongCacheRetention: 'offer',
   sessionAffinityFormat: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
-  supportsAdditionalTools: 'withhold',
-  supportsToolSearch: 'withhold',
+  supportsAdditionalTools: 'offer',
+  supportsToolSearch: 'offer',
   supportsExplicitPromptCacheMode: 'withhold',
-  supportsMidConvoSystemMessages: 'withhold',
+  supportsMidConvoSystemMessages: 'offer',
 } as const satisfies Record<keyof OpenAIResponsesCompat, CompatDisposition>
 
 /** Disposition of every `AnthropicMessagesCompat` field; a drift gate like the one above. */
@@ -300,8 +301,8 @@ const ANTHROPIC_COMPAT_GATE = {
   supportsStrictTools: 'offer',
   sendSessionAffinityHeaders: 'withhold',
   sessionAffinityFormat: 'withhold',
-  supportsMidConvoSystemMessages: 'withhold',
-  supportsMidConvoToolChanges: 'withhold',
+  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoToolChanges: 'offer',
   supportsMidConvoEffort: 'withhold',
   allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
@@ -313,7 +314,7 @@ const BEDROCK_COMPAT_GATE = {
 
 /** Disposition of every `MistralConversationsCompat` field. */
 const MISTRAL_COMPAT_GATE = {
-  supportsMidConvoSystemMessages: 'withhold',
+  supportsMidConvoSystemMessages: 'offer',
 } as const satisfies Record<keyof MistralConversationsCompat, CompatDisposition>
 
 /**
@@ -364,7 +365,6 @@ type OfferedCompatField =
   | OfferedIn<typeof RESPONSES_COMPAT_GATE>
   | OfferedIn<typeof ANTHROPIC_COMPAT_GATE>
   | OfferedIn<typeof BEDROCK_COMPAT_GATE>
-  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- Include gates whose current offering is empty.
   | OfferedIn<typeof MISTRAL_COMPAT_GATE>
 
 /**
@@ -394,6 +394,14 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
+  /** System prompt location on Responses protocols; defaults to input. Requires pi-ai fork. */
+  systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
+  /** Whether the endpoint accepts system updates in history; all protocols whose compat type declares it. */
+  supportsMidConvoSystemMessages?: boolean
+  /** Whether Chat Completions accepts message-anchored tool additions. */
+  supportsMidConvoToolAdditions?: boolean
+  /** Whether Anthropic accepts tool changes in history. */
+  supportsMidConvoToolChanges?: boolean
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
@@ -457,6 +465,10 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Whether to serialize client-executed tool search; the three Responses protocols. */
+  supportsToolSearch?: boolean
+  /** Whether to serialize message-anchored additional tools; wins over tool search on Responses protocols. */
+  supportsAdditionalTools?: boolean
 }
 
 /** Compile-time constraint that `T` is `never`. */

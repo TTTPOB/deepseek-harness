@@ -51,18 +51,37 @@ describe('pi-ai gateway compatibility declarations', () => {
   })
 
   it.each([
-    'supportsMidConvoEffort', 'allowedFallbackModels', 'supportsMidConvoSystemMessages',
-    'supportsMidConvoToolAdditions', 'supportsMidConvoToolChanges', 'sessionAffinityFormat',
+    'supportsMidConvoEffort', 'allowedFallbackModels', 'sessionAffinityFormat',
   ])('withholds catalog-owned %s', (field) => {
     expect(() => resolved({ [field]: true }, 'anthropic-messages'))
       .toThrow(/which is not configurable here/)
   })
 
-  it('withholds Mistral conversation capabilities', () => {
-    expect(() => resolveProfiles({
-      mistral: { compat: { supportsMidConvoSystemMessages: true } as never },
-    }))
-      .toThrow(/which is not configurable here/)
+  it.each(['openai-completions', 'anthropic-messages', 'openai-responses'])(
+    'preserves explicit system update capability for %s', (api) => {
+      expect(resolved({ supportsMidConvoSystemMessages: true }, api))
+        .toMatchObject({ supportsMidConvoSystemMessages: true })
+    })
+
+  it('preserves catalog protocol system update capability', () => {
+    const route = resolveProfiles({ mistral: { compat: { supportsMidConvoSystemMessages: true } } }).get('mistral')
+    expect(route?.piProvider?.getModels()[0]?.compat).toMatchObject({ supportsMidConvoSystemMessages: true })
+  })
+
+  it('preserves protocol-specific tool update capabilities', () => {
+    expect(resolved({ supportsMidConvoToolAdditions: true }))
+      .toMatchObject({ supportsMidConvoToolAdditions: true })
+    expect(resolved({ supportsMidConvoToolChanges: true }, 'anthropic-messages'))
+      .toMatchObject({ supportsMidConvoToolChanges: true })
+  })
+
+  it.each(['input', 'instructions'])('preserves Responses system prompt format %s', (systemPromptFormat) => {
+    expect(resolved({ systemPromptFormat }, 'openai-responses')).toMatchObject({ systemPromptFormat })
+  })
+
+  it.each(['supportsAdditionalTools', 'supportsToolSearch'])('preserves Responses %s', (field) => {
+    expect(resolved({ [field]: true }, 'openai-responses')).toMatchObject({ [field]: true })
+    expect(() => resolved({ [field]: true })).toThrow(/compat/)
   })
 
   it('keeps generic additions absent unless configured', () => {

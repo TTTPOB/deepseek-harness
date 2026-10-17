@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import Loader from '@deepseek-ai/cordis-plugin-loader'
+import AgentPresets from '@deepseek-ai/dsh-agent-preset-registry'
+import * as AgentPreset from '@deepseek-ai/dsh-agent-preset'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -142,6 +145,46 @@ async function waitNoAgent(ctx: Context, id: SessionId): Promise<void> {
 }
 
 describe('dsh-tool-team', () => {
+  it('isolates Team and ordinary control presets and reconciles blank-session switches', async () => {
+    const { ctx, fiber } = await setup([])
+    await fiber.dispose()
+    await ctx.plugin(Loader)
+    ctx.loader.builtins.registry = AgentPresets
+    ctx.loader.builtins.preset = AgentPreset
+    ctx.loader.builtins.teamTools = toolTeam
+    ctx.loader.builtins.controls = ToolSubagentControl
+    await ctx.loader.root.update([
+      { id: 'registry', name: 'cordis:registry', config: { default: 'ordinary' } },
+      { id: 'team', name: 'cordis:preset', config: {
+        id: 'team', plugins: [{ name: 'cordis:teamTools' }],
+      } },
+      { id: 'ordinary', name: 'cordis:preset', config: {
+        id: 'ordinary', plugins: [{ name: 'cordis:controls' }],
+      } },
+    ])
+    const create = async (id: string, preset: string) => (await ctx.agents.create({
+      sessionId: SessionId(id),
+      setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, preset) },
+    })).agent
+    const ordinary = await create('ordinary-preset-agent', 'ordinary')
+    const team = await create('team-preset-agent', 'team')
+    const names = (agent: Agent) => ctx.tools.schemas(agent).map(tool => tool.name).sort()
+    const controls = ['interrupt_agent', 'send_message']
+    expect(names(ordinary)).toEqual(controls)
+    expect(names(team)).toEqual(TOOL_NAMES)
+    expect(ctx.tools.get('send_message', scopeOf(ordinary.ctx))?.parameters.properties).toHaveProperty('agent_id')
+    expect(renderPrompt(await assembly(ctx, ordinary))).not.toContain('Agent Teams is available')
+
+    await ctx.agentPresets.select(ordinary, 'team')
+    expect(names(ordinary)).toEqual(TOOL_NAMES)
+    expect(names(team)).toEqual(TOOL_NAMES)
+    await ctx.agentPresets.select(ordinary, 'ordinary')
+    expect(names(ordinary)).toEqual(controls)
+    expect(names(team)).toEqual(TOOL_NAMES)
+    expect(ctx.tools.get('send_message', scopeOf(ordinary.ctx))?.parameters.properties).toHaveProperty('agent_id')
+    expect(renderPrompt(await assembly(ctx, ordinary))).not.toContain('Agent Teams is available')
+  })
+
   it.each(['running', 'inactive', 'provisioning', 'failed'] as const)(
     'projects %s members consistently in creation, listing, and schemas', async (status) => {
       const { ctx, lead } = await setup([])
