@@ -20,8 +20,8 @@ import {
   SegmentedTabs, StateDot, Switch, Tag, TerminalBlock, Toast, Tooltip, useAnchoredPosition, useDismissOnOutsidePointer,
   type IconProps, type StateDotState, type TerminalBlockLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import type { createNavigationStore } from './navigation-store.ts'
+import type { FactoryComponentPropsOf } from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from './ManagerEntry.tsx'
 import { rowConfigKey, type OfficialItem } from './config-ledger.ts'
 import { INSTALL_GIT_EXAMPLE, INSTALL_PATH_EXAMPLE, type PluginManagerLocaleKey } from './locales.ts'
 import {
@@ -38,17 +38,8 @@ import badgeSkillPreviewZh from './assets/badge-skill-preview.zh.svg'
 import voiceInputPreview from './assets/voice-input-preview.svg'
 import voiceInputPreviewZh from './assets/voice-input-preview.zh.svg'
 
-/** Full component props assembled by the main slot renderer. */
-export type PluginManagerPageProps =
-  PropsRuntime<'main'>
-  & PropsLocale<'pluginManager'>
-  & PropsRenderSlots<
-    | 'plugins.item' | 'plugins.bundle.config' | 'plugins.row.config' | 'plugins.bundle.activation'
-    | 'plugins.add.actions' | 'plugins.tab'
-    | 'plugins.detail.actions' | 'plugins.detail.badge' | 'plugins.detail.section'
-  >
-  & InjectFace<PluginManagerFace>
-  & PropsStore<ReturnType<typeof createNavigationStore>>
+/** Full component props assembled by the shared manager Factory renderer. */
+export type PluginManagerPageProps = FactoryComponentPropsOf<'plugins.manager'>
 
 /** The page's slot renderer, narrowed to the configuration slots. */
 type RenderConfig = PluginManagerPageProps['renderSlot']

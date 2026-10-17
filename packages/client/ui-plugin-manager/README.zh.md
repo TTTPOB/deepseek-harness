@@ -148,6 +148,10 @@ Host 入口通过生成的 Remote 接口暴露 `pluginRegistryProbe.fastest()`�
 
 -----
 
+### Fork 行为
+
+`ctx.pluginNavigation.openModal(): void` 在当前页面上打开既有管理器，不切换面板或 Session。主面板与弹层共享一个 `plugins.manager` Factory 和导航 store，包含第三方市场 tab 与配置 slot；同时只渲染一个实例。重复调用保留弹层当前详情；关闭后重置列表与 Installed tab。`openBundle(name)` 在弹层打开时导航其中，否则选择主面板。原生 Modal 负责 Escape 与焦点恢复。
+
 <a id="model-experience"></a>
 ## 模型体验
 
