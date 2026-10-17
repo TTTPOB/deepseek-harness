@@ -258,6 +258,10 @@ const chatTemplateKwarg: z<ChatTemplateKwargValue> = z.union([
 const compatProfile: z<PiAiCompatProfile> = z.object({
   supportsStore: z.boolean(),
   supportsDeveloperRole: z.boolean(),
+  systemPromptFormat: z.union(['input', 'instructions']),
+  supportsMidConvoSystemMessages: z.boolean(),
+  supportsMidConvoToolAdditions: z.boolean(),
+  supportsMidConvoToolChanges: z.boolean(),
   supportsReasoningEffort: z.boolean(),
   supportsUsageInStreaming: z.boolean(),
   supportsFinishReason: z.boolean(),
@@ -282,6 +286,8 @@ const compatProfile: z<PiAiCompatProfile> = z.object({
   forceAdaptiveThinking: z.boolean(),
   allowEmptySignature: z.boolean(),
   supportsStrictTools: z.boolean(),
+  supportsToolSearch: z.boolean(),
+  supportsAdditionalTools: z.boolean(),
 })
 
 /**
