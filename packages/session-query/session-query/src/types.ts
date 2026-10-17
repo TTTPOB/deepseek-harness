@@ -6,6 +6,8 @@
  */
 
 import type {
+  Session,
+  SessionSurface,
   SessionEvent,
   SessionEventType,
   SessionHeader,
@@ -13,12 +15,57 @@ import type {
   SessionLogOffset,
   SessionSeq,
   OptionalSessionSeq,
+  SessionSeqCursor,
   SurfaceEvent,
 } from '@deepseek-ai/dsh-session'
 import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
 import type { SessionSearchCursor } from './cursor.ts'
 
 export type { SessionSearchCursor } from './cursor.ts'
+
+/** Recursively readonly data borrowed during synchronous Session sampling. */
+type CaptureReadonly<Value> = Value extends string | number | boolean | bigint | symbol | null | undefined
+  ? Value
+  : Value extends (...args: never[]) => unknown
+    ? Value
+    : Value extends object
+      ? { readonly [Key in keyof Value]: CaptureReadonly<Value[Key]> }
+      : Value
+
+/**
+ * Borrowed reading view of the original full Session selected by captureSession.
+ * Read methods may update memory caches. Do not retain this view or its containers,
+ * mutate the Session, or yield during capture; copy the output needed by the caller.
+ * The runtime value is the Session itself, never a wrapper or proxy.
+ */
+export interface SessionCaptureReader {
+  /** Logical identity of the selected Session. */
+  readonly id: SessionId
+  /** Immutable storage metadata of this same Session. */
+  readonly header: SessionHeader
+  /** Exact fork-inherited event count. */
+  readonly inheritedEventCount: SessionLogOffset
+  /** Current log length, including any in-memory preparation marker. */
+  readonly seq: SessionLogOffset
+  /** Ordered node sequences and replacement/content generations; copy nodes during capture. */
+  readonly surface: SessionSurface
+  /**
+   * Read the current immutable request envelope.
+   * @returns latest logged envelope, or undefined before any request header.
+   */
+  requestHeader(): CaptureReadonly<ReturnType<Session['requestHeader']>>
+  /**
+   * Read the latest immutable resolved route metadata.
+   * @returns latest logged route, or undefined before any request context.
+   */
+  requestContext(): CaptureReadonly<ReturnType<Session['requestContext']>>
+  /**
+   * Interpret one event with this Session's store message definitions.
+   * @param event - event read from the paired observation.
+   * @returns immutable interpreted message, or null for a node with no message.
+   */
+  deriveEventMessage(event: SessionEvent): CaptureReadonly<ReturnType<Session['deriveEventMessage']>>
+}
 
 /** Whether an event is current model context, replaced context, or raw-log-only. */
 export type SessionEventSurface = 'current' | 'shadowed' | 'log-only'
@@ -33,6 +80,48 @@ export interface SessionRecord {
   persisted: boolean
   /** Current for live Sessions; otherwise the persistence format status when reported. */
   formatStatus?: 'current' | 'migration-required'
+}
+
+/** Request for newest-first paging over one immutable metadata snapshot. */
+export interface SessionMetadataPageRequest {
+  /** ANDed metadata filters, identical on continuation requests. */
+  filters?: readonly SessionResultFilter[]
+  /** Positive safe integer page size. */
+  limit: number
+  /** Snapshot continuation; expires or becomes unavailable after eviction or service reload. */
+  cursor?: SessionSearchCursor
+}
+
+/** Request for ascending raw-event paging without a full semantic-document projection. */
+export interface SessionEventPageRequest {
+  /** Logical session to observe once for this page. */
+  sessionId: SessionId
+  /** Exclusive lower sequence bound; defaults to -1. */
+  afterSeq?: SessionSeqCursor
+  /** ORed event types; an empty list matches nothing. */
+  types?: readonly SessionEventType[]
+  /** Positive safe integer page size. */
+  limit: number
+  /** Extract semantic text only for returned events; defaults to false. */
+  includeText?: boolean
+}
+
+/** One raw event's metadata, without current-surface classification. */
+export interface SessionEventPageItem extends Omit<SessionEventRecord, 'surface'> {
+  /** Semantic text, including an empty string for structural events, when requested. */
+  text?: string
+}
+
+/** One page bound to an exact live or prepared observation. */
+export interface SessionEventPage {
+  /** Detached header from the observation used for this page. */
+  session: SessionHeader
+  /** Ascending raw-event records, including structural events. */
+  items: readonly SessionEventPageItem[]
+  /** Last emitted sequence, present only when another matching event was observed. */
+  nextAfterSeq?: SessionSeq
+  /** Exact observed upper sequence bound, or -1 for an empty log. */
+  capturedThroughSeq: SessionSeqCursor
 }
 
 /** One atomic live-preferred observation of a session's current model surface. */

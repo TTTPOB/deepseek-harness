@@ -27,11 +27,17 @@ English | [中文](README.zh.md)
 
 Use `ctx.sessionQuery` from application code when you need to read or search session history without touching the session service or a storage backend directly. The service is provided by a concrete backend plugin — the shipped composition mounts `@deepseek-ai/dsh-session-query-sqlite` ([README](../session-query-sqlite/README.md)) — so this package is never mounted alone. Everything below is available on `ctx.sessionQuery` once a backend is composed.
 
+The incremental query implementation imports `SurfaceFoldAccumulator` from `@deepseek-ai/dsh-session`. Install the exact Session fork version declared by this package's packed peer dependency together with the matching SQLite backend; the official `0.2.1-rc.1` Session does not export that accumulator.
+
 ### What you can do
 
 | Operation | What you get |
 |---|---|
 | `listSessions()` | Every logical session, newest first, with `live` and `persisted` availability flags and optional `formatStatus` |
+| `pageSessions(request)` | Bounded metadata pages over an expiring immutable snapshot |
+| `pageEvents(request)` | Bounded ascending raw-event metadata and optional semantic text |
+| `captureSession(id, capture, options)` | Synchronously copy current nodes, previews, routing, and consumer-owned measurements from one selected Session |
+
 | `readSession(id)` | The complete replay-validated raw event log, without making the session live |
 | `filterSessions(filters)` | Sessions matching ANDed metadata and availability predicates |
 | `filterEvents(id, filters)` | Semantic event documents matching metadata and literal-text predicates |
@@ -43,6 +49,21 @@ Use `ctx.sessionQuery` from application code when you need to read or search ses
 | `searchSessions(request)` / `searchEvents(request)` | Full-text search pages, implemented by the mounted backend |
 
 Body-free records expose only `SessionHeader.isSeeded`. Reads that return event bodies (`readSession`, `readSurface`, `readEvent`) and retained `SessionObservation` values also carry the exact `inheritedEventCount`, so callers can distinguish inherited and owned events without inferring a cut from the log.
+
+<a id="paging-and-freshness"></a>
+### Paging and freshness
+
+pageSessions({ filters?, limit, cursor? }) fixes an immutable newest-first metadata snapshot. Continuations keep identical filters and may change limit; insertions and deletions do not shift positions, and deleted records remain in the original snapshot. Expiration, capacity eviction, persistence-source replacement, or service reload rejects with SESSION_QUERY_STALE_CURSOR; changed filters reject with SESSION_QUERY_INVALID_CURSOR. Consumers must emit the complete page rather than truncate items and reuse its end cursor.
+
+pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) observes one source per page and returns ascending raw-event metadata, including structural events, without a surface fold. afterSeq is exclusive and defaults to -1; types are ORed, an empty list matches nothing, and includeText defaults to false. Semantic text is extracted only for emitted events. The result binds the session header and capturedThroughSeq to that observation; nextAfterSeq is present only when another matching event was observed. Continuations take a new observation and may see appended events.
+
+Complete listings, non-exact-id filters, and session traces share a persisted-header catalog reused for metadataCacheTtlMs after a successful refresh; every call overlays the current live store. External-process and storage changes have a default five-second visibility window: the next read after expiry scans storage again. A zero TTL re-lists on each read. Persistence-instance identity changes prevent reuse immediately; local session creation and disposal invalidate the catalog, and query-service disposal clears it. Concurrent cold listings own separate cancellation signals and may scan in parallel; the catalog reuses only successfully completed listings. Exact-id filters and cold event reads still stat individual ids. First listings and expired refreshes still scan all metadata; first cold event reads still load and prepare the entire log.
+
+### Synchronous sampling
+
+Use `captureSession` for an independently owned result that combines current Session reads in one synchronous callback. Query passes the original Session through the readonly `SessionCaptureReader` type, paired with its source observation, then releases the lease in `finally`. Do not yield, mutate or retain the Session, retain the observation, or return borrowed containers. Use `projectionMode: none` for node-only reads and `all` when recorded projection summaries are also needed. Source authorization remains with the caller; callback errors propagate unchanged.
+
+The [sampling reference](../../../docs/subsystems/session-query.md#synchronous-session-sampling) explains per-node interpretation, empty nodes, private meter adaptation, source cuts versus meter revisions, and store preparation reuse. Cold capture never activates an Agent or writes persistence; first misses still restore the complete log.
 
 ### Filters
 
@@ -58,7 +79,10 @@ The inherited knobs are set through the mounted backend's config:
 |---|---|---|
 | `readWindowMax` | `50` | Maximum `before`/`after` raw events accepted by `readEvent` |
 | `persistedReadConcurrency` | `4` | Concurrent persisted-log reads in one batch title read |
-| `preparedSessionCacheSize` | `5` | Cold prepared-Session observations retained for reuse across `observeSession` reads |
+| `preparedSessionCacheSize` | `5` | Cold prepared entries retained for observations and canonical query analysis |
+| `metadataCacheTtlMs` | `5000` | Persisted metadata freshness window in milliseconds; 0 disables reuse |
+| `sessionPageSnapshotTtlMs` | `60000` | Fixed listing snapshot lifetime in milliseconds |
+| `sessionPageSnapshotCapacity` | `8` | Maximum concurrently retained listing snapshots |
 
 ### Failures and recovery
 
@@ -79,9 +103,9 @@ This section explains the design decisions behind the service and points at the 
 The service is built on one separation and three commitments:
 
 - **Live-preferred logical corpus.** Every read resolves one consistent observation: live `ctx.sessions` wins, optional `ctx.sessionPersistence` fills the rest, and conflicting immutable headers fail rather than merge.
-- **Detached results.** All returned headers, events, and records are cloned; nothing exposes live state or a retained subscription.
+- **Owned results.** Exact-read results are detached clones; observations have explicit leases, and capture callbacks borrow the selected Session only while copying their own output.
 - **Exact reads concrete, search abstract.** Reads, filters, and traces are implemented here once; the two full-text methods are the only abstract surface a backend owns.
-- **One canonical surface fold.** `listEvents`, `readSurface`, and `traceEvent` validate the whole log with the same `dsh-session` fold, so search and traces agree with model-history derivation.
+- **One canonical surface interpreter.** `listEvents`, `readSurface`, and `traceEvent` use the `dsh-session` transitions with catalog message definitions; public observations retain store-definition preparation.
 
 The decision history lives in the [unified service decision](../../../.agents/notes/archived/architecture/2026-07-23-unified-session-query-service.md), the [tracing note](../../../.agents/notes/archived/feature/2026-07-13-session-query-tracing.md), and the [SQLite provider note](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md).
 
@@ -98,12 +122,14 @@ The decision history lives in the [unified service decision](../../../.agents/no
 | [`src/filters.ts`](src/filters.ts) | Provider-independent predicates and the literal text scan |
 | [`src/extraction.ts`](src/extraction.ts) | First-party semantic text extraction per event type |
 | [`src/documents.ts`](src/documents.ts) | Surface-aware semantic document projection |
-| [`src/tracing.ts`](src/tracing.ts) | One-shot session-lineage and event-relationship tracing |
+| [`src/tracing.ts`](src/tracing.ts) | Incremental canonical event analysis and session-lineage tracing |
 | [`src/sources.ts`](src/sources.ts) | Immutable-header compatibility check |
+| [`src/paging.ts`](src/paging.ts) | Bounded metadata snapshots and continuation cursors |
+
 
 ### Corpus resolution
 
-`SessionCorpus` binds optional `ctx.sessionPersistence` through a fiber and resolves each read live-first: a known live target is snapshotted without consulting persistence; otherwise the session is listed, read completely through a short-lived read handle, and re-checked for a live attachment before cloning. A cold log whose writer crashed mid-turn is balanced in memory with `interruptedTurnClosers` — persistence is never mutated by a read. Header compatibility is asserted between listed and loaded observations. Batch title reads run one metadata listing and bounded-concurrency reads, isolating per-session failures while cancellation rejects the whole batch.
+`SessionCorpus` binds optional `ctx.sessionPersistence` through a fiber and resolves each read live-first: a known live target is snapshotted without consulting persistence; otherwise only that id is observed through `stat`, read completely through a short-lived read handle, and re-checked for a live attachment before cloning. Cold logs are balanced in memory with `interruptedTurnClosers`; reads never mutate persistence. Header compatibility is asserted between stat and loaded observations. Exact-id filters intersect id clauses and stat only those ids, preserving availability flags and newest-first order; filters without id clauses still list the corpus. Batch title reads use bounded-concurrency per-id stat and log reads, isolating per-session failures while cancellation rejects the whole batch.
 
 ### Observation cache
 
@@ -111,7 +137,11 @@ The decision history lives in the [unified service decision](../../../.agents/no
 
 ### Reads and traces
 
-`readSession` replays the log through `Session.create` to reuse resume's validation. `readSurface`, `listEvents`, and `traceEvent` share one `foldSurface` pass that classifies events as `current`, `shadowed`, or `log-only` and validates zero-based contiguous seqs, surface-marker eligibility, and replacement or citation integrity; any violation fails with `SESSION_QUERY_INVALID_SURFACE`. Traces are one-shot: session lineage reads the corpus once and walks parents and descendant trees deterministically, and event traces follow positional replacers to the final node while keeping cited-source links non-transitive.
+`EventLogAnalysis` incrementally maintains the canonical surface, actual replacement history, and reverse direct-source citations over borrowed event references. It generates only current events for a surface read and only the requested record for a trace; `eventRecords` still materializes the complete list. The reader holds live analysis in a `WeakMap<Session, state>` and cold analysis on its prepared entry. Queries lazily process only `[processed, cut)`; ordinary citations advance the reverse index even without a replacement. Session disposal removes its weak key; query-service disposal clears prepared entries and replaces the weak map, and in-flight reads cannot refill them.
+
+`readSurface` and `traceEvent` resolve the source asynchronously, then capture the cut, advance analysis, and copy final output in one synchronous segment, releasing the lease in `finally`. Surface output contains original events in node-position order, including empty messages; image-offload interpretation validates the log without substituting projected messages in the output. Event traces check target existence before canonical folding and cold preparation, follow actual positional replacements, and retain direct source order and ascending later citations. Canonical fold failures remain `SESSION_QUERY_INVALID_SURFACE`; cold preparation still performs `Session.fromRestore` validation.
+
+Prepared entries reuse analysis only for the same persistence identity, revision, and preparation mode. Canonical query preparation uses catalog definitions, separately from public `observeSession` store definitions. Revision changes rebuild the complete balanced prefix, including synthetic interrupted closers; a new live Session also rebuilds, including its end-seed marker. An older lease whose cut precedes shared analysis gets a temporary prefix rebuild rather than a filtered newer surface. `readSession` retains full replay validation and `listEvents` retains its complete record list.
 
 </details>
 
@@ -122,6 +152,7 @@ The decision history lives in the [unified service decision](../../../.agents/no
 
 Read these pages when the package-level contract is not enough. They move from the shared query vocabulary to the concrete backend and the decision evidence.
 
+- [Canonical query diagnostics](tests/performance/README.md) — reproducible synthetic CPU, heap, and clone measurements.
 - [Session Query subsystem reference](../../../docs/subsystems/session-query.md) — the full type-level contract: records, filters, search pages, lineage, bounded reads, and errors.
 - [dsh-session-query-sqlite](../session-query-sqlite/README.md) — the shipped full-text backend and its index lifecycle.
 - [dsh-tool-session-query](../../experimental/tool-session-query/README.md) — the model-facing consumer built on this service.
@@ -133,7 +164,7 @@ Read these pages when the package-level contract is not enough. They move from t
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the trusted query service exposes cloned records only to callers and registers nothing model-facing.
+None, as this service registers no model-facing tools and leaves model-visible presentation to consumers.
 
 #### KV Cache effect
 
@@ -148,7 +179,7 @@ These limits define when this package is a poor fit or needs special operational
 
 - **No caller authorization** — this is trusted context-wide infrastructure; a model tool or UI must constrain which sessions its caller may inspect.
 - **No provider coordinator or fallback** — the service is abstract over search, so a composition must mount a concrete backend; there is no search-provider registry or fallback implementation.
-- **Exact reads replay whole logs** — `readSession`, `readSurface`, `filterEvents`, and event traces load and validate the complete logical log, so very large histories pay full inspection per call; `listSessions` stays lightweight.
+- **Cold misses inspect whole logs** — first cold reads and changed revisions still load and restore the complete log. `readSurface` and event traces reuse owner-held analysis; `readSession`, `listEvents`, and `filterEvents` still inspect complete logs per call. The [synthetic diagnostic](tests/performance/README.md) measures reuse costs, not deployment guarantees.
 - **Literal text scan, not full-text search** — the `text` filter scans extracted documents with a regular expression and does not rank; ranked search requires the mounted backend.
 
 <a id="dev-note"></a>

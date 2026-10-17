@@ -1,8 +1,8 @@
 /** Shared live/prepared observations for Session page and lifecycle consumers. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset as SessionLogOffsetType , SessionSeqCursor } from '@deepseek-ai/dsh-session'
+import { Session, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionHeader, SessionId , SessionLogOffset as SessionLogOffsetType , SessionSeqCursor } from '@deepseek-ai/dsh-session'
 import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
 import type {
   SessionPersistenceRevision,
@@ -12,6 +12,13 @@ import type { ProjectionSnapshot } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import { SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE, SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
+import { assertSessionHeadersCompatible } from './sources.ts'
+import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-format-catalog/message-projections'
+import { EventLogAnalysis, requireEvent } from './tracing.ts'
+import type { SessionCaptureReader } from './types.ts'
+import type { SessionSeq as SessionSeqType } from '@deepseek-ai/dsh-session'
+
+type PreparationMode = 'store' | 'canonical'
 
 /** One exact immutable Session cut retained for the caller's read lifetime. */
 export interface SessionObservation extends Disposable {
@@ -27,6 +34,13 @@ export interface SessionObservation extends Disposable {
    * header, cursor, or projections never copies the log.
    */
   readonly events: readonly SessionEvent[]
+  /**
+   * Borrow immutable events within this cut without materializing the complete live log.
+   * @param from - inclusive sequence offset.
+   * @param to - exclusive sequence offset, clamped to this observation's cut.
+   * @returns immutable events from the selected half-open range.
+   */
+  readEvents(from: SessionLogOffsetType, to: SessionLogOffsetType): readonly SessionEvent[]
   /** Last observed event seq, or -1 for an empty log. */
   readonly cursor: SessionSeqCursor
   /** Durable source revision for a cold prepared observation. */
@@ -54,6 +68,10 @@ export interface SessionObservationOptions {
  * instance still reports the same revision.
  */
 interface PreparedEntry {
+  /** Public observations use store definitions; query projections use the canonical catalog. */
+  readonly mode: PreparationMode
+  /** Canonical analysis shares this entry's revision and eviction lifetime. */
+  readonly analysis?: EventLogAnalysis
   /** Stable service identity whose `stat` produced this revision; proxy references are not instance identities. */
   readonly persistenceIdentity: symbol
   /** Durable revision observed by `stat` immediately before the log read. */
@@ -78,6 +96,8 @@ interface PreparedEntry {
  */
 export class SessionObservationReader {
   private readonly cache = new Map<SessionId, PreparedEntry>()
+  private liveAnalyses = new WeakMap<Session, EventLogAnalysis>()
+  private disposed = false
 
   /**
    * @param ctx - context carrying Session and optional persistence/projection services.
@@ -86,7 +106,42 @@ export class SessionObservationReader {
   constructor(
     private readonly ctx: Context,
     private readonly cacheCapacity: number = SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE,
-  ) {}
+  ) {
+    ctx.on('session/disposed', (session) => { this.liveAnalyses.delete(session) })
+  }
+
+  /** Clear owned caches and prevent in-flight source resolution from repopulating them. */
+  dispose(): void {
+    this.disposed = true
+    this.cache.clear()
+    this.liveAnalyses = new WeakMap()
+  }
+
+  /**
+   * Resolve, capture, advance, and project a canonical cut without yielding after capture.
+   * The callback must return owned output; its lease is always released before resolution.
+   * @param sessionId - live-preferred source.
+   * @param project - synchronous final-output projector.
+   * @param signal - original corpus cancellation signal.
+   * @param targetSeq - optional trace target checked before canonical preparation.
+   * @returns detached projected output.
+   */
+  project<Value>(
+    sessionId: SessionId,
+    project: (observation: SessionObservation, analysis: EventLogAnalysis) => Value,
+    signal?: AbortSignal,
+    targetSeq?: SessionSeqType,
+  ): Promise<Value> {
+    return this.resolve(sessionId, { ...signal === undefined ? {} : { signal }, projectionMode: 'none' },
+      'canonical', (observation, _session, analysis) => {
+        const ready = analyzeObservation(observation, analysis ?? new EventLogAnalysis(sessionId))
+        return project(observation, ready)
+      }, targetSeq)
+  }
+
+  private assertActive(): void {
+    if (this.disposed) throw new Error('session observation reader is disposed')
+  }
 
   /**
    * Observe one live-preferred Session and retain a cold preparation until disposal.
@@ -95,70 +150,144 @@ export class SessionObservationReader {
    * @returns one exact immutable observation.
    * @throws {@link SessionQueryError} with code `SESSION_QUERY_CORRUPT_SESSION` when live or prepared projection computation fails.
    */
-  async read(
+  read(sessionId: SessionId, options: SessionObservationOptions = {}): Promise<SessionObservation> {
+    return this.resolve(sessionId, options, 'store', observation => observation)
+  }
+
+  /**
+   * Sample the selected store Session synchronously and release its observation.
+   * @param sessionId - live-preferred Session identity.
+   * @param capture - synchronous reader returning independently owned output.
+   * @param options - cancellation and projection selection.
+   * @returns captured output after releasing the observation lease.
+   */
+  capture<Value>(
     sessionId: SessionId,
+    capture: (session: SessionCaptureReader, observation: SessionObservation) =>
+      Value & (Value extends PromiseLike<unknown> ? never : unknown),
     options: SessionObservationOptions = {},
-  ): Promise<SessionObservation> {
+  ): Promise<Value> {
+    return this.resolve(sessionId, options, 'store', (observation, session) => {
+      try {
+        return capture(session, observation)
+      } finally {
+        observation[Symbol.dispose]()
+      }
+    })
+  }
+
+  private async resolve<Value>(
+    sessionId: SessionId,
+    options: SessionObservationOptions,
+    mode: PreparationMode,
+    consume: (observation: SessionObservation, session: Session, analysis?: EventLogAnalysis) => Value,
+    targetSeq?: SessionSeqType,
+  ): Promise<Value> {
     const { signal, projectionMode = 'all' } = options
     for (;;) {
-      throwIfObservationAborted(signal)
+      this.assertActive()
+      throwIfAborted(signal, mode)
       const live = this.ctx.sessions.get(sessionId)
-      if (live !== undefined) return this.live(live, projectionMode)
+      if (live !== undefined) return this.consumeLive(live, projectionMode, mode, consume, targetSeq)
       const persistence = this.ctx.get('sessionPersistence')
       if (persistence === undefined) throw notFound(sessionId)
 
-      const snapshot = await this.statSource(persistence, sessionId, signal)
+      const snapshot = await this.statSource(persistence, sessionId, signal, mode)
+      this.assertActive()
       const attachedDuringStat = this.ctx.sessions.get(sessionId)
-      if (attachedDuringStat !== undefined) return this.live(attachedDuringStat, projectionMode)
-      let entry = this.cachedEntry(persistence.identity, sessionId, snapshot.revision)
+      if (mode === 'store' && attachedDuringStat !== undefined) {
+        return this.consumeLive(attachedDuringStat, projectionMode, mode, consume, targetSeq)
+      }
+      let entry = this.cachedEntry(persistence.identity, sessionId, snapshot.revision, mode)
+      if (entry !== undefined && attachedDuringStat !== undefined) {
+        return this.consumeLive(attachedDuringStat, projectionMode, mode, consume, targetSeq)
+      }
       if (entry === undefined) {
-        const loaded = await this.loadSource(persistence, sessionId, signal)
-        throwIfObservationAborted(signal)
+        const loaded = await this.loadSource(persistence, sessionId, signal, mode)
+        this.assertActive()
+        throwIfAborted(signal, mode)
         const attached = this.ctx.sessions.get(sessionId)
-        if (attached !== undefined) return this.live(attached, projectionMode)
-        // The handle marks persisted events as adoptable; synthetic closers
-        // are owned by this read, so the combined seed needs no copy.
+        if (attached !== undefined) return this.consumeLive(attached, projectionMode, mode, consume, targetSeq)
+        assertSessionHeadersCompatible(snapshot.header, loaded.header)
+        // Canonical errors precede restore validation; a missing trace target
+        // precedes both. Restore still validates envelopes, data, and headers.
         const seed = loaded.events
+        let analysis: EventLogAnalysis | undefined
+        if (mode === 'canonical') {
+          if (targetSeq !== undefined) requireEvent(sessionId, seed, targetSeq)
+          analysis = new EventLogAnalysis(sessionId)
+          analysis.append(seed)
+        }
         let session: Session
         try {
-          session = this.ctx.sessions.prepare(sessionId, {
-            seed,
-            meta: structuredClone(loaded.header),
-            inheritedEventCount: loaded.inheritedEventCount,
-            eventState: loaded.eventState,
-          })
+          session = mode === 'canonical'
+            ? Session.fromRestore(sessionId, seed, structuredClone(loaded.header),
+              loaded.inheritedEventCount, loaded.eventState, currentSessionMessageProjections)
+            : this.ctx.sessions.prepare(sessionId, {
+              seed, meta: structuredClone(loaded.header),
+              inheritedEventCount: loaded.inheritedEventCount, eventState: loaded.eventState,
+            })
         } catch (error: unknown) {
-          // The store rejects an id with a live owner: that owner is the
-          // fresher source, so retry the live path. Any other rejection means
-          // the stored log failed restore validation.
-          if (this.ctx.sessions.get(sessionId) !== undefined) continue
+          if (mode === 'store' && this.ctx.sessions.get(sessionId) !== undefined) continue
           throw new SessionQueryError(
-            `stored session "${sessionId}" is corrupt: ${errorMessage(error)}`,
-            'SESSION_QUERY_CORRUPT_SESSION',
-            { cause: error },
+            'stored session "' + sessionId + '" is corrupt: ' + errorMessage(error),
+            'SESSION_QUERY_CORRUPT_SESSION', { cause: error },
           )
         }
         entry = {
-          persistenceIdentity: persistence.identity,
-          revision: snapshot.revision,
-          session,
-          events: Object.freeze(seed),
-          refs: 0,
+          mode, persistenceIdentity: persistence.identity, revision: snapshot.revision,
+          session, events: Object.freeze(seed), refs: 0,
+          ...analysis === undefined ? {} : { analysis },
         }
         this.store(sessionId, entry)
       }
-
+      if (mode === 'canonical' && targetSeq !== undefined) requireEvent(sessionId, entry.events, targetSeq)
       let projections: ProjectionSnapshot | undefined
       try {
         projections = projectionMode === 'none' ? undefined : this.preparedProjections(entry)
       } catch (error: unknown) {
         throw new SessionQueryError(
-          `failed to project session "${sessionId}": ${errorMessage(error)}`,
-          'SESSION_QUERY_CORRUPT_SESSION',
-          { cause: error },
+          'failed to project session "' + sessionId + '": ' + errorMessage(error),
+          'SESSION_QUERY_CORRUPT_SESSION', { cause: error },
         )
       }
-      return this.preparedLease(sessionId, entry, projections)
+      const observation = this.preparedLease(sessionId, entry, projections)
+      if (mode === 'store') return consume(observation, entry.session)
+      try {
+        return consume(observation, entry.session, entry.analysis)
+      } finally {
+        observation[Symbol.dispose]()
+      }
+    }
+  }
+
+  private consumeLive<Value>(
+    session: Session,
+    projectionMode: NonNullable<SessionObservationOptions['projectionMode']>,
+    mode: PreparationMode,
+    consume: (observation: SessionObservation, session: Session, analysis?: EventLogAnalysis) => Value,
+    targetSeq: SessionSeqType | undefined,
+  ): Value {
+    const observation = this.live(session, projectionMode)
+    if (mode === 'store') return consume(observation, session)
+    try {
+      if (targetSeq !== undefined) {
+        const target = observation.readEvents(SessionLogOffset(targetSeq), SessionLogOffset(targetSeq + 1))[0]
+        if (target === undefined || target.seq !== targetSeq) {
+          throw new SessionQueryError(
+            'session "' + session.id + '" has no event at seq ' + targetSeq,
+            'SESSION_QUERY_EVENT_NOT_FOUND',
+          )
+        }
+      }
+      let analysis = this.liveAnalyses.get(session)
+      if (analysis === undefined) {
+        analysis = new EventLogAnalysis(session.id)
+        this.liveAnalyses.set(session, analysis)
+      }
+      return consume(observation, session, analysis)
+    } finally {
+      observation[Symbol.dispose]()
     }
   }
 
@@ -167,17 +296,18 @@ export class SessionObservationReader {
     persistence: SessionPersistence,
     sessionId: SessionId,
     signal: AbortSignal | undefined,
+    mode: PreparationMode,
   ): Promise<SessionPersistenceSnapshot> {
     let snapshot: SessionPersistenceSnapshot | undefined
     try {
       snapshot = await persistence.stat(sessionId, signal === undefined ? undefined : { signal })
     } catch (error: unknown) {
-      throwIfObservationAborted(signal)
-      throw mapPersistenceFailure(sessionId, error)
+      throwIfAborted(signal, mode)
+      throw mode === 'store' ? mapPersistenceFailure(sessionId, error) : mapCorpusFailure(sessionId, error, 'stat')
     }
-    throwIfObservationAborted(signal)
+    throwIfAborted(signal, mode)
     if (snapshot === undefined) throw notFound(sessionId)
-    if (snapshot.header.id !== sessionId) {
+    if (mode === 'store' && snapshot.header.id !== sessionId) {
       throw new SessionQueryError(
         `session persistence returned "${snapshot.header.id}" for "${sessionId}"`,
         'SESSION_QUERY_SOURCE_CONFLICT',
@@ -191,12 +321,13 @@ export class SessionObservationReader {
     persistence: SessionPersistence,
     sessionId: SessionId,
     signal: AbortSignal | undefined,
+    mode: PreparationMode,
   ): Promise<ColdSessionLog> {
     try {
       return await readColdSessionLog(persistence, sessionId, signal)
     } catch (error: unknown) {
-      throwIfObservationAborted(signal)
-      throw mapPersistenceFailure(sessionId, error)
+      throwIfAborted(signal, mode)
+      throw mode === 'store' ? mapPersistenceFailure(sessionId, error) : mapCorpusFailure(sessionId, error, 'read')
     }
   }
 
@@ -205,9 +336,11 @@ export class SessionObservationReader {
     persistenceIdentity: symbol,
     sessionId: SessionId,
     revision: SessionPersistenceRevision,
+    mode: PreparationMode,
   ): PreparedEntry | undefined {
     const cached = this.cache.get(sessionId)
-    if (cached === undefined || cached.persistenceIdentity !== persistenceIdentity || cached.revision !== revision) {
+    if (cached === undefined || cached.persistenceIdentity !== persistenceIdentity
+      || cached.revision !== revision || cached.mode !== mode) {
       return undefined
     }
     this.cache.delete(sessionId)
@@ -253,6 +386,7 @@ export class SessionObservationReader {
         header: entry.session.header,
         inheritedEventCount: entry.session.inheritedEventCount,
         events: entry.events,
+        readEvents: (from, to) => Object.freeze(entry.events.slice(from, to)),
         cursor: entry.events.at(-1)?.seq ?? -1,
         revision: entry.revision,
         ...projections === undefined ? {} : { projections },
@@ -292,6 +426,10 @@ export class SessionObservationReader {
         { cause: error },
       )
     }
+    const readEvents = (from: SessionLogOffsetType, to: SessionLogOffsetType): readonly SessionEvent[] => {
+      // oxlint-disable-next-line typescript/no-deprecated -- Observation range adapter owns the existing synchronous Session read.
+      return session.snapshotEvents(from, SessionLogOffset(Math.min(to, seq)))
+    }
     const lease = (): SessionObservation => {
       let disposed = false
       return {
@@ -299,10 +437,10 @@ export class SessionObservationReader {
         header: session.header,
         inheritedEventCount: session.inheritedEventCount,
         get events() {
-          // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-          materialized ??= session.snapshotEvents(SessionLogOffset(0), seq)
+          materialized ??= readEvents(SessionLogOffset(0), seq)
           return materialized
         },
+        readEvents,
         cursor: seq === 0 ? -1 : SessionSeq(seq - 1),
         ...projections === undefined ? {} : { projections },
         retain: () => {
@@ -325,12 +463,42 @@ export class SessionObservationReader {
   }
 }
 
-function throwIfObservationAborted(signal: AbortSignal | undefined): void {
+/**
+ * Advance shared analysis to a lease cut, rebuilding an older prefix temporarily.
+ * @param observation - retained exact prefix; events are borrowed without payload copies.
+ * @param analysis - analysis owned by the source, possibly newer than this lease.
+ * @returns analysis of exactly this cut; an older rebuild is not retained by the owner.
+ */
+export function analyzeObservation(observation: SessionObservation, analysis: EventLogAnalysis): EventLogAnalysis {
+  const cut = observation.cursor + 1
+  const selected = analysis.processed > cut ? new EventLogAnalysis(observation.header.id) : analysis
+  selected.append(observation.readEvents(SessionLogOffset(selected.processed), SessionLogOffset(cut)))
+  return selected
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, mode: PreparationMode): void {
+  if (mode === 'canonical') {
+    signal?.throwIfAborted()
+    return
+  }
   if (signal?.aborted !== true) return
   throw new SessionQueryError(
     'session observation was aborted',
     'SESSION_QUERY_ABORTED',
     { cause: signal.reason },
+  )
+}
+
+function mapCorpusFailure(sessionId: SessionId, error: unknown, operation: 'stat' | 'read'): SessionQueryError {
+  if (operation === 'read' && hasErrorName(error, 'SessionPersistenceCorruptionError')) {
+    return new SessionQueryError(
+      'stored session "' + sessionId + '" is corrupt: ' + errorMessage(error),
+      'SESSION_QUERY_CORRUPT_SESSION', { cause: error },
+    )
+  }
+  return new SessionQueryError(
+    'failed to ' + operation + ' stored session "' + sessionId + '": ' + errorMessage(error),
+    'SESSION_QUERY_PERSISTENCE_FAILED', { cause: error },
   )
 }
 

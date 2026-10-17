@@ -9,6 +9,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import {
   Session,
   SessionSeq,
+  SessionLogOffset,
   snapshotSessionEvent,
   type SessionId,
   type SessionSeq as SessionSeqType,
@@ -16,7 +17,12 @@ import {
 import { foldSessionTitle } from '@deepseek-ai/dsh-session-title'
 import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
 import type {
+  SessionCaptureReader,
   SessionEventResultFilter,
+  SessionMetadataPageRequest,
+  SessionEventPageRequest,
+  SessionEventPage,
+  SessionEventPageItem,
   SessionEventSearchPage,
   SessionEventReadRequest,
   SessionEventRecord,
@@ -58,6 +64,8 @@ import {
   materializeSessionResultFilters,
 } from './filters.ts'
 import * as tracing from './tracing.ts'
+import { SessionPages, assertReadPageLimit } from './paging.ts'
+import { extractSessionEventText } from './extraction.ts'
 
 export type * from './types.ts'
 export { SessionSearchCursor } from './cursor.ts'
@@ -101,6 +109,7 @@ export abstract class SessionQueryEngine extends Service {
   private readonly _readWindowMax: number
   private readonly _corpus: SessionCorpus
   private readonly _observations: SessionObservationReader
+  private readonly _pages: SessionPages
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'sessionQuery')
@@ -127,8 +136,26 @@ export abstract class SessionQueryEngine extends Service {
         'SESSION_QUERY_INVALID_CONFIG',
       )
     }
-    this._corpus = new SessionCorpus(ctx, persistedReadConcurrency)
+    const metadataCacheTtlMs = config.metadataCacheTtlMs ?? 5000
+    const snapshotTtlMs = config.sessionPageSnapshotTtlMs ?? 60000
+    const snapshotCapacity = config.sessionPageSnapshotCapacity ?? 8
+    for (const [name, value, minimum] of [
+      ['metadataCacheTtlMs', metadataCacheTtlMs, 0],
+      ['sessionPageSnapshotTtlMs', snapshotTtlMs, 1],
+      ['sessionPageSnapshotCapacity', snapshotCapacity, 1],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value < minimum) {
+        throw new SessionQueryError(
+          'session-query: ' + name + ' must be a safe integer >= ' + String(minimum),
+          'SESSION_QUERY_INVALID_CONFIG',
+        )
+      }
+    }
+    this._pages = new SessionPages(snapshotTtlMs, snapshotCapacity)
+    ctx.effect(() => () => { this._pages.clear() }, 'sessionQuery.pages')
+    this._corpus = new SessionCorpus(ctx, persistedReadConcurrency, metadataCacheTtlMs)
     this._observations = new SessionObservationReader(ctx, preparedSessionCacheSize)
+    ctx.effect(() => () => { this._observations.dispose() }, 'sessionQuery.observations')
   }
 
   /**
@@ -142,6 +169,28 @@ export abstract class SessionQueryEngine extends Service {
     options: SessionObservationOptions = {},
   ): Promise<SessionObservation> {
     return this._observations.read(sessionId, options)
+  }
+
+  /**
+   * Sample the current live or unpublished prepared Session in one synchronous callback.
+   * Uses store message definitions, with no Agent activation or persistent writes.
+   * The runtime reader is the original full Session. Do not mutate it, yield, retain
+   * its observation, or return borrowed containers; return independently owned data.
+   * A cold observation excludes the end-seed marker added by preparation; Session seq includes it.
+   * The lease releases in finally on success or callback failure. Cold cancellation
+   * uses the observation error taxonomy; callback exceptions propagate unchanged.
+   * @param sessionId - logical Session identity; caller owns source authorization.
+   * @param capture - synchronous callback over the selected Session and its source observation.
+   * @param options - cancellation and projection selection; no preparation-mode override.
+   * @returns independently owned callback output after releasing the observation lease.
+   */
+  captureSession<Value>(
+    sessionId: SessionId,
+    capture: (session: SessionCaptureReader, observation: SessionObservation) =>
+      Value & (Value extends PromiseLike<unknown> ? never : unknown),
+    options: SessionObservationOptions = {},
+  ): Promise<Value> {
+    return this._observations.capture(sessionId, capture, options)
   }
 
   /**
@@ -176,6 +225,68 @@ export abstract class SessionQueryEngine extends Service {
   }
 
   /**
+   * Page newest-first metadata from an immutable snapshot; continuation never re-lists persistence.
+   * @param request - metadata filters, positive page size, and optional snapshot cursor.
+   * @param signal - cancellation for metadata observation and waiting.
+   * @returns detached records; expired, evicted, or unloaded snapshots reject with STALE_CURSOR.
+   */
+  async pageSessions(request: SessionMetadataPageRequest, signal?: AbortSignal): Promise<SessionSearchPage<SessionRecord>> {
+    assertReadPageLimit(request.limit)
+    signal?.throwIfAborted()
+    const filters = materializeSessionResultFilters(request.filters ?? [])
+    const fingerprint = JSON.stringify(filters)
+    if (request.cursor !== undefined) return this._pages.next(request.cursor, fingerprint, request.limit, this.ctx.get('sessionPersistence')?.identity)
+    const records = await this._filterSessions(filters, signal)
+    signal?.throwIfAborted()
+    return this._pages.first(records, fingerprint, request.limit, this.ctx.get('sessionPersistence')?.identity)
+  }
+
+  /**
+   * Project only one ascending raw-event page from one live or prepared observation.
+   * @param request - target, exclusive seq bound, optional types and text, and positive page size.
+   * @param signal - cancellation during cold resolution and page scanning.
+   * @returns page metadata, exact source header and observed upper seq, and optional continuation.
+   */
+  async pageEvents(request: SessionEventPageRequest, signal?: AbortSignal): Promise<SessionEventPage> {
+    assertReadPageLimit(request.limit)
+    const after = request.afterSeq ?? -1
+    if (!Number.isSafeInteger(after) || after < -1) {
+      throw new SessionQueryError('afterSeq must be a safe integer >= -1', 'SESSION_QUERY_INVALID_FILTER')
+    }
+    const types = request.types === undefined ? undefined : new Set(request.types)
+    const observation = await this.observeSession(request.sessionId, { ...signal === undefined ? {} : { signal }, projectionMode: 'none' })
+    try {
+      const items: SessionEventPageItem[] = []
+      let hasMore = false
+      for (let from = after + 1; from <= observation.cursor && !hasMore;) {
+        signal?.throwIfAborted()
+        const to = Math.min(observation.cursor + 1, from + 256)
+        const events = observation.readEvents(SessionLogOffset(from), SessionLogOffset(to))
+        for (const event of events) {
+          if (types !== undefined && !types.has(event.type)) continue
+          if (items.length === request.limit) { hasMore = true; break }
+          items.push({
+            sessionId: request.sessionId, seq: event.seq, type: event.type, time: event.time,
+            ...request.includeText === true ? { text: extractSessionEventText(event) } : {},
+          })
+        }
+        from = to
+        // Yield between bounded scan batches so caller cancellation can be delivered.
+        if (from <= observation.cursor && !hasMore) await new Promise<void>(resolve => setImmediate(resolve))
+      }
+      signal?.throwIfAborted()
+      const last = items.at(-1)
+      return {
+        session: structuredClone(observation.header), items,
+        capturedThroughSeq: observation.cursor,
+        ...hasMore && last !== undefined ? { nextAfterSeq: last.seq } : {},
+      }
+    } finally {
+      observation[Symbol.dispose]()
+    }
+  }
+
+  /**
    * Read and replay-validate one complete logical session log without making it live.
    * @param sessionId - live or persisted session id to read.
    * @returns cloned header and complete raw event log from one observation.
@@ -198,9 +309,9 @@ export abstract class SessionQueryEngine extends Service {
   }
 
   /**
-   * Filter the complete logical corpus with provider-independent predicates.
+   * Filter logical sessions; exact id clauses avoid a complete persistence listing.
    * @param filters - ANDed session metadata and availability clauses.
-   * @param signal - optional cancellation for persistence listing.
+   * @param signal - optional cancellation for persistence observations.
    * @returns matching cloned records in deterministic newest-first order.
    */
   async filterSessions(
@@ -289,7 +400,14 @@ export abstract class SessionQueryEngine extends Service {
     filters: readonly SessionResultFilter[],
     signal?: AbortSignal,
   ): Promise<SessionRecord[]> {
-    return filterSessionResults(await this._corpus.listSessions(signal), filters)
+    const idFilters = filters.filter(filter => filter.kind === 'id')
+    const first = idFilters[0]
+    const records = first === undefined
+      ? await this._corpus.listSessions(signal)
+      : await this._corpus.selectSessions(
+        first.values.filter(id => idFilters.every(filter => filter.values.includes(id))), signal,
+      )
+    return filterSessionResults(records, filters)
   }
 
   private async _filterEvents(
@@ -302,19 +420,18 @@ export abstract class SessionQueryEngine extends Service {
   }
 
   /**
-   * Read one session's complete current model surface from one corpus observation.
+   * Read original current surface events from an exact cut, reusing owner-held analysis.
    * @param sessionId - live-preferred session id to read.
    * @returns cloned header, current surface, and the last sequence number included in the raw-log capture.
    * @throws when source resolution fails or the session surface is invalid.
    */
   async readSurface(sessionId: SessionId): Promise<SessionSurfaceSnapshot> {
-    const loaded = await this._corpus.load(sessionId)
-    return {
-      session: structuredClone(loaded.header),
-      inheritedEventCount: loaded.inheritedEventCount,
-      capturedThroughSeq: loaded.events.at(-1)?.seq ?? null,
-      events: tracing.currentSurfaceEvents(sessionId, loaded.events),
-    }
+    return this._observations.project(sessionId, (observation, analysis) => ({
+      session: structuredClone(observation.header),
+      inheritedEventCount: observation.inheritedEventCount,
+      capturedThroughSeq: observation.cursor === -1 ? null : observation.cursor,
+      events: analysis.surfaceEvents(),
+    }))
   }
 
   /**
@@ -331,19 +448,17 @@ export abstract class SessionQueryEngine extends Service {
   }
 
   /**
-   * Trace one event's direct positional replacements and cited source events.
+   * Trace direct replacements and citations at an exact cut, advancing only unseen events.
    * @param request - target session id and event seq.
    * @param signal - optional cancellation for persisted source resolution.
    * @returns source header, direct links, and the target's positional replacement chain.
    * @throws when source resolution fails, the target is absent, or surface/source-event validation fails.
    */
   async traceEvent(request: SessionEventTraceRequest, signal?: AbortSignal): Promise<SessionEventTraceObservation> {
-    const loaded = await this._corpus.load(request.sessionId, signal)
-    signal?.throwIfAborted()
-    return {
-      session: loaded.header,
-      ...tracing.traceEvent(request.sessionId, loaded.events, request.seq),
-    }
+    return this._observations.project(request.sessionId, (observation, analysis) => ({
+      session: structuredClone(observation.header),
+      ...analysis.trace(request.seq),
+    }), signal, request.seq)
   }
 
   /**
@@ -367,29 +482,38 @@ export abstract class SessionQueryEngine extends Service {
     after: number,
     signal?: AbortSignal,
   ): Promise<SessionEventWindow> {
-    const loaded = await this._corpus.load(sessionId, signal)
     signal?.throwIfAborted()
-    const target = loaded.events[seq]
-    if (target === undefined || target.seq !== seq) {
-      throw new SessionQueryError(
-        `session "${sessionId}" has no event at seq ${seq}`,
-        'SESSION_QUERY_EVENT_NOT_FOUND',
-      )
-    }
-    const startSeq = SessionSeq(Math.max(0, seq - before))
-    const endSeq = SessionSeq(Math.min(loaded.events.length - 1, seq + after))
-    const targetSnapshot = snapshotSessionEvent(target)
-    const events = loaded.events.slice(startSeq, endSeq + 1)
-      .map(event => event === target
-        ? targetSnapshot
-        : snapshotSessionEvent(event))
-    return {
-      session: structuredClone(loaded.header),
-      inheritedEventCount: loaded.inheritedEventCount,
-      target: targetSnapshot,
-      events,
-      startSeq,
-      endSeq,
+    const observation = await this.observeSession(sessionId, { ...signal === undefined ? {} : { signal }, projectionMode: 'none' }).catch((error: unknown) => {
+      signal?.throwIfAborted()
+      throw error
+    })
+    try {
+      signal?.throwIfAborted()
+      const startSeq = SessionSeq(Math.max(0, seq - before))
+      const endSeq = SessionSeq(Math.min(observation.cursor, seq + after))
+      const selected = observation.readEvents(SessionLogOffset(startSeq), SessionLogOffset(Math.max(startSeq, endSeq + 1)))
+      const target = selected[seq - startSeq]
+      if (target === undefined || target.seq !== seq) {
+        throw new SessionQueryError(
+          `session "${sessionId}" has no event at seq ${seq}`,
+          'SESSION_QUERY_EVENT_NOT_FOUND',
+        )
+      }
+      const targetSnapshot = snapshotSessionEvent(target)
+      const events = selected
+        .map(event => event === target
+          ? targetSnapshot
+          : snapshotSessionEvent(event))
+      return {
+        session: structuredClone(observation.header),
+        inheritedEventCount: observation.inheritedEventCount,
+        target: targetSnapshot,
+        events,
+        startSeq,
+        endSeq,
+      }
+    } finally {
+      observation[Symbol.dispose]()
     }
   }
 
