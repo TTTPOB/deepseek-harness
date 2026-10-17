@@ -175,7 +175,7 @@ describe('Cloudflare Access', () => {
     const sign = await keys()
     const token = await sign()
     const { host, patch } = await load()
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const headers = { host: 'remote.example', 'cf-access-jwt-assertion': token }
     const authenticated = headers
     const page = await request(port, '/', authenticated)
@@ -217,7 +217,7 @@ describe('Cloudflare Access', () => {
     const sign = await keys()
     const token = await sign()
     const { host, patch } = await load()
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const navigation = {
       host: 'remote.example', 'cf-access-jwt-assertion': token,
       'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document',
@@ -265,7 +265,7 @@ describe('Cloudflare Access', () => {
   it('keeps Access index Host, JWT and navigation requirements and synchronous refusal', async () => {
     const sign = await keys()
     const { host } = await load()
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const navigation = {
       host: 'remote.example', 'cf-access-jwt-assertion': await sign(),
       'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document',
@@ -302,9 +302,9 @@ describe('Cloudflare Access', () => {
     const headers = { host: 'remote.example', 'cf-access-jwt-assertion': await sign() }
     const launch = new URL(host.connection.authenticatedUrl('https://remote.example'))
     const path = '/connect' + launch.search + '&interactions=none'
-    expect(await request(host.webServer.port, path, { host: 'remote.example' })).toMatchObject({ status: 401 })
-    expect(await request(host.webServer.port, path, { ...headers, origin: 'https://evil.example' })).toMatchObject({ status: 403 })
-    const connected = await request(host.webServer.port, path, headers)
+    expect(await request(host.webServer.port!, path, { host: 'remote.example' })).toMatchObject({ status: 401 })
+    expect(await request(host.webServer.port!, path, { ...headers, origin: 'https://evil.example' })).toMatchObject({ status: 403 })
+    const connected = await request(host.webServer.port!, path, headers)
     expect(connected.status).toBe(302)
     const apiRequest = { headers: { ...headers, cookie: cookie(connected) } }
     const admitted = await host.connection.admitAsync(apiRequest)
@@ -328,22 +328,22 @@ describe('Cloudflare Access', () => {
   it('requires Access for WebSocket admission and closes the socket at assertion expiry', async () => {
     const sign = await keys()
     const { host } = await load()
-    expect(await upgrade(host.webServer.port)).toMatchObject({ status: 401 })
-    expect(await upgrade(host.webServer.port, 'fake')).toMatchObject({ status: 401 })
+    expect(await upgrade(host.webServer.port!)).toMatchObject({ status: 401 })
+    expect(await upgrade(host.webServer.port!, 'fake')).toMatchObject({ status: 401 })
     const expiry = Math.floor(Date.now() / 1000) + 2
-    const accepted = await upgrade(host.webServer.port, await sign({ exp: expiry }))
+    const accepted = await upgrade(host.webServer.port!, await sign({ exp: expiry }))
     expect(accepted.status).toBe(101)
     const socket = accepted.socket
     if (socket === undefined) throw new Error('upgrade did not retain a socket')
     socket.resume()
     await new Promise<void>((resolve) => { socket.once('close', resolve) })
     expect(Date.now()).toBeGreaterThanOrEqual(expiry * 1000)
-    expect(await upgrade(host.webServer.port, await sign({ exp: expiry }))).toMatchObject({ status: 401 })
+    expect(await upgrade(host.webServer.port!, await sign({ exp: expiry }))).toMatchObject({ status: 401 })
   })
 
   it.each([false, true])('preserves localhost token login (Access enabled=%s)', async (access) => {
     const { host } = await load(access)
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const authorities = [`127.0.0.1:${String(port)}`, ...access ? [] : ['remote.example']]
     for (const authority of authorities) {
       const launch = new URL(host.connection.authenticatedUrl(`http://${authority}`))

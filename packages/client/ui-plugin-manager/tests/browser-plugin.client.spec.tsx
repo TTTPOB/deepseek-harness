@@ -96,7 +96,7 @@ describe('ui-plugin-manager browser plugin', () => {
     await fiber.await()
     expect(b.slots.entries('shell.overlay')).toHaveLength(0)
     const removeRoot = declare(b.slots)
-    const mainInjected: object = factory.mock.calls[0]![0].inject!()
+    const mainInjected: object = (factory.mock.calls[0]![0] as { inject: () => PluginManagerFace }).inject()
     const face = mainInjected as PluginManagerFace
     const overlayInjected: object = b.slots.entries('shell.overlay').find(entry => entry.options.id === 'plugin-manager.refresh-toast')!.inject!()
     const overlay = overlayInjected as PluginRefreshToastFace
@@ -165,7 +165,7 @@ describe('ui-plugin-manager browser plugin', () => {
     for (const name of ['plugins.detail.actions', 'plugins.detail.badge', 'plugins.detail.section'] as const) {
       expect(b.slots.spec(name)).toMatchObject({ kind: 'list', scope: 'root' })
     }
-    const injected: object = factory.mock.calls[0]![0].inject!()
+    const injected: object = (factory.mock.calls[0]![0] as { inject: () => PluginManagerFace }).inject()
     const face = injected as PluginManagerFace
     const overlay = b.slots.entries('shell.overlay').find(entry => entry.options.id === 'plugin-manager.refresh-toast')!
     expect(overlay.component).toBe(PluginRefreshToast)

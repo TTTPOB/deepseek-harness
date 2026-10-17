@@ -2781,8 +2781,8 @@ describe('continuable adjacent-Agent delivery', () => {
     ])
     const { ctx, parent } = await setupWith(adapter)
     try {
-      const first = await ctx.subagents.startActivation(startSpec(parent))
-      const second = await ctx.subagents.startActivation(startSpec(parent))
+      const first = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'parent' })
+      const second = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'parent' })
       await vi.waitFor(() => {
         expect(adapter.requests.filter(request => request.sessionId === first.childId || request.sessionId === second.childId))
           .toHaveLength(2)
