@@ -19,6 +19,14 @@ Session-query checks build the current Session, query, JSONL and SQLite packages
 
 Independent plugins qualify their releases in their own repositories. Source delivery requires neither a sibling configuration checkout nor an independent plugin checkout. There are no unchanged-package Release fixtures in these selections; smoke prerequisites are built from the current checkout.
 
+## Long-term branch
+
+- The long-term release branch is `daily-driver` on TTTPOB remote `fork` (github.com/TTTPOB/deepseek-harness); local `daily-driver` tracks `fork/daily-driver`, never the third-party upstream `origin`.
+- Develop and test on a separate branch or worktree.
+- Before releasing, merge into `daily-driver`, push, and wait for `Daily-driver verify` (`.github/workflows/daily-driver-verify.yml`) to pass.
+- Release only a commit on `daily-driver` through the immutable Release workflow below; tags and Release assets are immutable.
+- On a workstation with about 13 GB RAM, run only capability/package-scoped checks locally with `NODE_OPTIONS=--max-old-space-size=4096`; leave heavy whole-repository typecheck, build, test and coverage checks to CI.
+
 ## Immutable release
 
 The [release workflow](../.github/workflows/daily-driver-release.yml) is manually dispatched. Select the source ref containing the current workflow, an existing `daily-driver-*` tag at that ref, a capability selection, and optionally space-separated package directories to publish. Only a core release requires an immutable qualified Pi tarball URL; the workflow downloads it and sets `DSH_PI_AI_TARBALL`. A release tag names the source snapshot, not a shared package version: asynchronously versioned packages can coexist.
