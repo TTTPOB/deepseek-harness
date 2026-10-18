@@ -172,9 +172,7 @@ Read these pages when the package-level contract is not enough. They move from t
 
 #### What the model sees
 
-A continuable child reports its completed work in its closing response, which settlement automatically delivers to the parent. It uses `send_message` only for information the parent needs before settlement, such as findings that change the next action. Resident-child delivery validates direct-parent authority before adding an ownership hold, so rejected sibling messages cannot pin settlement.
-
-Parent delivery emits a user-role status notice containing the child’s nonempty final text blocks, regardless of `send_message` availability or use. External notices also state that further messages are unsupported. Reasoning and other nontext blocks are excluded. Every parent notice includes available structured output as `Structured result: <JSON>` and the provider’s safe diagnostic as a separate text block. Empty closing text is reported as `It left no closing message.` Caller delivery emits no notice; SDK lifecycle notifications retain complete child output when cleanup succeeds.
+For parent delivery with the adjacent-Agent `send_message` tool available to the child, a continuable child’s initial task instructs it to send a self-contained result to its parent through `send_message` before finishing, and to report earlier findings that change the parent’s next action. Parent delivery emits a user-role status notice containing the child’s nonempty final text blocks, regardless of `send_message` availability or use. External notices also state that further messages are unsupported. Reasoning and other nontext blocks are excluded. Every parent notice includes available structured output as `Structured result: <JSON>` and the provider’s safe diagnostic as a separate text block. Empty closing text is reported as `It left no closing message.` Caller delivery emits no notice; SDK lifecycle notifications retain complete child output when cleanup succeeds.
 
 #### Token effect
 

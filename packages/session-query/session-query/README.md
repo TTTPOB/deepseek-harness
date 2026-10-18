@@ -62,7 +62,7 @@ Complete listings, non-exact-id filters, and session traces share a persisted-he
 
 Use `captureSession` for an independently owned result that combines current Session reads in one synchronous callback. Query passes the original Session through the readonly `SessionCaptureReader` type, paired with its source observation, then releases the lease in `finally`. Do not yield, mutate or retain the Session, retain the observation, or return borrowed containers. Use `projectionMode: none` for node-only reads and `all` when recorded projection summaries are also needed. Source authorization remains with the caller; callback errors propagate unchanged.
 
-The [sampling reference](../../../docs/subsystems/session-query.md#synchronous-session-sampling) explains per-node interpretation, empty nodes, private meter adaptation, source cuts versus meter revisions, and store preparation reuse. Cold capture never activates an Agent or writes persistence; first misses still restore the complete log.
+The [sampling reference](../../../docs/subsystems/session-query.md#synchronous-session-sampling) explains callback ownership, per-node interpretation, empty nodes, and cold preparation cuts. Cold capture never activates an Agent or writes persistence; first misses still restore the complete log.
 
 ### Filters
 

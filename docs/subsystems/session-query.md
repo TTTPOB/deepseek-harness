@@ -6,6 +6,14 @@ Query vocabulary over the live-preferred logical session corpus. The [Service De
 
 Source: [`packages/session-query/session-query/src/types.ts`](../../packages/session-query/session-query/src/types.ts)
 
+<a id="synchronous-session-sampling"></a>
+
+## Synchronous session sampling
+
+`captureSession` selects the live or unpublished prepared Session and passes the original instance as a readonly `SessionCaptureReader`, together with its source observation, to one synchronous callback. Return independently owned data; do not yield, mutate or retain the Session or observation, or return borrowed containers. The observation lease releases on success and callback failure; callback exceptions propagate unchanged. Source authorization belongs to the caller.
+
+Use `deriveEventMessage` with events from the paired observation to apply the store’s message definitions; a node with no message returns `null`. Select `projectionMode: none` for node-only reads or `all` for recorded projection summaries. Cold sampling uses store preparation without activating an Agent or writing persistence; the source observation excludes the preparation end-seed marker even though Session `seq` includes it.
+
 ## Logical records
 
 `SessionRecord` is returned by the cross-corpus list. It exposes source availability independently from the cloned live-preferred header. `SessionEventRecord` is a lightweight raw-log projection; classification uses the same `foldSurface()` transitions as model-history derivation.

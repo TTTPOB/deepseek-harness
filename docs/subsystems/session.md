@@ -443,6 +443,12 @@ interface SurfaceFoldResult {
 }
 ```
 
+<a id="surface-folding"></a>
+
+### Surface folding
+
+`SurfaceFoldAccumulator` from `dsh-session/surface` incrementally folds one contiguous immutable event prefix starting at seq 0. Append each event at `nextSeq` with the caller-owned history indexed from seq 0; validation failure leaves `nextSeq` unchanged. Its `nodes` and `projectedMessages` are borrowed views that advance on later appends, so copy retained results. Replacement metadata is detached and remains stable; the caller owns any replacement history. Removing a used message-projection definition blocks further reads and appends.
+
 ## `Session` public API
 
 The body-stripped declaration keeps the plain class's detached factory, state accessors, append method, and history projections synchronized with source. Store operations remain in the generated [`ctx.sessions` section](#ctxsessions--sessionstore).

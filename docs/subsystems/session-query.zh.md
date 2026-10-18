@@ -6,6 +6,14 @@
 
 源码：[`packages/session-query/session-query/src/types.ts`](../../packages/session-query/session-query/src/types.ts)
 
+<a id="synchronous-session-sampling"></a>
+
+## Session 同步采样
+
+`captureSession` 选择 live 或尚未发布的已准备 Session，将原始实例以只读 `SessionCaptureReader` 类型连同其来源观察传给一次同步回调。返回独立拥有的数据；不要让出执行、修改或保留 Session 或观察，也不要返回借用容器。成功或回调失败时都会释放观察租约；回调异常原样传播。来源授权由调用方负责。
+
+对配对观察中的事件使用 `deriveEventMessage`，以应用存储的消息定义；没有消息的节点返回 `null`。仅需节点读取时选择 `projectionMode: none`，需要已记录的投影摘要时选择 `all`。冷采样使用存储准备机制，不激活 Agent，也不写入持久化；来源观察不包含准备阶段的 end-seed 标记，但 Session 的 `seq` 包含它。
+
 ## 逻辑记录
 
 `SessionRecord` 由全语料库列表返回。它除了克隆的、优先取自 live 源的 header 外，还单独公开各源的可用性。`SessionEventRecord` 是轻量的原始日志投影；分类使用与模型历史推导相同的 `foldSurface()` 状态转换。

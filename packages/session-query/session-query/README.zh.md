@@ -62,7 +62,7 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 
 需要在一个同步回调中组合当前 Session 读取并返回独立拥有的结果时，使用 `captureSession`。Query 通过只读 `SessionCaptureReader` 类型传入原始 Session 及配对的源 observation，再在 `finally` 释放租约。不能 yield、修改或保留 Session、retain observation，或返回借用容器。只读节点时使用 `projectionMode: none`，还需已记录 projection 汇总时使用 `all`。源授权仍由调用方负责；回调错误原样传播。
 
-[采样参考](../../../docs/subsystems/session-query.zh.md#synchronous-session-sampling)说明逐节点解释、空节点、私有 meter 适配、source cut 与 meter revision 的区别及 store preparation 复用。cold capture 从不激活 Agent 或写持久存储；首次未命中仍恢复完整日志。
+[采样参考](../../../docs/subsystems/session-query.zh.md#synchronous-session-sampling)说明回调所有权、逐节点解释、空节点以及冷准备的来源截点。cold capture 从不激活 Agent 或写持久存储；首次未命中仍恢复完整日志。
 
 ### 过滤器
 

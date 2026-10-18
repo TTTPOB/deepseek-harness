@@ -445,6 +445,12 @@ interface SurfaceFoldResult {
 }
 ```
 
+<a id="surface-folding"></a>
+
+### Surface 折叠
+
+`dsh-session/surface` 的 `SurfaceFoldAccumulator` 从 seq 0 开始增量折叠一段连续、不可变的事件前缀。每次在 `nextSeq` 处追加事件，并提供调用方拥有、从 seq 0 索引的历史；验证失败时 `nextSeq` 不变。其 `nodes` 与 `projectedMessages` 是借用视图，会随后续追加更新，因此需要保留的结果应先复制。替换元数据独立且保持稳定；替换历史由调用方拥有。移除已使用的消息投影定义会阻止后续读取与追加。
+
 ## `Session` 公共 API
 
 去除方法体的声明与源码中的普通类保持同步，覆盖其脱离态工厂、状态访问器、append 方法和历史投影。存储操作仍由生成的 [`ctx.sessions` 小节](#ctxsessions--sessionstore)记录。
