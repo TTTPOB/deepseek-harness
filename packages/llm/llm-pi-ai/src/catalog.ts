@@ -12,7 +12,7 @@
  * @module dsh-llm-pi-ai/catalog
  */
 
-import { builtinProviders, getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all'
+import { builtinProviders, getAllBuiltinModels, getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import type { BuiltinProvider } from '@earendil-works/pi-ai/providers/all'
 import type {
   AnthropicMessagesCompat,
@@ -20,6 +20,7 @@ import type {
   BedrockCompat,
   ChatTemplateKwargValue,
   KnownApi,
+  MistralConversationsCompat,
   Model,
   ModelCost,
   ModelThinkingLevel,
@@ -125,15 +126,6 @@ const MAX_TOKENS_FIELD_GATE: Record<PiAiMaxTokensField, true> = {
 /** The output-cap field spellings a profile may name. */
 export const MAX_TOKENS_FIELDS = Object.keys(MAX_TOKENS_FIELD_GATE) as readonly PiAiMaxTokensField[]
 
-/** Provider-specific Chat Completions deferred-tool serialization modes. */
-export type PiAiDeferredToolsMode = NonNullable<OpenAICompletionsCompat['deferredToolsMode']>
-
-/** Drift gate over the deferred-tool modes accepted by the installed pi-ai. */
-const DEFERRED_TOOLS_MODE_GATE: Record<PiAiDeferredToolsMode, true> = { kimi: true }
-
-/** Deferred-tool serialization modes a profile may name. */
-export const DEFERRED_TOOLS_MODES = Object.keys(DEFERRED_TOOLS_MODE_GATE) as readonly PiAiDeferredToolsMode[]
-
 /** The reasoning-budget field spellings pi-ai accepts. */
 export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['thinkingTokenBudgetField']>
 
@@ -174,37 +166,53 @@ export const CHAT_TEMPLATE_VARS = Object.keys(CHAT_TEMPLATE_VAR_GATE) as readonl
 let providerIndex: Map<string, Provider> | undefined
 
 /**
- * Installed catalog providers by id, constructed once. Each entry owns the API
- * implementations for its own models, which is why a catalog route reuses this
- * provider instead of being rebuilt from parts.
- * @returns the catalog provider index.
+ * Whether this adapter serves one installed catalog provider. It dispatches
+ * chat requests only, so a provider whose catalog lists models but no chat
+ * model (image-generation or classifier models alone) is not a catalog route;
+ * a provider whose catalog lists no models at all stays one.
+ * @param provider - the installed provider.
+ * @returns whether the provider ships a chat model or lists no models.
+ */
+function servesChat(provider: Provider): boolean {
+  const id = provider.id as BuiltinProvider
+  return getBuiltinModels(id).length > 0 || getAllBuiltinModels(id).length === 0
+}
+
+/**
+ * Installed catalog providers this adapter serves, by id, constructed once.
+ * Each entry owns the API implementations for its own models, which is why a
+ * catalog route reuses this provider instead of being rebuilt from parts.
+ * @returns the catalog provider index, in catalog order.
  */
 function catalogProviders(): Map<string, Provider> {
-  providerIndex ??= new Map(builtinProviders().map(provider => [provider.id, provider]))
+  providerIndex ??= new Map(builtinProviders().filter(servesChat).map(provider => [provider.id, provider]))
   return providerIndex
 }
 
 /**
- * The installed catalog provider for one route, when pi-ai ships one.
+ * The installed catalog provider for one route, when pi-ai ships one this
+ * adapter serves.
  * @param provider - provider route key.
- * @returns the catalog provider, or `undefined` for a route pi-ai does not ship.
+ * @returns the catalog provider, or `undefined` for a route pi-ai does not ship
+ *   or ships without a chat model.
  */
 export function catalogProvider(provider: string): Provider | undefined {
   return catalogProviders().get(provider)
 }
 
 /**
- * Every provider route the installed pi-ai catalog ships.
- * @returns the catalog provider ids.
+ * Every provider route the installed pi-ai catalog ships and this adapter
+ * serves: a provider whose catalog lists models but no chat model is left out.
+ * @returns the catalog provider ids, in catalog order.
  */
 export function catalogProviderIds(): readonly string[] {
-  return getBuiltinProviders()
+  return [...catalogProviders().keys()]
 }
 
 /**
  * The installed catalog models for one route, indexed by model id.
  * @param provider - provider route key.
- * @returns catalog models by id; empty for a route pi-ai does not ship.
+ * @returns catalog models by id; empty for a route {@link catalogProvider} does not return.
  */
 export function catalogModels(provider: string): Map<string, Model<Api>> {
   if (!catalogProviders().has(provider)) return new Map()
@@ -262,7 +270,8 @@ const COMPLETIONS_COMPAT_GATE = {
   zaiToolStream: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
   sendSessionAffinityHeaders: 'withhold',
-  deferredToolsMode: 'offer',
+  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoToolAdditions: 'offer',
   sessionAffinityFormat: 'withhold',
 } as const satisfies Record<keyof OpenAICompletionsCompat, CompatDisposition>
 
@@ -278,6 +287,7 @@ const RESPONSES_COMPAT_GATE = {
   supportsAdditionalTools: 'offer',
   supportsToolSearch: 'offer',
   supportsExplicitPromptCacheMode: 'withhold',
+  supportsMidConvoSystemMessages: 'offer',
 } as const satisfies Record<keyof OpenAIResponsesCompat, CompatDisposition>
 
 /** Disposition of every `AnthropicMessagesCompat` field; a drift gate like the one above. */
@@ -290,7 +300,9 @@ const ANTHROPIC_COMPAT_GATE = {
   allowEmptySignature: 'offer',
   supportsStrictTools: 'offer',
   sendSessionAffinityHeaders: 'withhold',
-  supportsToolReferences: 'offer',
+  sessionAffinityFormat: 'withhold',
+  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoToolChanges: 'offer',
   supportsMidConvoEffort: 'withhold',
   allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
@@ -299,6 +311,11 @@ const ANTHROPIC_COMPAT_GATE = {
 const BEDROCK_COMPAT_GATE = {
   supportsStrictMode: 'offer',
 } as const satisfies Record<keyof BedrockCompat, CompatDisposition>
+
+/** Disposition of every `MistralConversationsCompat` field. */
+const MISTRAL_COMPAT_GATE = {
+  supportsMidConvoSystemMessages: 'offer',
+} as const satisfies Record<keyof MistralConversationsCompat, CompatDisposition>
 
 /**
  * Every wire protocol pi-ai gives a compat type. Derived from `Model.compat`'s
@@ -319,6 +336,7 @@ type ApiWithCompat = { [K in KnownApi]: NonNullable<Model<K>['compat']> extends 
  * models declare.
  */
 const COMPAT_GATES: Readonly<Record<ApiWithCompat, Readonly<Record<string, CompatDisposition>>>> = {
+  'mistral-conversations': MISTRAL_COMPAT_GATE,
   'openai-completions': COMPLETIONS_COMPAT_GATE,
   'openai-responses': RESPONSES_COMPAT_GATE,
   'azure-openai-responses': RESPONSES_COMPAT_GATE,
@@ -347,6 +365,7 @@ type OfferedCompatField =
   | OfferedIn<typeof RESPONSES_COMPAT_GATE>
   | OfferedIn<typeof ANTHROPIC_COMPAT_GATE>
   | OfferedIn<typeof BEDROCK_COMPAT_GATE>
+  | OfferedIn<typeof MISTRAL_COMPAT_GATE>
 
 /**
  * pi-ai wire-compatibility switches, set on the route (its models' default) or
@@ -375,8 +394,14 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
-  /** Whether the endpoint receives the system prompt in `input` or `instructions`; the three Responses protocols. */
+  /** System prompt location on Responses protocols; defaults to input. Requires pi-ai fork. */
   systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
+  /** Whether the endpoint accepts system updates in history; all protocols whose compat type declares it. */
+  supportsMidConvoSystemMessages?: boolean
+  /** Whether Chat Completions accepts message-anchored tool additions. */
+  supportsMidConvoToolAdditions?: boolean
+  /** Whether Anthropic accepts tool changes in history. */
+  supportsMidConvoToolChanges?: boolean
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
@@ -440,17 +465,10 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
-  /** Serialize deferred tools after tool results using Kimi format; `openai-completions`. Requires pi-ai deferred-tool context. */
-  deferredToolsMode?: PiAiDeferredToolsMode
-  /** Whether to serialize client-executed tool search; the three Responses protocols. Requires pi-ai deferred-tool context. */
+  /** Whether to serialize client-executed tool search; the three Responses protocols. */
   supportsToolSearch?: boolean
-  /**
-   * Whether to serialize message-anchored `additional_tools`; the three
-   * Responses protocols. Wins over `supportsToolSearch` when both are true.
-   */
+  /** Whether to serialize message-anchored additional tools; wins over tool search on Responses protocols. */
   supportsAdditionalTools?: boolean
-  /** Whether to serialize `tool_reference` blocks in tool results; `anthropic-messages`. Requires pi-ai deferred-tool context. */
-  supportsToolReferences?: boolean
 }
 
 /** Compile-time constraint that `T` is `never`. */
@@ -473,7 +491,7 @@ export type EveryOfferedFieldIsDocumented = AssertNever<Exclude<OfferedCompatFie
 type AssertTrue<T extends true> = T
 
 /** Every compat type a gate classifies, merged so one `Pick` reaches all offered fields. */
-type UpstreamCompat = OpenAICompletionsCompat & OpenAIResponsesCompat & AnthropicMessagesCompat & BedrockCompat
+type UpstreamCompat = OpenAICompletionsCompat & OpenAIResponsesCompat & AnthropicMessagesCompat & BedrockCompat & MistralConversationsCompat
 
 /**
  * Proof that each documented field carries its upstream type, not a hand-copied
@@ -767,7 +785,7 @@ function resolveModelReasoning(
 }
 
 /** The compat block a materialized model carries, whichever protocol it speaks. */
-type ModelCompat = OpenAICompletionsCompat | OpenAIResponsesCompat | AnthropicMessagesCompat | BedrockCompat
+type ModelCompat = OpenAICompletionsCompat | OpenAIResponsesCompat | AnthropicMessagesCompat | BedrockCompat | MistralConversationsCompat
 
 /**
  * Resolve one model's compat block from the profile's switches.

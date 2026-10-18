@@ -42,18 +42,14 @@ async function drain(adapter: PiAiAdapter): Promise<StreamChunk[]> {
   return chunks
 }
 
-describe('pi-ai SDK request options', () => {
-  it('pins one SDK attempt and parses tool calls from the final response', async () => {
+describe('pi-ai SDK retry boundary', () => {
+  it('pins one SDK attempt even when the installed provider currently defaults to zero retries', async () => {
     streamSimple.mockImplementation(() => { throw new Error('mock SDK boundary') })
 
     const chunks = await drain(gatewayAdapter())
 
     expect(streamSimple).toHaveBeenCalledOnce()
-    expect(streamSimple.mock.calls[0]?.[2]).toMatchObject({
-      maxRetries: 0,
-      apiKey: 'test-key',
-      toolCallParsing: 'final',
-    })
+    expect(streamSimple.mock.calls[0]?.[2]).toMatchObject({ maxRetries: 0, apiKey: 'test-key' })
     // pi-ai reports a setup failure as a terminal in-stream error rather than
     // throwing, which the converter turns into the harness error finish.
     expect(chunks.at(-1)).toMatchObject({

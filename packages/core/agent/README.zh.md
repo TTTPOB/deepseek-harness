@@ -40,7 +40,7 @@ const handle = await ctx.agents.create({
 await handle.dispose()   // stops the loop, unregisters, removes the session, unwinds the scope
 ```
 
-`AgentOptions` 提供初始提供方／模型路由、可选的由适配器定义的 `reasoningEffort`，以及可选的正数 `maxTokens` 输出上限。循环会校验确切模型的推理（reasoning）支持、解析适配器默认值、把生效值记录在请求头中，并将它们应用到每个对话请求。通过 effect 持有的 `registerSetup(setup)` 贡献按注册顺序在 create 与 resume 调用方的可选 `setup(agentCtx, agent)` 之前执行；其同步 commit 也按相同顺序在发布前执行。setup 或 commit 失败会回滚未发布的 Agent scope。可选的 `setup(agentCtx, agent)` 回调会在 agent 发布之前组合其作用域世界：`agentCtx` 拥有注册，显式的未发布 Agent 则提供其 Session；Context 不含反向 Agent 属性。作用域工具、提示词段与监听器在任何创建公告之前就已存在。Setup 只做组合：创建完成后才能驱动 agent。
+`AgentOptions` 提供初始提供方／模型路由、可选的由适配器定义的 `reasoningEffort`，以及可选的正数 `maxTokens` 输出上限。循环会校验确切模型的推理（reasoning）支持、解析适配器默认值、把生效值记录在请求头中，并将它们应用到每个对话请求。可选的 `setup(agentCtx, agent)` 回调会在 agent 发布之前组合其作用域世界：`agentCtx` 拥有注册，显式的未发布 Agent 则提供其 Session；Context 不含反向 Agent 属性。作用域工具、提示词段与监听器在任何创建公告之前就已存在。Setup 只做组合：创建完成后才能驱动 agent。`ctx.agents.registerSetup(setup)` 为每次 create 和 resume 安装由注册 fiber 拥有的贡献。贡献按注册顺序串行执行，再执行调用方 setup；全部 setup 等待完成后，以相同顺序执行发布 commit。释放注册 fiber 会移除其贡献。
 
 ### 驱动 agent 的对话
 
@@ -53,7 +53,7 @@ handle.agent.followup({
 })
 handle.agent.steer({
   content: [{ type: 'text', text: 'Focus on the tests.' }],
-  source: { kind: 'plugin', plugin: 'my-plugin' },
+  source: { kind: 'my-plugin' },
 })
 await handle.agent.whenIdle()
 ```
@@ -100,7 +100,6 @@ await handle.agent.whenIdle()
 | [`src/dispatch.ts`](src/dispatch.ts) | `agentEvents` 融合分发器与 `assembleContextFor(agent)` |
 | [`src/consumed-work.ts`](src/consumed-work.ts) | `foldConsumedWork(events)`：日志消费掉的工作最终怎样了 |
 | [`src/model-selection.ts`](src/model-selection.ts) | `installModelSelection`：把一个选择耦合到组装与路由 |
-| [`src/invariant.ts`](src/invariant.ts) | 不变式配套：无操作的 `agent/status` 转换会失败 |
 | [`src/archive-admission.ts`](src/archive-admission.ts) | Workspace 注册表归档准入中的 `turn` 族：运行中的回合及其用户原因取消 |
 
 ### 注册表与生命周期

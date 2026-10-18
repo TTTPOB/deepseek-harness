@@ -27,16 +27,17 @@ kind: "package-reference"
 
 当你需要读取或搜索会话历史、而不直接触碰会话服务或存储后端时，从应用代码使用 `ctx.sessionQuery`。该服务由具体后端插件提供——已发布组合挂载 `@deepseek-ai/dsh-session-query-sqlite`（[README](../session-query-sqlite/README.zh.md)）——因此本包从不单独挂载。一旦组合了后端，以下全部能力都可在 `ctx.sessionQuery` 上使用。
 
-增量 query 实现从 `@deepseek-ai/dsh-session` 导入 `SurfaceFoldAccumulator`。请同时安装本包打包后 peer 依赖声明的 Session 版本和匹配的 SQLite 后端；官方 `0.1.7-rc.2` Session 未导出该 accumulator。[daily-driver 检查](../../../scripts/README.daily-driver.md)会校验 Session/query/JSONL/SQLite 四个产物，即使 release 只发布发生变化的包。
+增量 query 实现从 `@deepseek-ai/dsh-session` 导入 `SurfaceFoldAccumulator`。请同时安装本包打包后 peer 依赖精确声明的 Session fork 版本和匹配的 SQLite 后端；官方 `0.2.1-rc.1` Session 未导出该 accumulator。
 
 ### 你可以做什么
 
 | 操作 | 你得到什么 |
 |---|---|
-| `listSessions()` | 每个逻辑会话，最新的在前，带 `live` 与 `persisted` 可用性标志 |
+| `listSessions()` | 每个逻辑会话，最新的在前，带 `live` 与 `persisted` 可用性标志及可选 `formatStatus` |
 | `pageSessions(request)` | 带到期语义的不可变快照上的有界元数据页 |
 | `pageEvents(request)` | 有界、seq 升序的原始事件元数据及可选语义文本 |
 | `captureSession(id, capture, options)` | 在同一个选定 Session 上同步复制当前节点、预览、路由与消费方自有计量结果 |
+
 | `readSession(id)` | 经过回放校验的完整原始事件日志，且不会让该会话变为实时 |
 | `filterSessions(filters)` | 匹配 AND 连接的元数据与可用性谓词的会话 |
 | `filterEvents(id, filters)` | 匹配元数据与字面文本谓词的语义事件文档 |
@@ -124,7 +125,7 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 | [`src/tracing.ts`](src/tracing.ts) | 增量规范事件分析与会话血缘追踪 |
 | [`src/sources.ts`](src/sources.ts) | 不可变 header 兼容性检查 |
 | [`src/paging.ts`](src/paging.ts) | 有界元数据快照及分页游标 |
-| — | 不发布运行时不变式伴生入口；保留的元数据及分页快照自有失效语义，关系在构建时校验。 |
+
 
 ### 语料库解析
 
@@ -154,7 +155,7 @@ prepared 条目仅在持久化 identity、revision 及 preparation mode 相同�
 - [规范 query 诊断](tests/performance/README.zh.md)——可复现的合成 CPU、heap 与 clone 量测。
 - [会话查询子系统参考](../../../docs/subsystems/session-query.zh.md)——完整类型级约定：记录、过滤器、搜索页、血缘、有界读取与错误。
 - [dsh-session-query-sqlite](../session-query-sqlite/README.zh.md)——已发布的全文后端及其索引生命周期。
-- [dsh-tool-session-query](../tool-session-query/README.zh.md)——构建在本服务之上的面向模型消费方。
+- [dsh-tool-session-query](../../experimental/tool-session-query/README.zh.md)——构建在本服务之上的面向模型消费方。
 - [会话查询关系追踪](../../../.agents/notes/archived/feature/2026-07-13-session-query-tracing.md)——追踪语义与校验边界。
 - [SQLite FTS5 会话搜索](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md)——搜索表面如何实现与对账。
 
@@ -191,6 +192,6 @@ prepared 条目仅在持久化 identity、revision 及 preparation mode 相同�
 
 #### 未来：提取器与搜索提供方注册表
 
-对被引用源事件的递归遍历、提取器与搜索提供方注册表以及更多面向模型表面均被推迟；[tool-session-query README](../tool-session-query/README.zh.md)说明了当前的消费方表面。
+对被引用源事件的递归遍历、提取器与搜索提供方注册表以及更多面向模型表面均被推迟；[tool-session-query README](../../experimental/tool-session-query/README.zh.md)说明了当前的消费方表面。
 
 </details>

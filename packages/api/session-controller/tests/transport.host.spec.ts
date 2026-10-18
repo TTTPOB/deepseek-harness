@@ -585,7 +585,7 @@ describe('SessionHistoryController', () => {
     expect(inspect).not.toHaveBeenCalled()
   })
 
-  it('rejects incomplete or conflicting cold metadata before serving a source', async () => {
+  it('rejects incomplete cold metadata before serving a source', async () => {
     const first = await setup()
     const sessionId = SessionId('incomplete')
     const address = { kind: 'session' as const, sessionId }
@@ -688,6 +688,7 @@ describe('SessionHistoryController', () => {
         header: meta,
         inheritedEventCount: SessionLogOffset(0),
         events: [],
+        readEvents: () => [],
         cursor: -1,
         projections: { asOfSeq: -1, values: {} },
         retain: vi.fn(), [Symbol.dispose]: vi.fn(),

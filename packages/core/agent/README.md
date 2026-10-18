@@ -40,7 +40,7 @@ const handle = await ctx.agents.create({
 await handle.dispose()   // stops the loop, unregisters, removes the session, unwinds the scope
 ```
 
-`AgentOptions` supplies the initial provider/model route, optional adapter-owned `reasoningEffort`, and optional positive `maxTokens` output cap. The loop validates exact-model reasoning support, resolves adapter defaults, records the effective values in the request header, and applies them to each conversation request. Effect-owned `registerSetup(setup)` contributions run in registration order before the caller's optional `setup(agentCtx, agent)` on both create and resume; their synchronous commits run in the same order before publication. A failed setup or commit rolls back the unpublished Agent scope. The optional `setup(agentCtx, agent)` callback composes the agent's scoped world before it is published: `agentCtx` owns registrations, while the explicit unpublished Agent provides its Session; the Context has no reverse Agent property. Scoped tools, prompt sections, and listeners exist before any creation announcement. Setup is composition-only: drive the agent only after creation resolves.
+`AgentOptions` supplies the initial provider/model route, optional adapter-owned `reasoningEffort`, and optional positive `maxTokens` output cap. The loop validates exact-model reasoning support, resolves adapter defaults, records the effective values in the request header, and applies them to each conversation request. An optional `setup(agentCtx, agent)` callback composes the agent's scoped world before it is published: `agentCtx` owns registrations, while the explicit unpublished Agent provides its Session; the Context has no reverse Agent property. Scoped tools, prompt sections, and listeners exist before any creation announcement. Setup is composition-only: drive the agent only after creation resolves. `ctx.agents.registerSetup(setup)` installs a fiber-owned contribution for every create and resume. Contributions run serially in registration order before the caller setup; publication commits run in that same order after all setup awaits settle. Disposing the registering fiber removes its contribution.
 
 ### Drive an agent's conversation
 
@@ -53,7 +53,7 @@ handle.agent.followup({
 })
 handle.agent.steer({
   content: [{ type: 'text', text: 'Focus on the tests.' }],
-  source: { kind: 'plugin', plugin: 'my-plugin' },
+  source: { kind: 'my-plugin' },
 })
 await handle.agent.whenIdle()
 ```
@@ -100,7 +100,6 @@ The package is built on one separation: the public `Agent` surface and registry 
 | [`src/dispatch.ts`](src/dispatch.ts) | `agentEvents` fused dispatcher and `assembleContextFor(agent)` |
 | [`src/consumed-work.ts`](src/consumed-work.ts) | `foldConsumedWork(events)`: what the log's consumed work became |
 | [`src/model-selection.ts`](src/model-selection.ts) | `installModelSelection`: coupling one selection to assembly and routing |
-| [`src/invariant.ts`](src/invariant.ts) | Invariant companion: no-op `agent/status` transitions fail |
 | [`src/archive-admission.ts`](src/archive-admission.ts) | The `turn` family of the Workspace registry's archive admission: a running turn and its user-cause cancel |
 
 ### Registry and lifecycle

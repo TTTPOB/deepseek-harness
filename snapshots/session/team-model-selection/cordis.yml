@@ -1,0 +1,24 @@
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent-report
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- insert:
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+      config:
+        enabled: true
+        allowedModels:
+          - provider: deepseek-official
+            model: deepseek-v4-flash
+    - id: agent-team
+      name: '@deepseek-ai/dsh-experimental-agent-team'
+    - id: tool-agent-team
+      name: '@deepseek-ai/dsh-experimental-tool-agent-team'
+      config:
+        modelSelectionSettings: true

@@ -27,7 +27,7 @@ if (command === 'install') {
   mkdirSync(join(root, 'dist/daily-driver'), { recursive: true })
   for (const target of targets) {
     // The unqualified Client preset emits both entries; its Host-only pass may intentionally be empty.
-    run(['exec', 'tsdown', '--workspace', target.path,
+    run(['exec', 'tsdown', '--config-loader', 'native', '--workspace', target.path,
       ...(target.dsh?.client ? [] : ['-F', target.name, '--env.DSH_BUILD_FACE', 'host'])])
     run(['--dir', target.path, 'pack', '--pack-destination', join(root, 'dist/daily-driver')])
   }

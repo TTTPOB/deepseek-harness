@@ -8,11 +8,14 @@ on:
         type: choice
         required: true
         default: session-query
-        options: [session-query, core, access, subagent]
+        options: [session-query, core, team-model-selection, access]
       tag:
         description: Existing immutable daily-driver-* tag at the selected source ref
         type: string
         required: true
+      pi_tarball_url:
+        description: Immutable qualified Pi 1.1.0-fork tarball URL (required for core)
+        type: string
       packages:
         description: Optional space-separated package directories to publish (default entire selection)
         type: string
@@ -27,7 +30,7 @@ concurrency:
 env:
   CI: 'true'
   DSH_TELEMETRY_DISABLED: '1'
-  NODE_OPTIONS: --max-old-space-size=3072
+  NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
   release:
@@ -48,11 +51,17 @@ jobs:
           SELECTION: ${{ inputs.selection || 'session-query' }}
           RELEASE_TAG: ${{ inputs.tag }}
           SELECTED_PACKAGES: ${{ inputs.packages }}
+          PI_TARBALL_URL: ${{ inputs.pi_tarball_url }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$SELECTION" == core ]]; then
+            test -n "$PI_TARBALL_URL" || { echo "core requires an immutable qualified Pi tarball URL" >&2; exit 1; }
+            export DSH_PI_AI_TARBALL="$RUNNER_TEMP/pi-ai.tgz"
+            curl --fail --location --retry 2 --output "$DSH_PI_AI_TARBALL" "$PI_TARBALL_URL"
+          fi
           read -r -a packages <<< "$SELECTED_PACKAGES"
           node scripts/daily-driver.mjs release "$SELECTION" "${packages[@]}"
       - uses: actions/upload-artifact@v4

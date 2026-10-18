@@ -1,3 +1,4 @@
+import { mountWorkingDirectoryFixture } from '../../subagent/tests/working-directory-fixture.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -11,11 +12,6 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { MockAdapter } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import * as mock from './scripted-provider.ts'
 import * as tool from '../src/index.ts'
-import {
-  assertAllowedModelRoutes,
-  assertAllowedModelSelection,
-  preflightChildLlmRoute,
-} from '../src/model-selection.ts'
 import { callSubagent, modelSelectionSetupAgent, setup, text } from './harness.ts'
 
 const REASONING = {
@@ -38,58 +34,6 @@ function parentWithRoute(
 }
 
 describe('dsh-tool-subagent model selection', () => {
-  it('rejects empty route ids at the configuration boundary', () => {
-    expect(() => { assertAllowedModelRoutes([{ provider: '', model: 'model' }]) })
-      .toThrow('requires non-empty provider and model ids')
-    expect(() => { assertAllowedModelRoutes([{ provider: 'provider', model: '' }]) })
-      .toThrow('requires non-empty provider and model ids')
-    expect(() => { assertAllowedModelRoutes({ provider: 'provider', model: 'model' }) })
-      .toThrow('requires an array of routes')
-    expect(() => { assertAllowedModelRoutes([{ provider: 1, model: 'model' }]) })
-      .toThrow('requires non-empty provider and model ids')
-  })
-
-  it('allows pure inheritance but rejects explicit values outside a Session allowlist', () => {
-    const policy = {
-      routes: [{ provider: 'alpha', model: 'allowed-model' }],
-    }
-    const parent = { provider: 'alpha', model: 'parent-model' }
-
-    expect(() => { assertAllowedModelSelection(policy, parent, undefined, {}) }).not.toThrow()
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        parent,
-        { provider: 'alpha', model: 'allowed-model' },
-        { provider: 'alpha', model: 'allowed-model' },
-      )
-    }).not.toThrow()
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        parent,
-        { provider: 'alpha', model: 'other-model' },
-        { provider: 'alpha', model: 'other-model' },
-      )
-    }).toThrow('is not allowed for this Session')
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        parent,
-        { reasoningEffort: ReasoningEffortId('low') },
-        { reasoning_effort: 'low' },
-      )
-    }).toThrow('alpha/parent-model')
-    expect(() => {
-      assertAllowedModelSelection(
-        policy,
-        {},
-        { reasoningEffort: ReasoningEffortId('low') },
-        { reasoning_effort: 'low' },
-      )
-    }).toThrow('without an effective provider and model')
-  })
-
   it('leaves deployment or parent defaults outside the allowlist usable when the call selects nothing', async () => {
     let starts = 0
     const ctx = await setup(
@@ -113,12 +57,12 @@ describe('dsh-tool-subagent model selection', () => {
     const schema = ctx.tools.schemas(agent).find(entry => entry.name === 'subagent')!
     const props = (schema.parameters as { properties?: Record<string, unknown> }).properties ?? {}
     expect(Object.keys(props).sort()).toEqual([
+      'cwd',
       'description',
       'model',
       'prompt',
       'provider',
       'reasoning_effort',
-      'run_in_background',
     ])
     expect(schema.description).toContain('list_subagent_models')
     expect(ctx.tools.get('list_subagent_models', agent)).toBeDefined()
@@ -135,7 +79,7 @@ describe('dsh-tool-subagent model selection', () => {
     const ctx = await setup({ provider: 'mock' })
     const schema = ctx.tools.schemas().find(entry => entry.name === 'subagent')!
     const props = (schema.parameters as { properties?: Record<string, unknown> }).properties ?? {}
-    expect(Object.keys(props).sort()).toEqual(['description', 'prompt', 'run_in_background'])
+    expect(Object.keys(props).sort()).toEqual(['cwd', 'description', 'prompt'])
     expect(schema.description).not.toContain('list_subagent_models')
     expect(ctx.tools.get('list_subagent_models')).toBeUndefined()
 
@@ -289,12 +233,6 @@ describe('dsh-tool-subagent model selection', () => {
     expect(text(result)).toContain('without an effective provider and model')
   })
 
-  it('rejects preflight without an effective provider and model', async () => {
-    const ctx = await setup({ provider: 'mock' })
-    await expect(preflightChildLlmRoute(ctx.llm, {}, undefined, AbortSignal.abort()))
-      .rejects.toThrow('without an effective provider and model')
-  })
-
   it.each([
     { provider: 'alpha' },
     { model: 'fast-model' },
@@ -392,6 +330,7 @@ describe('dsh-tool-subagent model selection', () => {
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await mountWorkingDirectoryFixture(ctx)
     await ctx.plugin(SubagentRuntime)
     await mock.mountScriptedProvider(ctx, { name: 'mock' })
     await ctx.plugin(tool, {
@@ -403,25 +342,23 @@ describe('dsh-tool-subagent model selection', () => {
       },
     })
 
-    const configured = await callSubagent(ctx, { description: 'configured effort', prompt: 'do it' })
+    const configured = await callSubagent(ctx, { description: 'configured effort', prompt: 'do it' }, { agent: parentWithRoute() })
     expect(configured.isError).toBe(true)
     expect(text(configured)).toContain('`llm` service is unavailable')
 
   })
 
-  it('keeps pure inherited routing usable without an LLM service lookup', async () => {
-    let starts = 0
-    const ctx = new Context()
-    await ctx.plugin(SessionProjectionRegistry)
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(SubagentRuntime)
-    await mock.mountScriptedProvider(ctx, { name: 'mock', onStart: () => { starts += 1 } })
-    await ctx.plugin(tool, { provider: 'mock' })
+  it('keeps pure inherited routing usable without resolving an LLM route', async () => {
+    const started = vi.fn()
+    const ctx = await setup({ provider: 'mock' }, { onStart: started })
+    const adapter = new MockAdapter([])
+    const resolve = vi.spyOn(adapter, 'resolveModel')
+    ctx.llm.registerAdapter(['alpha'], adapter)
 
     const result = await callSubagent(ctx, { description: 'inherit route', prompt: 'do it' })
     expect(result.isError).toBe(false)
-    expect(starts).toBe(1)
+    expect(started).toHaveBeenCalledOnce()
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('warns that changing a fork route can lose inherited-prefix reuse', async () => {

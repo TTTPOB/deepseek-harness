@@ -43,7 +43,7 @@ kind: "package-reference"
 |---|---|---|
 | `default` | 必填 | 未显式指定时使用的 preset ID |
 
-`dsh-agent` peer 同时接受官方运行时基线和对应 fork；启用 workspace placement 时由发行组合提供新版 Agent setup API。Web 内置定义来自 `dsh-web-app` bundle。定义使用普通插件行；注册表不扫描目录，也不接受 preset 路径。`agent-preset-registry` 条目的 volatile 字段 `selectedDefault` 保留用户默认值，新会话优先使用它而不是部署 `default`。profile patch 仍可能带有已废弃的 `modeSelectionEnabled` 字段；注册表未声明该字段，既不读取也不重写它。
+Web 内置定义来自 `dsh-web-app` bundle。定义使用普通插件行；注册表不扫描目录，也不接受 preset 路径。`agent-preset-registry` 条目的 volatile 字段 `selectedDefault` 保留用户默认值，新会话优先使用它而不是部署 `default`。profile patch 仍可能带有已废弃的 `modeSelectionEnabled` 字段；注册表未声明该字段，既不读取也不重写它。
 
 注册表不写入任何声明。`read` Remote 把一条声明的子插件列表按 entry-list YAML 方言（含 `!!js` 条件）渲染回来，供客户端展示 preset 的组成；没有任何接口接受 YAML 写回。新建 preset 或覆盖内置 preset 都是 bundle 补丁：插入一行 `@deepseek-ai/dsh-agent-preset`，或按该行 id 写覆盖补丁，再用 `plugin_manager` 安装到 profile；创造模式在对话中编写这类 bundle。
 
@@ -53,9 +53,13 @@ kind: "package-reference"
 <details>
 <summary>实现细节 — 点击展开</summary>
 
-注册声明时校验子插件列表。`place(agentCtx, { key, ctx, release })` 将 workspace 租约交给注册表后，Agent 按需在其 workspace 下挂载注册表拥有的 preset 代际。注册表独占 Agent 父链接和租约，Agent 卸载时先释放 preset 再释放租约。同一 workspace 的 Agent 在使用期间共享代际；无人使用时立即销毁。子 Agent 只在同 workspace 继承父 Agent 的确切代际。未设置 placement 的 Agent 使用 Host scope；冷读取 `acquireScope(id)` 临时租用 Host scope，不获取 workspace。定义更新或撤销不改变现有 Agent 保留的旧代。Agent loop 仍由宿主共享。
+声明在 Agent 或临时历史读取首次使用时惰性挂载。`place(agentCtx, { key, ctx, release })` 在未发布的 setup 中接收 workspace lease；key 与 ctx 标识其作用域。同一 workspace 的 Agent 共享当前代际，子级继承父级保留的精确代际；跨 workspace 继承会被拒绝。更新或移除声明不影响已有绑定。最后一个绑定释放时，先销毁代际，再释放 workspace lease；之后挂载会创建新树。冷读取使用独立的注册表作用域。插件注册继承 preset scope，Agent scope 的父链接决定可见性。
 
-代际挂载时审计导入失败、缺失服务和向全局泄漏的服务；失败拒绝对应 Agent 的挂载。`list`、`resolve` 与未激活的 `compositionInventory` 只报告声明级诊断，不把某 workspace 的失败作为全局 roster 健康状态。会话日志保存 preset ID 和空白会话的切换记录；重启恢复使用该 ID 的当前定义，缺失时拒绝恢复。
+preset 的服务提供方及其消费方必须共享同一个 `cordis:group` 隔离 realm。条目局部隔离不会沿 Agent 注册 scope 传播：组外的普通 Context 查找（包括 `agent.ctx`）仍选择 Host realm。`agentPresets.serviceFor()` 显式检查保留的组合，不改变普通服务查找。
+
+激活审计检查导入失败、缺失服务和向全局泄漏的服务。导入失败、激活失败和泄漏会拒绝挂载。挂载在 Host Loader 树结算后才拒绝仍缺失的服务。失败的挂载释放资源并允许重试；列表与 inventory 读取只检查声明，不触发挂载。会话日志保存 preset ID 和空白会话的切换记录；重启恢复使用该 ID 的当前定义，缺失时拒绝恢复。若空白会话已记录所请求的 preset 且正运行其当前版本，`select` 不做任何改动，也不追加切换记录或触发 `tools/change`。
+
+`inspectCompositions()` 读取本注册表仍保留的全部代际；传入 Agent 上下文时只选择它绑定的精确代际，在此没有绑定时返回空列表。每个 `AgentPresetInspection` 包含 preset ID、纯数据形式的活动模块引用及解析基址，以及泄漏的服务名。检查器查询运行中的服务，而不是模块级挂载表；结果不包含 Loader 树或 fiber。这些记录定义在 [composition-inventory.ts](src/composition-inventory.ts) 中。
 
 | 文件 | 职责 |
 |---|---|
@@ -103,5 +107,3 @@ kind: "package-reference"
 无。
 
 </details>
-
-**运行时不变量：** companion 检查挂载后泄漏到全局的服务，以及模型请求前尚未绑定 preset 的 Agent。

@@ -36,7 +36,7 @@ appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\
     assert(calls[0].includes('@deepseek-ai/dsh-session...'))
     assert(calls[1].includes('packages/core/session/tsconfig.json'))
     const host = calls.find(args => args.includes('tsdown') && args.includes('packages/core/session'))
-    assert.deepEqual(host?.slice(1), ['exec', 'tsdown', '--workspace',
+    assert.deepEqual(host?.slice(1), ['exec', 'tsdown', '--config-loader', 'native', '--workspace',
       'packages/core/session', '-F', '@deepseek-ai/dsh-session', '--env.DSH_BUILD_FACE', 'host'])
     assert(calls.some(args => args.includes('pack') && args.includes('packages/core/session')))
     await writeFile(log, '')
@@ -47,7 +47,7 @@ appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\
     assert.equal(client.status, 0, client.stderr)
     const clientCalls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     assert.equal(clientCalls.length, 3)
-    assert.deepEqual(clientCalls[1].slice(1), ['exec', 'tsdown', '--workspace',
+    assert.deepEqual(clientCalls[1].slice(1), ['exec', 'tsdown', '--config-loader', 'native', '--workspace',
       'packages/client/connection'])
     assert(clientCalls[2].includes('pack'))
   } finally {

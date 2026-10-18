@@ -11,23 +11,23 @@ export const packageManager = manifest('.').packageManager
 export const selections = {
   'session-query': {
     packages: ['packages/session-query/session-query', 'packages/session/session-persistence-jsonl', 'packages/session-query/session-query-sqlite', 'packages/core/session'],
-    tests: ['packages/core/session/tests', 'packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts', 'packages/session/session-persistence-jsonl/tests/jsonl.spec.ts', 'packages/session-query/session-query/tests', 'packages/session-query/session-query-sqlite/tests', 'packages/session-query/tool-session-query/tests'],
+    tests: ['packages/core/session/tests', 'packages/session/session-persistence-jsonl/tests', 'packages/session-query/session-query/tests', 'packages/session-query/session-query-sqlite/tests', 'packages/experimental/tool-session-query/tests'],
     smoke: 'smoke-session-query.mjs',
   },
   core: {
-    packages: ['packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client'],
-    tests: ['packages/core/agent/tests', 'packages/preset/agent-preset-registry/tests', 'packages/llm/llm-pi-ai/tests', 'packages/mcp/mcp-client/tests'],
+    packages: ['packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent', 'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team'],
+    tests: ['packages/core/agent/tests', 'packages/preset/agent-preset-registry/tests', 'packages/subagent/subagent/tests', 'packages/llm/llm-pi-ai/tests', 'packages/mcp/mcp-client/tests', 'packages/experimental/tool-agent-team/tests'],
     smoke: 'smoke-core-packages.mjs',
   },
-  access: {
-    packages: ['packages/client/connection', 'packages/host/frontend-static', 'packages/api/gateway', 'packages/client/ui-settings', 'packages/client/ui-plugin-manager', 'packages/client/ui-sidebar-terminal'],
-    tests: ['packages/client/connection/tests', 'packages/host/frontend-static/tests', 'packages/api/gateway/tests', 'packages/client/ui-settings/tests', 'packages/client/ui-plugin-manager/tests', 'packages/client/ui-sidebar-terminal/tests', 'packages/client/ui-settings-models/tests/apply.client.spec.ts', 'packages/client/ui-theme/tests/apply.client.spec.ts'],
-    smoke: 'smoke-access-navigation.mjs',
+  'team-model-selection': {
+    packages: ['packages/subagent/subagent', 'packages/subagent/tool-subagent', 'packages/experimental/agent-team', 'packages/experimental/tool-agent-team'],
+    tests: ['packages/subagent/subagent/tests', 'packages/subagent/tool-subagent/tests', 'packages/experimental/agent-team/tests', 'packages/experimental/tool-agent-team/tests'],
+    smoke: 'smoke-team-model-selection.mjs',
   },
-  subagent: {
-    packages: ['packages/subagent/subagent'],
-    tests: ['packages/subagent/subagent/tests/continuation.spec.ts'],
-    smoke: 'smoke-subagent.mjs',
+  access: {
+    packages: ['packages/client/connection', 'packages/host/frontend-static', 'packages/api/gateway', 'packages/client/ui-plugin-manager', 'packages/client/ui-sidebar-terminal'],
+    tests: ['packages/client/connection/tests', 'packages/host/frontend-static/tests', 'packages/api/gateway/tests', 'packages/client/ui-plugin-manager/tests', 'packages/client/ui-sidebar-terminal/tests'],
+    smoke: 'smoke-access-navigation.mjs',
   },
 }
 export function plan(selection, directories = []) {

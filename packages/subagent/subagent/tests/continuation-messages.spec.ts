@@ -4,7 +4,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { createSettlementMessage, withContinuableReturnGuidance } from '../src/continuation-messages.ts'
 
 describe('continuable return guidance', () => {
-  it('uses settlement for final reports and send_message only for early findings', () => {
+  it('tells the child to send its result to the parent before finishing', () => {
     const content = withContinuableReturnGuidance(SessionId('parent'), [
       { type: 'text', text: 'Do the task.' },
     ])
@@ -12,9 +12,9 @@ describe('continuable return guidance', () => {
 
     expect(guidance).toMatchObject({ type: 'text' })
     if (guidance?.type !== 'text') throw new Error('expected text guidance')
-    expect(guidance.text).toContain('settlement will automatically notify the parent')
-    expect(guidance.text).toContain('Use send_message only when information genuinely needs to reach the parent before you settle')
-    expect(guidance.text).toContain('do not end the turn until your final report is complete')
+    expect(guidance.text).toContain('Before you finish, send your result to that agent with')
+    expect(guidance.text).toContain('Send earlier messages as well when a finding changes what the parent should do next')
+    expect(guidance.text).toContain('sending a message does not end your turn')
   })
 })
 
@@ -41,12 +41,11 @@ describe('continuable settlement content', () => {
   })
 
   it.each([
-    ['absent output', undefined],
     ['empty output', []],
     ['reasoning-only output', [reasoning]],
     ['empty text', [{ type: 'text', text: '' }]],
-  ] satisfies [string, ContentBlock[] | undefined][])('reports no closing message for %s', (_label, output) => {
-    const message = createSettlementMessage(childId, { stopReason: 'completed', ...output === undefined ? {} : { output } })
+  ] satisfies [string, ContentBlock[]][])('reports no closing message for %s', (_label, output) => {
+    const message = createSettlementMessage(childId, { stopReason: 'completed', output })
 
     expect(message.content).toEqual([
       summary,
@@ -69,4 +68,17 @@ describe('continuable settlement content', () => {
       second,
     ])
   })
+})
+
+it('includes closing text alongside structured results and diagnostics', () => {
+  expect(createSettlementMessage(childId, {
+    stopReason: 'completed', output: [{ type: 'text', text: 'final answer' }],
+    structured: { answer: 42 }, diagnostic: 'safe diagnostic',
+  }).content).toEqual([
+    summary,
+    { type: 'text', text: 'Its closing message:' },
+    { type: 'text', text: 'final answer' },
+    { type: 'text', text: 'Structured result: {"answer":42}' },
+    { type: 'text', text: 'safe diagnostic' },
+  ])
 })

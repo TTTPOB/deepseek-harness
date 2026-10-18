@@ -12,6 +12,7 @@ import * as manager from '../src/client/index.ts'
 const PACKAGE = 'dsh-modal-test'
 const BUNDLE: BundleInfo = {
   name: PACKAGE, version: '1.0.0', enabled: true, installed: true, optional: false,
+  official: false, availability: 'profile',
   removable: true, rows: [{ rowId: 'row', moduleName: PACKAGE, meta: { description: 'Row description.' } }], overrides: [],
 }
 type FrameProps = PropsRuntime<'root'> & PropsRenderSlots<'main' | 'shell.overlay'>
@@ -77,11 +78,11 @@ describe('plugin manager owner modal', () => {
     expect(b.root.container.contains(dialog)).toBe(false)
     expect({ role: dialog.getAttribute('role'), modal: dialog.getAttribute('aria-modal'),
       title: dialog.getAttribute('aria-label'), headings: within(dialog).getAllByRole('heading').map(node => node.textContent),
-    }).toEqual({ role: 'dialog', modal: 'true', title: 'Plugins', headings: ['Plugins', 'Installed'] })
+    }).toEqual({ role: 'dialog', modal: 'true', title: 'Plugins', headings: ['Plugins', 'Installed plugins'] })
 
     fireEvent.click(within(dialog).getByText(PACKAGE))
     await act(async () => { b.rt.ctx.pluginNavigation.openModal() })
-    expect(within(dialog).queryByRole('heading', { name: 'Installed' })).toBeNull()
+    expect(within(dialog).queryByRole('heading', { name: 'Installed plugins' })).toBeNull()
     fireEvent.click(within(dialog).getByRole('button', { name: `Configure ${PACKAGE}` }))
     expect(within(dialog).getByText('Row configuration page')).toBeTruthy()
     expect(document.querySelectorAll('[data-plugin-panel]')).toHaveLength(1)
@@ -94,7 +95,7 @@ describe('plugin manager owner modal', () => {
     expect(document.activeElement).toBe(trigger)
     expect(input).toHaveProperty('value', 'unsent draft')
     await act(async () => { b.rt.ctx.pluginNavigation.openModal() })
-    expect(screen.getByRole('heading', { name: 'Installed' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Installed plugins' })).toBeTruthy()
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add plugin' }))
     expect(screen.getAllByRole('dialog')).toHaveLength(2)
     fireEvent.keyDown(document, { key: 'Escape' })
@@ -104,6 +105,23 @@ describe('plugin manager owner modal', () => {
     await act(async () => { b.rt.ctx.pluginNavigation.openBundle(PACKAGE) })
     expect(b.selectPanel).toHaveBeenCalledWith(manager.PANEL_ID)
     expect(document.querySelectorAll('[data-plugin-panel]')).toHaveLength(1)
+  })
+
+  it('keeps contributed marketplace tabs inside the modal and resets them on a fresh opening', async () => {
+    const b = await bench()
+    b.rt.slots.register({ name: 'plugins.tab', id: 'market', label: 'Marketplace' }, () => <p>Marketplace content</p>)
+    await act(async () => { b.rt.ctx.pluginNavigation.openModal() })
+    const dialog = screen.getByRole('dialog', { name: 'Plugins' })
+    await within(dialog).findByRole('tab', { name: 'Marketplace' })
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Marketplace' }))
+    expect(within(dialog).getByText('Marketplace content')).toBeTruthy()
+    await act(async () => { b.rt.ctx.pluginNavigation.openModal() })
+    expect(within(dialog).getByText('Marketplace content')).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await act(async () => { b.rt.ctx.pluginNavigation.openModal() })
+    expect(screen.queryByText('Marketplace content')).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Installed' }).getAttribute('aria-selected')).toBe('true')
+    expect(b.selectPanel).not.toHaveBeenCalled()
   })
 
   it('suppresses the main occurrence while modal-owned and releases the modal on fiber disposal', async () => {
@@ -116,7 +134,7 @@ describe('plugin manager owner modal', () => {
     expect(b.selectPanel).toHaveBeenCalledTimes(1)
     fireEvent.click(within(screen.getByRole('dialog')).getByText(PACKAGE))
     await act(async () => { b.selectPanel(null) })
-    expect(within(screen.getByRole('dialog')).queryByRole('heading', { name: 'Installed' })).toBeNull()
+    expect(within(screen.getByRole('dialog')).queryByRole('heading', { name: 'Installed plugins' })).toBeNull()
     await b.feature.dispose()
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(b.rt.ctx.get('pluginNavigation')).toBeUndefined()

@@ -15,6 +15,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       store: ReturnType<typeof createNavigationStore>
       inject: PluginManagerFace
       children: {
+        'plugins.add.actions': { kind: 'list'; scope: 'root' }
+        'plugins.tab': { kind: 'list'; scope: 'root' }
         'plugins.item': { kind: 'list'; scope: 'root' }
         'plugins.bundle.activation': { kind: 'keyed'; scope: 'root' }
         'plugins.bundle.config': { kind: 'keyed'; scope: 'root' }

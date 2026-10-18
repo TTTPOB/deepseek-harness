@@ -137,12 +137,7 @@ export function apply(ctx: Context, config: Config): void {
       distRoot,
       distIndex,
       () => ctx.connection.authorizeIndexAsync(req, res),
-      async () => {
-        const body = await renderIndex()
-        const canManageHost = ctx.connection.canManageHost(req)
-        return body.replace(/<head(?:\s[^>]*)?>/i, open =>
-          `${open}<script>window.__DSH_CAN_MANAGE_HOST__=${String(canManageHost)}</script>`)
-      },
+      renderIndex,
     )
   }), 'frontend-static: fallback seat')
 }

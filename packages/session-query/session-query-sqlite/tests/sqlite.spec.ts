@@ -22,7 +22,7 @@ import type {
   SessionPersistenceListOptions,
   SessionPersistenceSnapshot,
 } from '@deepseek-ai/dsh-session-persistence'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SqliteSessionQueryEngine, {
   SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES,
   SESSION_QUERY_SQLITE_SCHEMA_VERSION,

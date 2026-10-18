@@ -27,16 +27,17 @@ English | [中文](README.zh.md)
 
 Use `ctx.sessionQuery` from application code when you need to read or search session history without touching the session service or a storage backend directly. The service is provided by a concrete backend plugin — the shipped composition mounts `@deepseek-ai/dsh-session-query-sqlite` ([README](../session-query-sqlite/README.md)) — so this package is never mounted alone. Everything below is available on `ctx.sessionQuery` once a backend is composed.
 
-The incremental query implementation imports `SurfaceFoldAccumulator` from `@deepseek-ai/dsh-session`. Install the Session version declared by this package's packed peer dependency together with the matching SQLite backend; the official `0.1.7-rc.2` Session does not export that accumulator. The [daily-driver checks](../../../scripts/README.daily-driver.md) validate all four Session/query/JSONL/SQLite artifacts even when the release publishes only the changed packages.
+The incremental query implementation imports `SurfaceFoldAccumulator` from `@deepseek-ai/dsh-session`. Install the exact Session fork version declared by this package's packed peer dependency together with the matching SQLite backend; the official `0.2.1-rc.1` Session does not export that accumulator.
 
 ### What you can do
 
 | Operation | What you get |
 |---|---|
-| `listSessions()` | Every logical session, newest first, with `live` and `persisted` availability flags |
+| `listSessions()` | Every logical session, newest first, with `live` and `persisted` availability flags and optional `formatStatus` |
 | `pageSessions(request)` | Bounded metadata pages over an expiring immutable snapshot |
 | `pageEvents(request)` | Bounded ascending raw-event metadata and optional semantic text |
 | `captureSession(id, capture, options)` | Synchronously copy current nodes, previews, routing, and consumer-owned measurements from one selected Session |
+
 | `readSession(id)` | The complete replay-validated raw event log, without making the session live |
 | `filterSessions(filters)` | Sessions matching ANDed metadata and availability predicates |
 | `filterEvents(id, filters)` | Semantic event documents matching metadata and literal-text predicates |
@@ -124,7 +125,7 @@ The decision history lives in the [unified service decision](../../../.agents/no
 | [`src/tracing.ts`](src/tracing.ts) | Incremental canonical event analysis and session-lineage tracing |
 | [`src/sources.ts`](src/sources.ts) | Immutable-header compatibility check |
 | [`src/paging.ts`](src/paging.ts) | Bounded metadata snapshots and continuation cursors |
-| — | No runtime invariant companion is published; retained metadata and page snapshots have owned invalidation semantics, and relationships are validated during projection. |
+
 
 ### Corpus resolution
 
@@ -154,7 +155,7 @@ Read these pages when the package-level contract is not enough. They move from t
 - [Canonical query diagnostics](tests/performance/README.md) — reproducible synthetic CPU, heap, and clone measurements.
 - [Session Query subsystem reference](../../../docs/subsystems/session-query.md) — the full type-level contract: records, filters, search pages, lineage, bounded reads, and errors.
 - [dsh-session-query-sqlite](../session-query-sqlite/README.md) — the shipped full-text backend and its index lifecycle.
-- [dsh-tool-session-query](../tool-session-query/README.md) — the model-facing consumer built on this service.
+- [dsh-tool-session-query](../../experimental/tool-session-query/README.md) — the model-facing consumer built on this service.
 - [Session query relationship tracing](../../../.agents/notes/archived/feature/2026-07-13-session-query-tracing.md) — trace semantics and the validation boundary.
 - [SQLite FTS5 session search](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md) — how the search surface is implemented and reconciled.
 
@@ -191,6 +192,6 @@ This Dev Note is working context for maintainers: open design questions and dire
 
 #### Future: extractor and search-provider registries
 
-Recursive traversal through cited source events, extractor and search-provider registries, and additional model-facing surfaces are deferred; the [tool-session-query README](../tool-session-query/README.md) documents the current consumer surface.
+Recursive traversal through cited source events, extractor and search-provider registries, and additional model-facing surfaces are deferred; the [tool-session-query README](../../experimental/tool-session-query/README.md) documents the current consumer surface.
 
 </details>

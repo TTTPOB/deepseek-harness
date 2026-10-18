@@ -43,7 +43,7 @@ Requests are served from the dist root (the directory containing `distIndex`). T
 
 The served HTML carries one document base, `<base href="./">`, ahead of every injected resource row, so it freezes the entry directory the page was loaded from: the shell's own app-directory-relative references and the Host's plugin-resource rows both resolve under the mount that served the page. The same index therefore serves the origin root and whatever mount a prefix-stripping proxy owns; this plugin renders it only for the dist root and the configured index path.
 
-Root and configured-index responses call `ctx.connection.authorizeIndexAsync` before reading HTML. A valid process token receives a 303 redirect plus the persistent browser cookie; an existing valid cookie serves the index; every other index request receives the Connection-owned 401 response. Configured Access authentication is awaited before serving the index; the response includes the server-verified `__DSH_CAN_MANAGE_HOST__` boolean for settings persistence. Non-index files remain public static assets. [Connection](../../client/connection/README.md#browser-authentication-and-request-trust) owns authentication and cookie semantics.
+Root and configured-index responses call `ctx.connection.authorizeIndex` before reading HTML. A valid process token receives a 303 redirect plus the persistent browser cookie; an existing valid cookie serves the index; every other index request receives the Connection-owned 401 response. Non-index files remain public static assets. Connection owns the token, cookie, expiry, and signing-record semantics.
 
 ### Observable failures
 
@@ -87,6 +87,10 @@ Read these when the serving contract is not enough: the seat owner's contract, t
 
 -----
 
+### Fork behavior
+
+Index authorization awaits `ctx.connection.authorizeIndexAsync` before rendering; successful HTML responses use `cache-control: no-store`. Static assets remain public. Access authentication and read-only navigation rules belong to [Connection](../../client/connection/README.md); the page adds no settings-persistence permission global.
+
 <a id="model-experience"></a>
 ## Model Experience
 
@@ -115,5 +119,3 @@ These limits define when a served asset class is not yet covered. They are curre
 None.
 
 </details>
-
-**Runtime invariant:** No companion is published. The only owned relation is the single fallback seat, which cannot be probed from the teardown stream — `internal/plugin` fires before the disposing fiber's effects run, so the legitimate owner still holds the seat at notification time and any claim probe would false-positive on every correct disposal (unlike the webserver companion, whose reserved-path probes never collide with a live registration). The seat's register/release symmetry is covered by the package's real-composition HMR-safety test instead.

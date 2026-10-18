@@ -3,20 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/session-query.md
 /session-query:
-  en: db88d793dff09966
-  zh: 00e8fa18fa651beb
-/session-query/synchronous-session-sampling:
-  en: 35f6138fee934d55
-  zh: 3f01204c57041316
+  en: 041684440d88fbbc
+  zh: 376e7f0b173b238d
 /session-query/logical-records:
   en: 839a70b2761c16f1
   zh: 883277abce68c750
 /session-query/provider-independent-filters-and-documents:
   en: a1818c567b28613c
   zh: 5dd442cf5ce0438e
-/session-query/raw-listing-pages:
-  en: c1510afc6b148f14
-  zh: 76a43c33d59fc6f1
 /session-query/full-text-search-pages:
   en: 192dc8ec7f3a9d28
   zh: c18aef45c61610b9

@@ -12,6 +12,7 @@ import LocalCredentials from '@deepseek-ai/dsh-credentials-local'
 import HttpServer from '@deepseek-ai/dsh-host-webserver'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import Gateway from '../../../api/gateway/src/index.ts'
+import RemoteAccess from '../../../api/remote-access/src/index.ts'
 import type { Duplex } from 'node:stream'
 import * as FrontendStatic from '../../../host/frontend-static/src/index.ts'
 import { initProfile, mountRootInclude, readProfilePatches, type ProfileContext } from '@deepseek-ai/dsh-app-boot'
@@ -67,7 +68,7 @@ async function load(access = true) {
     '- id: connection', '  name: cordis:connection', '  config:', '    trustedHosts: [remote.example]',
     ...(access ? ['    cloudflareAccess:', `      issuer: ${issuer}`, `      audience: ${audience}`] : []),
     '- id: frontend', '  name: cordis:frontend', '  config:', `    distIndex: ${index}`,
-    '- id: typert', '  name: cordis:typert', '- id: gateway', '  name: cordis:gateway',
+    '- id: access', '  name: cordis:access', '- id: typert', '  name: cordis:typert', '- id: gateway', '  name: cordis:gateway',
     '- id: probe', '  name: cordis:probe',
   ].join('\n'))
   ctx = new Context()
@@ -83,7 +84,7 @@ async function load(access = true) {
         async fetch(request) {
           const payload: unknown = await request.json()
           if (typeof payload !== 'object' || payload === null) return new Response('invalid', { status: 400 })
-          await owner.settings.update('probe', payload, undefined)
+          await owner.settings.update('probe', payload)
           return Response.json({ saved: true })
         },
       })
@@ -91,7 +92,7 @@ async function load(access = true) {
   }
   Object.assign(ctx.loader.builtins, {
     credentials: LocalCredentials, server: HttpServer, connection: Connection,
-    frontend: FrontendStatic, probe, typert: TypertRegistry, gateway: Gateway,
+    frontend: FrontendStatic, probe, typert: TypertRegistry, gateway: Gateway, access: RemoteAccess,
   })
   const dir = join(home, 'profile')
   initProfile(dir, ['test-bundle'])
@@ -174,14 +175,14 @@ describe('Cloudflare Access', () => {
     const sign = await keys()
     const token = await sign()
     const { host, patch } = await load()
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const headers = { host: 'remote.example', 'cf-access-jwt-assertion': token }
     const authenticated = headers
     const page = await request(port, '/', authenticated)
     expect(page.status).toBe(200)
     expect(page.headers['cache-control']).toBe('no-store')
     expect(page.headers['set-cookie']).toBeUndefined()
-    expect(page.body).toContain('window.__DSH_CAN_MANAGE_HOST__=true')
+    expect(page.body).not.toContain('__DSH_CAN_MANAGE_HOST__')
     expect(page.body).not.toContain(new URL(host.connection.authenticatedUrl('https://remote.example')).searchParams.get('token'))
     // A signed cookie from token login before Access was enabled cannot replace the JWT.
     const legacyAuth = await BrowserAuth.create(host, host.credentials, 30)
@@ -207,7 +208,6 @@ describe('Cloudflare Access', () => {
     const remoteLaunch = new URL(host.connection.authenticatedUrl('https://remote.example'))
     expect(await request(port, remoteLaunch.pathname + remoteLaunch.search, { host: 'remote.example' })).toMatchObject({ status: 401 })
     expect(host.connection.requestRejection({ headers: authenticated })).toBe(401)
-    expect(host.connection.canManageHost({ headers: authenticated })).toBe(false)
     await host.fiber.dispose()
     ctx = undefined
     expect(host.get('connection')).toBeUndefined()
@@ -217,7 +217,7 @@ describe('Cloudflare Access', () => {
     const sign = await keys()
     const token = await sign()
     const { host, patch } = await load()
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const navigation = {
       host: 'remote.example', 'cf-access-jwt-assertion': token,
       'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document',
@@ -227,13 +227,13 @@ describe('Cloudflare Access', () => {
     expect(firstPage.status).toBe(200)
     expect(firstPage.headers['set-cookie']).toBeUndefined()
     expect(firstPage.headers['cache-control']).toBe('no-store')
-    expect(firstPage.body).toContain('window.__DSH_CAN_MANAGE_HOST__=true')
+    expect(firstPage.body).not.toContain('__DSH_CAN_MANAGE_HOST__')
     const authenticated = navigation
     // Repeated navigation and the configured index render even when no DSH cookie is sent.
     for (const path of ['/', '/index.html']) {
       const page = await request(port, path, authenticated)
       expect(page.status).toBe(200)
-      expect(page.body).toContain('window.__DSH_CAN_MANAGE_HOST__=true')
+      expect(page.body).not.toContain('__DSH_CAN_MANAGE_HOST__')
       expect(page.headers['set-cookie']).toBeUndefined()
     }
     const launch = new URL(host.connection.authenticatedUrl('https://remote.example'))
@@ -265,7 +265,7 @@ describe('Cloudflare Access', () => {
   it('keeps Access index Host, JWT and navigation requirements and synchronous refusal', async () => {
     const sign = await keys()
     const { host } = await load()
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const navigation = {
       host: 'remote.example', 'cf-access-jwt-assertion': await sign(),
       'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document',
@@ -290,33 +290,60 @@ describe('Cloudflare Access', () => {
     expect(host.connection.authorizeIndex(indexRequest, response)).toBe(false)
     expect(response.writeHead).toHaveBeenCalledWith(401, { 'cache-control': 'no-store' })
     expect(host.connection.admit(indexRequest)).toMatchObject({ rejection: 403 })
-    expect(host.connection.canManageHost(indexRequest)).toBe(false)
     expect(await host.connection.authorizeIndexAsync(indexRequest, response)).toBe(true)
-    expect(host.connection.canManageHost(indexRequest)).toBe(true)
     expect(await host.connection.admitAsync(indexRequest)).toMatchObject({ rejection: 403 })
     expect(await host.connection.authorizeIndexAsync({ ...indexRequest, method: 'HEAD' }, response)).toBe(false)
     expect(response.writeHead).toHaveBeenLastCalledWith(403, { 'cache-control': 'no-store' })
   })
 
+  it('retains API Peer identity and idempotent release behind Access instead of reviving it as a browser', async () => {
+    const sign = await keys()
+    const { host } = await load()
+    const headers = { host: 'remote.example', 'cf-access-jwt-assertion': await sign() }
+    const launch = new URL(host.connection.authenticatedUrl('https://remote.example'))
+    const path = '/connect' + launch.search + '&interactions=none'
+    expect(await request(host.webServer.port!, path, { host: 'remote.example' })).toMatchObject({ status: 401 })
+    expect(await request(host.webServer.port!, path, { ...headers, origin: 'https://evil.example' })).toMatchObject({ status: 403 })
+    const connected = await request(host.webServer.port!, path, headers)
+    expect(connected.status).toBe(302)
+    const apiRequest = { headers: { ...headers, cookie: cookie(connected) } }
+    const admitted = await host.connection.admitAsync(apiRequest)
+    if ('rejection' in admitted) throw new Error('API request refused')
+    expect(admitted.peer).not.toBe(host.connection.browserPeer)
+    expect(admitted.peer.principal.kind).toBe('owner')
+    expect(admitted.peer.interactions).toBe('none')
+    const socket = await host.connection.admitConnectionAsync(apiRequest)
+    if ('rejection' in socket) throw new Error('API socket refused')
+    expect(socket.peer).toBe(admitted.peer)
+    expect(await host.connection.admitConnectionAsync(apiRequest)).toMatchObject({ rejection: 409 })
+    const released = socket.release()
+    expect(socket.release()).toBe(released)
+    await released
+    expect(admitted.peer.signal.aborted).toBe(true)
+    expect(await host.connection.admitAsync(apiRequest)).toMatchObject({ rejection: 401 })
+    expect(await host.connection.admitConnectionAsync(apiRequest)).toMatchObject({ rejection: 401 })
+    expect(await host.connection.admitAsync({ headers })).toEqual({ peer: host.connection.browserPeer })
+  })
+
   it('requires Access for WebSocket admission and closes the socket at assertion expiry', async () => {
     const sign = await keys()
     const { host } = await load()
-    expect(await upgrade(host.webServer.port)).toMatchObject({ status: 401 })
-    expect(await upgrade(host.webServer.port, 'fake')).toMatchObject({ status: 401 })
+    expect(await upgrade(host.webServer.port!)).toMatchObject({ status: 401 })
+    expect(await upgrade(host.webServer.port!, 'fake')).toMatchObject({ status: 401 })
     const expiry = Math.floor(Date.now() / 1000) + 2
-    const accepted = await upgrade(host.webServer.port, await sign({ exp: expiry }))
+    const accepted = await upgrade(host.webServer.port!, await sign({ exp: expiry }))
     expect(accepted.status).toBe(101)
     const socket = accepted.socket
     if (socket === undefined) throw new Error('upgrade did not retain a socket')
     socket.resume()
     await new Promise<void>((resolve) => { socket.once('close', resolve) })
     expect(Date.now()).toBeGreaterThanOrEqual(expiry * 1000)
-    expect(await upgrade(host.webServer.port, await sign({ exp: expiry }))).toMatchObject({ status: 401 })
+    expect(await upgrade(host.webServer.port!, await sign({ exp: expiry }))).toMatchObject({ status: 401 })
   })
 
   it.each([false, true])('preserves localhost token login (Access enabled=%s)', async (access) => {
     const { host } = await load(access)
-    const port = host.webServer.port
+    const port = host.webServer.port!
     const authorities = [`127.0.0.1:${String(port)}`, ...access ? [] : ['remote.example']]
     for (const authority of authorities) {
       const launch = new URL(host.connection.authenticatedUrl(`http://${authority}`))
@@ -324,7 +351,7 @@ describe('Cloudflare Access', () => {
       expect(exchange.status).toBe(303)
       const page = await request(port, '/', { host: authority, cookie: cookie(exchange) })
       expect(page.status).toBe(200)
-      expect(page.body).toContain(`window.__DSH_CAN_MANAGE_HOST__=${String(authority !== 'remote.example')}`)
+      expect(page.body).not.toContain('__DSH_CAN_MANAGE_HOST__')
     }
   })
 })

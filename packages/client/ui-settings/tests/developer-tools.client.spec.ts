@@ -8,7 +8,7 @@ import { apply as clientApply, inject } from '../src/client/index.ts'
 
 
 describe('developer tools settings', () => {
-  it.each([true, false])('reports refused Host writes for a verified management page (loopback=%s)', async (isLoopback) => {
+  it('reports a refused Host write after recovering accepted state', async () => {
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())
     const describeCall = vi.fn().mockResolvedValue({ ok: true, value: {
@@ -21,8 +21,7 @@ describe('developer tools settings', () => {
     const mutate = vi.fn().mockResolvedValue({
       ok: false, error: new RemoteError('settings/rejected', 'conflict', { ns: DEVELOPER_TOOLS_NAMESPACE }),
     })
-    const remote = new TestRemote(ctx, { settings: { describe: describeCall, mutate } })
-    remote.$host = { home: undefined, isLoopback, canManageHost: true }
+    new TestRemote(ctx, { settings: { describe: describeCall, mutate } })
     await ctx.plugin({ inject, apply: clientApply }).await()
     await ctx.configForms.describe().ensure()
     await expect(ctx.configForms.developerTools.setEnabled(true)).rejects.toThrow('not saved')
@@ -64,20 +63,15 @@ describe('developer tools settings', () => {
     expect(ctx.configForms.developerTools.enabled.getSnapshot()).toBe(false)
   })
 
-  it('shares one remote-browser preference across consumers and disposes it with the plugin', async () => {
+  it('shares one preference instance across consumers and disposes it with the plugin', async () => {
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())
-    const describeCall = vi.fn()
-    const remote = new TestRemote(ctx, { settings: { describe: describeCall } })
-    remote.$host = { home: undefined, isLoopback: false, canManageHost: false }
+    const describeCall = vi.fn().mockResolvedValue({ ok: true, value: { writable: true, hasDocument: true, namespaces: [] } })
+    new TestRemote(ctx, { settings: { describe: describeCall } })
     const fiber = ctx.plugin({ inject, apply: clientApply })
     await fiber.await()
     const preference = ctx.configForms.developerTools
-    expect(fiber.ctx.configForms.developerTools.enabled).toBe(preference.enabled)
-    expect(preference.enabled.getSnapshot()).toBe(true)
-    await preference.setEnabled(true)
-    expect(fiber.ctx.configForms.developerTools.enabled.getSnapshot()).toBe(true)
-    expect(describeCall).not.toHaveBeenCalled()
+    expect(fiber.ctx.configForms.developerTools).toBe(preference)
     await fiber.dispose()
     expect(ctx.get('configForms')).toBeUndefined()
   })
@@ -96,24 +90,6 @@ describe('developer tools settings', () => {
     expect(preference.enabled.getSnapshot()).toBe(true)
     dispose()
   })
-})
-
-it('keeps remote browser choices local and publishes only changed values', async () => {
-  const host = stubConfigForm<DeveloperToolsSettings>()
-  host.publish({ mode: 'memory' })
-  const preference = new DeveloperToolsPreference(host.scope)
-  const notify = vi.fn()
-  const dispose = preference.enabled.subscribe(notify)
-  expect(preference.enabled.getSnapshot()).toBe(true)
-  await preference.setEnabled(false)
-  expect(preference.enabled.getSnapshot()).toBe(false)
-  await preference.setEnabled(false)
-  expect(notify).toHaveBeenCalledOnce()
-  await preference.setEnabled(true)
-  expect(preference.enabled.getSnapshot()).toBe(true)
-  expect(notify).toHaveBeenCalledTimes(2)
-  expect(host.set).not.toHaveBeenCalled()
-  dispose()
 })
 
 it('ignores host revisions that do not change enablement', () => {

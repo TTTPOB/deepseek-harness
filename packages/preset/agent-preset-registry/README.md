@@ -43,7 +43,7 @@ Choose an Agent’s tools, prompt sections and skills through declarative preset
 |---|---|---|
 | `default` | required | Preset ID used when none is requested |
 
-The `dsh-agent` peer accepts the official runtime baseline and the matching fork; the distribution composition supplies the newer Agent setup API when workspace placement is enabled. The Web definitions come from the `dsh-web-app` bundle. Definitions are ordinary plugin rows; the registry neither scans directories nor accepts preset paths. The `selectedDefault` volatile field of the `agent-preset-registry` entry retains the user default, which new sessions resolve over the deployment `default`. A profile patch may still carry the retired `modeSelectionEnabled` field; the registry declares no such field and neither reads nor rewrites it.
+The Web definitions come from the `dsh-web-app` bundle. Definitions are ordinary plugin rows; the registry neither scans directories nor accepts preset paths. The `selectedDefault` volatile field of the `agent-preset-registry` entry retains the user default, which new sessions resolve over the deployment `default`. A profile patch may still carry the retired `modeSelectionEnabled` field; the registry declares no such field and neither reads nor rewrites it.
 
 The registry writes no declarations. The `read` Remote renders one declaration’s child list back as entry-list YAML (`!!js` conditions included) so a client can show what a preset composes; nothing accepts YAML back. A new preset or an override of a shipped one is a bundle patch: an `insert` of a `@deepseek-ai/dsh-agent-preset` row, or a patch keyed by that row’s id, installed into the profile with `plugin_manager`; Creator mode authors such bundles in conversation.
 
@@ -53,9 +53,13 @@ The registry writes no declarations. The `read` Remote renders one declaration�
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-Definitions validate their child list on registration. An Agent mounts its definition lazily in a registry-owned generation under its workspace when `place(agentCtx, { key, ctx, release })` transfers a workspace lease to the registry. The registry alone binds the Agent parent, holds the lease through Agent disposal, and releases its preset generation before releasing the lease. Agents in the same workspace share a generation while they use it; a generation with no users is disposed. Children join the exact parent revision only within the same workspace. Without placement, Agents mount Host-scoped generations; cold `acquireScope(id)` rents a temporary Host-scoped generation and never acquires a workspace. Updating or removing a definition leaves existing Agents on their retained revision. The Host continues to share the Agent loop.
+Declarations mount lazily when an Agent or temporary historical read first uses them. `place(agentCtx, { key, ctx, release })` transfers a workspace lease into unpublished setup; the key and context identify its scope. Agents in that workspace share one current generation, while children inherit their parent’s exact retained generation. Cross-workspace inheritance is rejected. Updating or removing a declaration leaves existing bindings intact. Releasing the final binding disposes the generation before releasing the workspace lease; a later mount creates a fresh tree. Cold reads use separate registry-owned scopes. Plugin registrations inherit the preset scope, and the Agent scope’s parent link controls visibility.
 
-Activation auditing checks imports, missing services and globally leaked services when a generation mounts. Import failures, activation failures and leaks reject that Agent's mount. `list`, `resolve`, and unmounted `compositionInventory` report declaration-level diagnostics only: a failure specific to one workspace is not global roster health. Session logs retain the preset ID and blank-session selections; recovery after restart uses the current definition of that ID and rejects a missing definition.
+A preset service provider and its consumers must share one `cordis:group` isolation realm. Entry-local isolation does not propagate through the Agent registration scope: ordinary Context lookup outside the group, including `agent.ctx`, still selects the Host realm. `agentPresets.serviceFor()` explicitly inspects the retained composition; it does not change ordinary service lookup.
+
+Activation auditing checks imports, missing services and globally leaked services. Import failures, activation failures and leaks reject the mount. Mounting waits for the Host Loader tree to settle before rejecting missing services. Failed mounts release their resources and can be retried; list and inventory reads inspect declarations without mounting them. Session logs retain the preset ID and blank-session selections; recovery after restart uses the current definition of that ID and rejects a missing definition. `select` leaves a blank Session that records the requested preset and already runs its current revision unchanged, without another selection record or `tools/change`.
+
+`inspectCompositions()` reads all revisions retained by this registry; passing an Agent context selects its exact revision, or returns an empty list when it has no binding here. Each `AgentPresetInspection` contains a preset ID, detached active-module references with their resolution bases, and leaked-service names. Inspectors query the runtime service rather than a module-local mount table; the results contain no Loader trees or fibers. [composition-inventory.ts](src/composition-inventory.ts) defines these records.
 
 | File | Responsibility |
 |---|---|
@@ -103,5 +107,3 @@ Existing Agents retain their plugins and prompts. New Agents build their prefixe
 None.
 
 </details>
-
-**Runtime invariant:** The companion checks services leaked globally after activation and Agents addressing a model without joining a configured preset.

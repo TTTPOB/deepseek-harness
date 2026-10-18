@@ -3,6 +3,7 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
+import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionRecord } from './types.ts'
 import { SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
@@ -35,7 +36,7 @@ export type LogicalProjectionResult<Value> =
 export class SessionCorpus {
   private _persistence: SessionPersistence | undefined
   private readonly _optionalPersistenceFiber: Fiber
-  private _catalog: { identity: symbol; expiresAt: number; headers: SessionHeader[] } | undefined
+  private _catalog: { identity: symbol; expiresAt: number; headers: readonly SessionPersistenceSnapshot[] } | undefined
   private _catalogGeneration = 0
 
   constructor(
@@ -73,8 +74,13 @@ export class SessionCorpus {
     const persisted = persistence === undefined ? [] : await this.listMetadata(persistence, signal)
     signal?.throwIfAborted()
     const records = new Map<SessionId, SessionRecord>()
-    for (const header of persisted) {
-      records.set(header.id, { header: structuredClone(header), live: false, persisted: true })
+    for (const { header, formatStatus } of persisted) {
+      records.set(header.id, {
+        header: structuredClone(header),
+        live: false,
+        persisted: true,
+        ...(formatStatus === undefined ? {} : { formatStatus }),
+      })
     }
     for (const session of this._ctx.sessions.list()) {
       const durable = records.get(session.id)
@@ -83,12 +89,13 @@ export class SessionCorpus {
         header: structuredClone(session.header),
         live: true,
         persisted: durable !== undefined,
+        formatStatus: 'current',
       })
     }
     return [...records.values()].sort(compareSessions)
   }
 
-  private async listMetadata(persistence: SessionPersistence, signal?: AbortSignal): Promise<SessionHeader[]> {
+  private async listMetadata(persistence: SessionPersistence, signal?: AbortSignal): Promise<readonly SessionPersistenceSnapshot[]> {
     const catalog = this._catalog
     if (catalog !== undefined && catalog.identity === persistence.identity && Date.now() < catalog.expiresAt) return catalog.headers
     const generation = this._catalogGeneration
@@ -114,10 +121,12 @@ export class SessionCorpus {
       const durable = persistence === undefined ? undefined : await statPersisted(persistence, id, signal)
       signal?.throwIfAborted()
       const live = this._ctx.sessions.get(id)
-      if (live !== undefined && durable !== undefined) assertSessionHeadersCompatible(live.header, durable)
-      const header = live?.header ?? durable
+      if (live !== undefined && durable !== undefined) assertSessionHeadersCompatible(live.header, durable.header)
+      const header = live?.header ?? durable?.header
+      const formatStatus = live !== undefined ? 'current' : durable?.formatStatus
       if (header !== undefined) records.push({
         header: structuredClone(header), live: live !== undefined, persisted: durable !== undefined,
+        ...(formatStatus === undefined ? {} : { formatStatus }),
       })
     }
     return records.sort(compareSessions)
@@ -153,7 +162,7 @@ export class SessionCorpus {
       signal?.throwIfAborted()
       return snapshot
     }
-    assertSessionHeadersCompatible(loaded.header, listed)
+    assertSessionHeadersCompatible(loaded.header, listed.header)
     const snapshot = {
       header: structuredClone(loaded.header),
       inheritedEventCount: loaded.inheritedEventCount,
@@ -218,7 +227,7 @@ export class SessionCorpus {
           resolved.set(sessionId, projectSource(sessionId, sourceLive(attached), project, signal))
           return
         }
-        assertSessionHeadersCompatible(loaded.header, listed)
+        assertSessionHeadersCompatible(loaded.header, listed.header)
         resolved.set(sessionId, projectSource(sessionId, {
           header: loaded.header,
           events: loaded.events,
@@ -289,10 +298,10 @@ function orderedResults<Value>(
 async function listPersisted(
   persistence: SessionPersistence,
   signal?: AbortSignal,
-): Promise<SessionHeader[]> {
+): Promise<readonly SessionPersistenceSnapshot[]> {
   try {
     const snapshots = await persistence.list(signal === undefined ? undefined : { signal })
-    return snapshots.map(snapshot => structuredClone(snapshot.header))
+    return snapshots.map(snapshot => structuredClone(snapshot))
   } catch (error: unknown) {
     if (signal?.aborted) signal.throwIfAborted()
     throw new SessionQueryError(
@@ -307,9 +316,9 @@ async function statPersisted(
   persistence: SessionPersistence,
   sessionId: SessionId,
   signal?: AbortSignal,
-): Promise<SessionHeader | undefined> {
+): Promise<SessionPersistenceSnapshot | undefined> {
   try {
-    return (await persistence.stat(sessionId, signal === undefined ? undefined : { signal }))?.header
+    return await persistence.stat(sessionId, signal === undefined ? undefined : { signal })
   } catch (error: unknown) {
     if (signal?.aborted) signal.throwIfAborted()
     throw new SessionQueryError(

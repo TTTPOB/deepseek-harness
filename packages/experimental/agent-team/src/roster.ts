@@ -7,7 +7,6 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import type { ContinuableStart } from '@deepseek-ai/dsh-subagent'
 import { errorMessage, TeamError } from './error.ts'
 import type { TeamJournal } from './journal.ts'
 import type { TeamRuntimeLifecycle } from './lifecycle.ts'
@@ -56,8 +55,6 @@ export function resolveActiveMember(
 
 /** Owns Team identities and the lifecycle of rostered continuable children. */
 export class TeamRoster {
-  private readonly inFlightCreations = new Set<Promise<unknown>>()
-
   /**
    * @param ctx - Team service context with Agent, Session, persistence, and subagent services.
    * @param journal - authoritative Lead-log transaction owner.
@@ -129,17 +126,20 @@ export class TeamRoster {
   list(membership: TeamMembership): TeamMemberView[] {
     const { root } = membership
     const state = this.journal.state(root)
+    const leadModel = latestModel(root)
     const result: TeamMemberView[] = [{
       id: root.id,
       name: 'lead',
       role: 'lead',
       status: availability(root),
-      ...root.options.model === undefined ? {} : { model: root.options.model },
+      ...leadModel === undefined ? {} : { model: leadModel },
       diagnostics: [],
     }]
     for (const member of state.members) {
       const live = this.ctx.agents.get(member.id)
-      const model = live?.options.model ?? root.options.model
+      // A teammate's model comes from its own Agent only. An unloaded child
+      // has no current route, and the Lead's route describes no other member.
+      const model = latestModel(live)
       result.push({
         id: member.id,
         name: member.name,
@@ -167,21 +167,7 @@ export class TeamRoster {
    */
   async spawn(caller: Agent, request: SpawnTeammateRequest): Promise<SpawnTeammateResult> {
     if (this.lifecycle.disposed) throw new TeamError('Agent Teams service is disposing', 'TEAM_DISPOSED')
-    const operation = this.spawnAdmitted(caller, request)
-    this.inFlightCreations.add(operation)
-    try {
-      return await operation
-    } finally {
-      this.inFlightCreations.delete(operation)
-    }
-  }
-
-  /**
-   * Return admitted creation operations captured for ordered disposal.
-   * @returns detached snapshot ordered only by Set insertion.
-   */
-  pendingCreations(): readonly Promise<unknown>[] {
-    return [...this.inFlightCreations]
+    return await this.lifecycle.track(this.spawnAdmitted(caller, request))
   }
 
   /**
@@ -239,7 +225,7 @@ export class TeamRoster {
    * @param childIds - selected roster child ids.
    */
   async stopTeammates(root: Agent, childIds: readonly SessionId[]): Promise<void> {
-    await this.lifecycle.withTimeout(this.ctx.subagents.drainContinuableChildren(root, childIds))
+    await this.lifecycle.withTimeout(this.ctx.subagents.drainChildren(root, childIds))
   }
 
   /** Perform one creation admitted before the Team runtime disposal cutoff. */
@@ -277,15 +263,16 @@ export class TeamRoster {
       await this.journal.appendAndFlush(root, 'team/member', { version: 2, teamId: TeamId(root.id), member })
     })
 
-    let started: ContinuableStart
     try {
-      started = await this.ctx.subagents.startContinuable({
+      const started = await this.ctx.subagents.startActivation({
+        delivery: 'parent',
         childId,
         provider: request.provider,
         label: description,
         request: {
           prompt: request.prompt,
           parent: root,
+          ...request.agentOptions === undefined ? {} : { agentOptions: request.agentOptions },
         },
         signal,
       })
@@ -436,6 +423,7 @@ export class TeamRoster {
   /** Build one runtime member row after successful creation. */
   private memberView(member: TeamMemberSnapshot & { readonly phase: 'active' }): TeamMemberView {
     const live = this.ctx.agents.get(member.id)
+    const model = latestModel(live)
     return {
       id: member.id,
       name: member.name,
@@ -444,7 +432,7 @@ export class TeamRoster {
       description: member.description,
       provider: member.provider,
       context: member.context,
-      ...live?.options.model === undefined ? {} : { model: live.options.model },
+      ...model === undefined ? {} : { model },
       diagnostics: [],
     }
   }
@@ -491,4 +479,16 @@ export class TeamRoster {
 /** Turn availability is independent of whether the Agent is loaded. */
 function availability(agent: Agent | undefined): 'running' | 'inactive' {
   return agent?.status === 'running' ? 'running' : 'inactive'
+}
+
+/**
+ * Latest model of one live Agent: a request-time selection owns the logged
+ * route after the first request, while creation options only supply the
+ * fallback before it. An unloaded Agent has no model to report.
+ * @param agent - live Team member, or undefined when its Agent is not loaded.
+ * @returns the model actually in use, or undefined when unknown.
+ */
+function latestModel(agent: Agent | undefined): string | undefined {
+  if (agent === undefined) return undefined
+  return agent.session.requestHeader()?.config.model ?? agent.options.model
 }

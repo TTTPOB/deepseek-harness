@@ -78,6 +78,8 @@ export interface SessionRecord {
   live: boolean
   /** Whether the active persistence backend currently lists the id, including a created-but-unmaterialized session it already observes. */
   persisted: boolean
+  /** Current for live Sessions; otherwise the persistence format status when reported. */
+  formatStatus?: 'current' | 'migration-required'
 }
 
 /** Request for newest-first paging over one immutable metadata snapshot. */
