@@ -22,6 +22,7 @@ Independent plugins qualify their releases in their own repositories. Source del
 ## Long-term branch
 
 - The long-term release branch is `daily-driver` on TTTPOB remote `fork` (github.com/TTTPOB/deepseek-harness); local `daily-driver` tracks `fork/daily-driver`, never the third-party upstream `origin`.
+- Pi uses the same long-term branch name, `daily-driver`, on its TTTPOB remote `fork` (github.com/TTTPOB/pi); its local branch tracks `fork/daily-driver`.
 - Develop and test on a separate branch or worktree.
 - Before releasing, merge into `daily-driver`, push, and wait for `Daily-driver verify` (`.github/workflows/daily-driver-verify.yml`) to pass.
 - Release only a commit on `daily-driver` through the immutable Release workflow below; tags and Release assets are immutable.
