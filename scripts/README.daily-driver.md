@@ -19,6 +19,10 @@ Session-query checks build the current Session, query, JSONL and SQLite packages
 
 Independent plugins qualify their releases in their own repositories. Source delivery requires neither a sibling configuration checkout nor an independent plugin checkout. There are no unchanged-package Release fixtures in these selections; smoke prerequisites are built from the current checkout.
 
+Locally, run doc-sync scripts gate by gate with `NODE_OPTIONS=--max-old-space-size=4096`; the aggregate’s `doc-typecheck` builds the entire Host reference graph. Leave whole-repository typecheck to `Daily-driver verify` CI.
+
+Known upstream failure: `repository-references` (`verify-repository-references`) also fails on upstream 0.2.1-rc.1 because `python/sdk/uv.lock` contains a commit-hash reference. Skip this known failure without fixing it in the fork; recheck after every upstream upgrade and remove this note once upstream passes.
+
 ## Long-term branch
 
 - The long-term release branch is `daily-driver` on TTTPOB remote `fork` (github.com/TTTPOB/deepseek-harness); local `daily-driver` tracks `fork/daily-driver`, never the third-party upstream `origin`.
