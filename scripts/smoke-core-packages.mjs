@@ -111,6 +111,8 @@ try {
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(Tools)
   ctx.provide('agentTeams', { tryMembership: () => ({ role: 'lead', name: 'lead' }) })
+  // Team tools resolve their execution provider only when a teammate is spawned.
+  ctx.provide('subagents', { getProvider: () => undefined })
   const teamPresetKey = {}
   const ordinaryPresetKey = {}
   const teamKey = {}
