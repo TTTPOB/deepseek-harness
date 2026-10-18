@@ -1,0 +1,60 @@
+name: Daily-driver verify
+
+# Every push to the release branch runs all capability checks; a manual run checks one.
+on:
+  push:
+    branches: [daily-driver]
+  workflow_dispatch:
+    inputs:
+      selection:
+        description: Current capability to validate
+        type: choice
+        required: true
+        default: session-query
+        options: [session-query, core, team-model-selection, access]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-driver-verify-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  DSH_TELEMETRY_DISABLED: '1'
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        selection: ${{ fromJSON(github.event_name == 'push' && '["session-query","core","team-model-selection","access"]' || format('["{0}"]', inputs.selection)) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Validate current source and isolated artifacts
+        env:
+          SELECTION: ${{ matrix.selection }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/daily-driver.mjs prepare "$SELECTION"
+          node scripts/daily-driver.mjs verify "$SELECTION"
+          node scripts/daily-driver.mjs build "$SELECTION"
+          node scripts/daily-driver.mjs smoke "$SELECTION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daily-driver-verify-${{ matrix.selection }}
+          path: dist/daily-driver/*
+          if-no-files-found: error
