@@ -45,5 +45,7 @@ pre-merge-commit:
 
 pre-push:
   jobs:
+    # A full-repository typecheck exhausts workstation memory; Daily-driver verify runs it in CI.
     - name: typecheck
+      skip: true
       run: pnpm run typecheck

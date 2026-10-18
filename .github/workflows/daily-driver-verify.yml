@@ -26,6 +26,25 @@ env:
   NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
+  # Local pre-push skips this full-repository check to protect workstation memory.
+  typecheck:
+    runs-on: ubuntu-24.04
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck every workspace
+        run: pnpm run typecheck
   verify:
     runs-on: ubuntu-24.04
     strategy:
