@@ -1,7 +1,6 @@
 /** Public Agent Teams identities, durable records, and service request values. */
 
-import type { AgentOptions } from '@deepseek-ai/dsh-agent'
-import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
+import type { MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm/brand'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -175,8 +174,23 @@ export interface SpawnTeammateRequest {
    * Omitted values follow the provider's own inheritance, and passing any
    * value requires that provider's `agentOptions` capability.
    */
-  readonly agentOptions?: AgentOptions
+  readonly agentOptions?: TeammateAgentOptions
   readonly signal: AbortSignal
+}
+
+/**
+ * Client-safe child LLM options forwarded to the continuable-subagent provider.
+ * This shared module must not import Host Context declarations.
+ */
+export interface TeammateAgentOptions {
+  /** LLM provider route. */
+  readonly provider?: string
+  /** Model id interpreted by the provider adapter. */
+  readonly model?: string
+  /** Adapter-owned reasoning effort for the provider/model route. */
+  readonly reasoningEffort?: ReasoningEffortId
+  /** Maximum output tokens for each conversation-model request. */
+  readonly maxTokens?: number
 }
 
 /** Result after one teammate reaches a durable active or failed edge. */
