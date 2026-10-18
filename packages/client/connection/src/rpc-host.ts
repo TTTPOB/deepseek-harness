@@ -217,10 +217,18 @@ export class HostConnectionService extends Service implements HostConnectionHand
     return this.browserAuth.authorizeAccessIndex(request, response)
   }
 
-  /** Require the same ingress assertion for API launch-token exchanges. */
+  /**
+   * Require a verified ingress assertion for remote API launch-token exchanges when Access is configured.
+   * Untrusted requests receive 403; failed verification or disposal receives 401.
+   * @param request - launch-token request on /connect.
+   * @param response - response owned to completion, including rejection or connect redirect.
+   */
   async authorizeConnectAsync(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<void> {
     const access = this.access
-    if (access === undefined || !this.requiresAccess(request)) return this.authorizeConnect(request, response)
+    if (access === undefined || !this.requiresAccess(request)) {
+      this.authorizeConnect(request, response)
+      return
+    }
     const trusted = this.isTrusted(request)
     const expiry = trusted ? await access.verify(request) : undefined
     if (expiry === undefined || this.disposed) {

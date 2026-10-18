@@ -434,14 +434,6 @@ function assertValidHeaders(provider: string, headers: Readonly<Record<string, s
   }
 }
 
-/**
- * Resolve scalar defaults and materialize each route's serviceable models.
- * Deferred catalog validation retains diagnostics without deleting configured
- * routes. An omitted dict resolves to the empty, dormant route set.
- * @param providers - configured provider profiles keyed by route.
- * @param validation - writes require a complete catalog; stored reads retain catalog diagnostics.
- * @returns validated profiles in configuration order.
- */
 const MAX_ERROR_CODE_RULES = 32
 const MAX_ERROR_CODE_PATTERN_LENGTH = 200
 
@@ -462,6 +454,14 @@ function resolveErrorCodeRules(rules: readonly PiAiErrorCodeRule[], path: string
   return Object.freeze(compiled)
 }
 
+/**
+ * Resolve scalar defaults and materialize each route's serviceable models.
+ * Deferred catalog validation retains diagnostics without deleting configured
+ * routes. An omitted dict resolves to the empty, dormant route set.
+ * @param providers - configured provider profiles keyed by route.
+ * @param validation - writes require a complete catalog; stored reads retain catalog diagnostics.
+ * @returns validated profiles in configuration order.
+ */
 export function resolveProfiles(
   providers: Readonly<Record<string, PiAiProviderProfile>> | undefined,
   validation: 'strict' | 'deferred' = 'strict',
