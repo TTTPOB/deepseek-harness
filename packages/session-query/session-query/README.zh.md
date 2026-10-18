@@ -37,7 +37,6 @@ kind: "package-reference"
 | `pageSessions(request)` | 带到期语义的不可变快照上的有界元数据页 |
 | `pageEvents(request)` | 有界、seq 升序的原始事件元数据及可选语义文本 |
 | `captureSession(id, capture, options)` | 在同一个选定 Session 上同步复制当前节点、预览、路由与消费方自有计量结果 |
-
 | `readSession(id)` | 经过回放校验的完整原始事件日志，且不会让该会话变为实时 |
 | `filterSessions(filters)` | 匹配 AND 连接的元数据与可用性谓词的会话 |
 | `filterEvents(id, filters)` | 匹配元数据与字面文本谓词的语义事件文档 |

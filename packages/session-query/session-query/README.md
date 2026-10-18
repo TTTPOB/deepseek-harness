@@ -37,7 +37,6 @@ The incremental query implementation imports `SurfaceFoldAccumulator` from `@dee
 | `pageSessions(request)` | Bounded metadata pages over an expiring immutable snapshot |
 | `pageEvents(request)` | Bounded ascending raw-event metadata and optional semantic text |
 | `captureSession(id, capture, options)` | Synchronously copy current nodes, previews, routing, and consumer-owned measurements from one selected Session |
-
 | `readSession(id)` | The complete replay-validated raw event log, without making the session live |
 | `filterSessions(filters)` | Sessions matching ANDed metadata and availability predicates |
 | `filterEvents(id, filters)` | Semantic event documents matching metadata and literal-text predicates |
