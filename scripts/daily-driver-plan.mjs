@@ -15,8 +15,8 @@ export const selections = {
     smoke: 'smoke-session-query.mjs',
   },
   core: {
-    packages: ['packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent', 'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team'],
-    tests: ['packages/core/agent/tests', 'packages/preset/agent-preset-registry/tests', 'packages/subagent/subagent/tests', 'packages/llm/llm-pi-ai/tests', 'packages/mcp/mcp-client/tests', 'packages/experimental/tool-agent-team/tests'],
+    packages: ['packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent', 'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team', 'packages/core/tools'],
+    tests: ['packages/core/agent/tests', 'packages/preset/agent-preset-registry/tests', 'packages/subagent/subagent/tests', 'packages/llm/llm-pi-ai/tests', 'packages/mcp/mcp-client/tests', 'packages/experimental/tool-agent-team/tests', 'packages/core/tools/tests'],
     smoke: 'smoke-core-packages.mjs',
   },
   'team-model-selection': {

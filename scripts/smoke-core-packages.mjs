@@ -1,4 +1,4 @@
-/** Verify six core tarballs with the official CLI, without personal plugins or a Host process. */
+/** Verify core tarballs with the official CLI, without personal plugins or a Host process. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
@@ -13,7 +13,7 @@ import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 const expected = plan('core').packages
 const names = expected.map(pkg => pkg.name)
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz>')
+assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz>')
 const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
 const root = await mkdtemp(join(tmpdir(), 'dsh-core-artifact-'))
 const run = (args, cwd = root) => execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), ...args], { cwd, stdio: 'inherit', timeout: 600_000 })
@@ -109,7 +109,9 @@ try {
   const { default: SystemPrompt } = await load('@deepseek-ai/dsh-system-prompt')
   const { default: Tools } = await load('@deepseek-ai/dsh-tools')
   await ctx.plugin(SystemPrompt)
-  await ctx.plugin(Tools)
+  await ctx.plugin(Tools, { ptcNativeTools: ['context_compress'] })
+  assert.equal(ctx.tools.isNativeInPtc('context_compress'), true)
+  assert.equal(ctx.tools.isNativeInPtc('ordinary_tool'), false)
   ctx.provide('agentTeams', { tryMembership: () => ({ role: 'lead', name: 'lead' }) })
   // Team tools resolve their execution provider only when a teammate is spawned.
   ctx.provide('subagents', { getProvider: () => undefined })
@@ -144,7 +146,7 @@ try {
   } finally {
     ctx.agents.list = originalList
   }
-  console.log('Six core artifacts resolve through official Host peers; Config, awaited setup, preset leases and Team scope switching/disposal passed. No personal plugins or Host process used.')
+  console.log('Core artifacts resolve through official Host peers; Config, PTC native exception API, awaited setup, preset leases and Team scope switching/disposal passed. No personal plugins or Host process used.')
 } finally {
   if (ctx) await ctx.fiber.dispose()
   await rm(root, { recursive: true, force: true })
