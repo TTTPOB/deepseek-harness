@@ -59,6 +59,7 @@ class FakeRuntime extends PtcRuntime {
 
 interface SetupOptions {
   mode?: Config['mode']
+  ptcNativeTools?: string[]
   maxParallelSubCalls?: number
   runtime?: false | { language?: string }
   toolOrder?: string[]
@@ -68,7 +69,11 @@ async function setup(options: SetupOptions = {}) {
   const ctx = new Context()
   provideWorkingDirectoryFixture(ctx)
   await ctx.plugin(SystemPrompt, { ...options.toolOrder ? { toolOrder: options.toolOrder } : {} })
-  await ctx.plugin(ToolRuntime, { mode: options.mode ?? 'ptc', ...options.maxParallelSubCalls !== undefined ? { maxParallelSubCalls: options.maxParallelSubCalls } : {} })
+  await ctx.plugin(ToolRuntime, {
+    mode: options.mode ?? 'ptc',
+    ...options.ptcNativeTools !== undefined ? { ptcNativeTools: options.ptcNativeTools } : {},
+    ...options.maxParallelSubCalls !== undefined ? { maxParallelSubCalls: options.maxParallelSubCalls } : {},
+  })
   let runtime: FakeRuntime | undefined
   if (options.runtime !== false) {
     await ctx.plugin(FakeRuntime, options.runtime ?? {})
@@ -225,6 +230,82 @@ describe('mode-aware wire contribution', () => {
     expect(sdk?.text).toContain('echo: {')
     expect(sdk?.text).not.toContain('run_code:')
     expect(sdk?.text).not.toContain('tools.bash(')
+  })
+
+  it('keeps configured visible exceptions on the wire and in the SDK', async () => {
+    const { ctx, tools, systemPrompt } = await setup({
+      ptcNativeTools: ['context_compress', 'missing', RUN_CODE_NAME],
+      toolOrder: ['context_compress', RUN_CODE_NAME, '<unlisted-tools>'],
+    })
+    try {
+      registerEcho(ctx, 'context_compress')
+      registerEcho(ctx, 'ordinary')
+      const assembly = await systemPrompt.assemble()
+      expect(assembly.tools.map(tool => tool.name)).toEqual(['context_compress', RUN_CODE_NAME])
+      expect(tools.isNativeInPtc('context_compress')).toBe(true)
+      expect(tools.isNativeInPtc('ordinary')).toBe(false)
+      const sdk = assembly.sections.find(section => section.name === 'tools:sdk')?.text
+      expect(sdk).toContain('context_compress: {')
+      expect(sdk).toContain('ordinary: {')
+      expect(assembly.sections.find(section => section.name === 'tools:ptc-only')?.text).toBe(
+        '`run_code`, `context_compress` are the only tools you can call directly — a tool call naming any other tool fails. Reach every tool the SDK declares below from inside the program; the native exceptions are also available there.',
+      )
+
+      const { scope, agent } = await mintAgentScope(ctx)
+      scope.ctx.tools.restrict({ deny: ['context_compress'] })
+      const restricted = await systemPrompt.assemble({ scope: agent })
+      expect(restricted.tools.map(tool => tool.name)).toEqual([RUN_CODE_NAME])
+      expect(restricted.sections.find(section => section.name === 'tools:ptc-only')?.text).toBe(
+        '`run_code` is the only tool you can call directly — a tool call naming any other tool fails. Reach every tool the SDK declares below from inside the program.',
+      )
+      const denied = await tools.execute({
+        signal: testToolSignal, callId: ToolCallId('restricted-exception'),
+        name: 'context_compress', arguments: { value: 'hidden' }, agent,
+      })
+      expect(denied.error?.info?.code).toBe('UNKNOWN_TOOL')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it.each(['ptc', 'native'] as const)('allows native exceptions through policy under default %s and keeps nested calls unchanged', async (mode) => {
+    const { ctx, tools, runtime } = await setup({ mode, ptcNativeTools: ['context_compress'] })
+    try {
+      const exceptionCalls = registerEcho(ctx, 'context_compress')
+      const ordinaryCalls = registerEcho(ctx, 'ordinary')
+      const { scope, agent } = await mintAgentScope(ctx)
+      scope.ctx.tools.presentAs('ptc')
+      let preExecute = 0
+      ctx.on('tools/pre-execute', (_exec, next) => { preExecute += 1; return next() })
+      const direct = (name: string) => tools.execute({
+        signal: testToolSignal, callId: ToolCallId('direct-' + name),
+        name, arguments: { value: 'direct' }, agent,
+      })
+      expect((await direct('context_compress')).value).toBe('context_compress:direct')
+      expect(preExecute).toBe(1)
+      const denied = await direct('ordinary')
+      expect(denied.error?.info?.code).toBe('UNKNOWN_TOOL')
+      expect(denied.error?.message).toBe('unknown tool "ordinary": call `ordinary` from inside a `run_code` program instead')
+      expect(preExecute).toBe(1)
+      expect(ordinaryCalls).toEqual([])
+
+      runtime.behavior = async request => ({
+        logs: [],
+        value: [
+          await request.bindings[0]!.functions.context_compress!({ value: 'nested-exception' }),
+          await request.bindings[0]!.functions.ordinary!({ value: 'nested-ordinary' }),
+        ],
+      })
+      expect((await runCode(ctx, 'return null', { agent })).isError).toBe(false)
+      expect(exceptionCalls).toEqual([{ value: 'direct' }, { value: 'nested-exception' }])
+      expect(ordinaryCalls).toEqual([{ value: 'nested-ordinary' }])
+
+      scope.ctx.tools.guard(exec => exec.name === 'context_compress' ? 'exception denied by guard' : undefined)
+      expect((await direct('context_compress')).error?.message).toBe('exception denied by guard')
+      expect(exceptionCalls).toHaveLength(2)
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 
   it("mode 'ptc' states the run_code-only rule BEFORE the per-tool guidance that names each tool", async () => {

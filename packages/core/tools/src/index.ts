@@ -675,15 +675,21 @@ export type ToolPresentationMode = 'native' | 'ptc'
 export interface Config {
   /**
    * Model presentation. `native` (default) sends every visible schema; `ptc`
-   * sends only `run_code` plus a generated SDK prompt and collapses the
-   * executor to the same surface (a model-direct call may only name
-   * `run_code`; `run_code` SDK sub-dispatches keep every visible tool).
+   * sends `run_code` plus any visible `ptcNativeTools` and a generated SDK
+   * prompt. The executor accepts the same direct-call names; SDK sub-dispatches
+   * keep every visible tool, including the native exceptions.
    * PTC mode requires a `ctx.ptcRuntime` whose `language`
    * has a registered SDK renderer (TypeScript or Python) and fails prompt
    * assembly when it is absent or has no renderer. Under `ptc`, native names
-   * in `toolOrder` are invalid.
+   * in `toolOrder` are invalid unless included in `ptcNativeTools`.
    */
   mode?: ToolPresentationMode
+  /**
+   * Exact tool names that also remain directly callable under `ptc` (default
+   * empty). Missing or invisible names are ignored; restrictions and policy
+   * still apply. Exceptions remain available through the generated SDK.
+   */
+  ptcNativeTools?: string[]
   /**
    * Concurrency cap for a `run_code` program's overlapping sub-calls
    * (default 10, the loop scheduler's own default). Sub-calls follow the
@@ -810,6 +816,7 @@ export class ToolRuntime extends Service {
 
   static Config: z<Config> = z.object({
     mode: z.union(['native', 'ptc'] as const).default('native'),
+    ptcNativeTools: z.array(z.string()).default([]),
     maxParallelSubCalls: z.natural().min(1).default(10),
   })
 
@@ -837,6 +844,7 @@ export class ToolRuntime extends Service {
   )
   /** Presentation for scopes that declare none; {@link presentAs} shadows it per scope. */
   private readonly defaultMode: ToolPresentationMode
+  private readonly ptcNativeTools: ReadonlySet<string>
   private readonly maxParallelSubCalls: number
   /**
    * Reserved presentation transport, kept outside the filterable registration
@@ -853,6 +861,7 @@ export class ToolRuntime extends Service {
     // The schema already defaulted an omitted mode; the ?? narrows the
     // optional-input type for direct (non-Loader) construction in tests.
     this.defaultMode = config.mode ?? 'native'
+    this.ptcNativeTools = new Set(config.ptcNativeTools ?? [])
     this.maxParallelSubCalls = resolveMaxParallelSubCalls(config.maxParallelSubCalls)
     ctx.systemPrompt.tools(context => this.wireSchemas(context.scope))
     if (this.defaultMode !== 'native') {
@@ -868,7 +877,7 @@ export class ToolRuntime extends Service {
    * Every tool contributes its own guidance section naming its tool, none of
    * them qualify how that tool is reached, and they all render before the SDK.
    * Without this the model reads a catalog of tools it is told to use and no
-   * statement that only `run_code` may be called, so it emits a native call,
+   * statement of which tools may be called directly, so it emits a native call,
    * receives `UNKNOWN_TOOL` for a tool the prompt just declared, and concludes
    * the deployment is inconsistent. Its order places the rule before that
    * guidance rather than after it.
@@ -880,9 +889,14 @@ export class ToolRuntime extends Service {
     return {
       name: 'tools:ptc-only',
       order: this.ctx.systemPrompt.getSectionOrder('PTC_ONLY'),
-      // The SAME predicate the executor denies by, so the prompt cannot state
-      // a rule the registry does not enforce (see `collapses`).
-      text: context => this.modeFor(context.scope) === 'ptc' ? PTC_ONLY_INSTRUCTION : '',
+      text: (context) => {
+        if (this.modeFor(context.scope) !== 'ptc') return ''
+        const exceptions = [...this.view(context.scope).visible.keys()]
+          .filter(name => name !== RUN_CODE_NAME && this.isNativeInPtc(name))
+        if (exceptions.length === 0) return PTC_ONLY_INSTRUCTION
+        const names = [RUN_CODE_NAME, ...exceptions].map(name => '`' + name + '`').join(', ')
+        return `${names} are the only tools you can call directly — a tool call naming any other tool fails. Reach every tool the SDK declares below from inside the program; the native exceptions are also available there.`
+      },
     }
   }
 
@@ -1031,8 +1045,8 @@ export class ToolRuntime extends Service {
     this.requirePtcRuntime(mode)
     const schemas = [...view.visible.values()].map(definition => this.schemaOf(definition, false))
     return {
-      schemas: schemas.filter(schema => schema.name === RUN_CODE_NAME),
-      knownNames: [RUN_CODE_NAME],
+      schemas: schemas.filter(schema => schema.name === RUN_CODE_NAME || this.isNativeInPtc(schema.name)),
+      knownNames: [RUN_CODE_NAME, ...[...view.knownNames].filter(name => this.isNativeInPtc(name))],
     }
   }
 
@@ -1243,7 +1257,7 @@ export class ToolRuntime extends Service {
    * Resolve the definition that MAY EXECUTE for a call, applying the mode
    * collapse at the operation boundary that owns it. The registry view
    * (`get`) is presentation-agnostic; here a MODEL-DIRECT call under `ptc`
-   * may only name the reserved `run_code` transport, while a nested
+   * may name the reserved `run_code` transport or a native exception; a nested
    * sub-dispatch (a `parent` token set — the `run_code` SDK calling a tool
    * it bound) may call any visible tool. Denial surfaces as `UNKNOWN_TOOL`
    * through the executor, matching an absent definition.
@@ -1341,9 +1355,19 @@ export class ToolRuntime extends Service {
   }
 
   /**
+   * Whether a name is configured as a native exception under PTC. This does
+   * not check the current presentation mode, visibility, or execution policy.
+   * @param name - the exact tool name.
+   * @returns whether `ptcNativeTools` contains the name.
+   */
+  isNativeInPtc(name: string): boolean {
+    return this.ptcNativeTools.has(name)
+  }
+
+  /**
    * Whether the `ptc` mode collapse denies a model-direct call: only the
-   * reserved `run_code` transport may be named. Nested sub-dispatches (a
-   * `parent` token set) bypass the collapse. One home for the
+   * reserved `run_code` transport and native exceptions may be named. Nested
+   * sub-dispatches (a `parent` token set) bypass the collapse. One home for the
    * security-relevant predicate, shared by {@link resolveExecution} and
    * {@link createExecution} so the two can never drift apart.
    *
@@ -1357,7 +1381,7 @@ export class ToolRuntime extends Service {
    * @param nested - whether the call is a transport sub-dispatch, not a model-direct call.
    */
   private collapses(name: string, scope: ScopeKey | undefined, nested: boolean): boolean {
-    return !nested && this.modeFor(scope) === 'ptc' && name !== RUN_CODE_NAME
+    return !nested && this.modeFor(scope) === 'ptc' && name !== RUN_CODE_NAME && !this.isNativeInPtc(name)
   }
 
   /**
@@ -1476,7 +1500,8 @@ export class ToolRuntime extends Service {
           exec: execution,
           result: toolErrorResult(new ToolNotFoundError(
             name,
-            `only \`${RUN_CODE_NAME}\` is callable directly — call \`${name}\` from inside a \`${RUN_CODE_NAME}\` program instead`,
+            (this.ptcNativeTools.size === 0 ? `only \`${RUN_CODE_NAME}\` is callable directly — ` : '')
+            + `call \`${name}\` from inside a \`${RUN_CODE_NAME}\` program instead`,
           )),
         }
       }
