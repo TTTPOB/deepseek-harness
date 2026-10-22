@@ -112,6 +112,8 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 对于自托管 Chat Completions 端点，`thinkingTokenBudgetField` 选择推理预算参数，`vllmPriority` 在服务端启用优先级调度时设置整数调度优先级。模板参数接受 `$var: thinking.budget`。`openai-responses` 网关可设置 `supportsMaxOutputTokens: false` 来省略 `max_output_tokens`；Azure 与 Codex 传输会忽略这个共享兼容字段。Responses 路由还支持通过 pi-ai fork 设置 `systemPromptFormat: instructions`；默认 `input` 将首条系统提示词保留在输入记录中。`supportsAdditionalTools` 与 `supportsToolSearch` 配置 Responses 工具追加。这些控制均需显式启用；目录拥有的 Anthropic effort 和回退能力不是可配置开关。
 
+Responses 的 `compat.maxConsecutiveWhitespaceChars` 与 `compat.maxRepeatedPatternChars` 按输出项设置客户端流检测阈值，单位为 UTF-16 code unit。两项只接受非负整数，在 pi-ai 中默认均为 32768，0 关闭对应检测；仅适用于 `openai-responses`、`azure-openai-responses` 和 `openai-codex-responses`，需要 pi-ai fork3 或更高版本，并允许逐模型覆盖。连续空白跨 delta 累计，遇到非空白清零；重复模式的周期上限固定为 100。纯空白也是周期为 1 的重复模式，因此仅关闭空白检测不会关闭重复模式检测。
+
 ### 运行时更改配置
 
 每次操作捕获当前 `providers` Config 引用。新增或修改的 provider 配置在表单持久化前验证；未更改的目录故障仍可编辑。路由集合或重试策略变化时原子更新注册；如果其他适配器已拥有所请求的路由，则保留先前路由。

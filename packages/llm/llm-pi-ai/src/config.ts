@@ -278,6 +278,8 @@ const chatTemplateKwarg: z<ChatTemplateKwargValue> = z.union([
 ])
 
 const compatProfile: z<PiAiCompatProfile> = z.object({
+  maxConsecutiveWhitespaceChars: z.number().min(0).step(1),
+  maxRepeatedPatternChars: z.number().min(0).step(1),
   supportsStore: z.boolean(),
   supportsDeveloperRole: z.boolean(),
   systemPromptFormat: z.union(['input', 'instructions']),

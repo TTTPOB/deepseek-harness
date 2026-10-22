@@ -15,7 +15,7 @@ packages:
   - python/sdk-runtime
 
 overrides:
-  '@earendil-works/pi-ai': 'https://github.com/TTTPOB/pi/releases/download/pi-ai-v1.1.0-fork1/earendil-works-pi-ai-1.1.0-fork1.tgz'
+  '@earendil-works/pi-ai': 'https://github.com/TTTPOB/pi/releases/download/pi-ai-v1.1.0-fork3/earendil-works-pi-ai-1.1.0-fork3.tgz'
   'extract-zip>yauzl': '3.4.0'
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'

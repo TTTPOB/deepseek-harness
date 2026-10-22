@@ -277,6 +277,8 @@ const COMPLETIONS_COMPAT_GATE = {
 
 /** Disposition of every `OpenAIResponsesCompat` field; a drift gate like the one above. */
 const RESPONSES_COMPAT_GATE = {
+  maxConsecutiveWhitespaceChars: 'offer',
+  maxRepeatedPatternChars: 'offer',
   supportsDeveloperRole: 'offer',
   systemPromptFormat: 'offer',
   supportsMaxOutputTokens: 'offer',
@@ -386,6 +388,16 @@ type OfferedCompatField =
  * switch settable on one is settable on all three.
  */
 export interface PiAiCompatProfile {
+  /**
+   * Per-output-item consecutive whitespace limit in UTF-16 code units; the three Responses protocols.
+   * Default 32768; 0 disables only this check. Requires pi-ai fork.
+   */
+  maxConsecutiveWhitespaceChars?: NonNullable<OpenAIResponsesCompat['maxConsecutiveWhitespaceChars']>
+  /**
+   * Per-output-item repeated-pattern limit in UTF-16 code units, periods 1–100; the three Responses protocols.
+   * Default 32768; 0 disables only this check. Requires pi-ai fork.
+   */
+  maxRepeatedPatternChars?: NonNullable<OpenAIResponsesCompat['maxRepeatedPatternChars']>
   /** Whether the endpoint accepts `store`; `openai-completions`. */
   supportsStore?: boolean
   /**

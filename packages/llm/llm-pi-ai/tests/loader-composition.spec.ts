@@ -1,5 +1,6 @@
 /** Profile patch edits and credential updates reach the next real adapter request. */
 
+import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +25,9 @@ const truncatedToolCallEvents = [
   '{"choices":[{"delta":{},"index":0,"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}',
   '[DONE]',
 ]
+
+const piVersion: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('@earendil-works/pi-ai')), 'utf8')).version
+const forkAvailable = piVersion.includes('-fork')
 
 let root: string | undefined
 let context: Context | undefined
@@ -120,6 +124,46 @@ describe('llm-pi-ai real dormant composition', () => {
     expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
     expect(server.headers[0]?.authorization).toBe('Bearer key-from-store')
   })
+
+  it.skipIf(!forkAvailable)
+    .each([[' ', 'consecutive whitespace'], ['x', 'pattern for']])(
+      'loads provider limits from the profile patch and aborts a %s flood at 5000', async (character, errorText) => {
+        const events = (length: number) => [
+          { type: 'response.output_item.added', output_index: 0,
+            item: { type: 'message', id: 'msg_guard', role: 'assistant', content: [] } },
+          { type: 'response.output_text.delta', output_index: 0, content_index: 0, item_id: 'msg_guard',
+            delta: character.repeat(length) },
+          { type: 'response.completed', response: { status: 'completed' } },
+        ].map(event => JSON.stringify(event))
+        const server = await mockServer([{ events: events(4999) }, { events: events(5000) }])
+        const { ctx, settingsPath } = await loadComposition()
+        await writeFile(settingsPath, [
+          '- id: llm-pi-ai',
+          '  config:',
+          '    providers:',
+          '      gateway:',
+          '        apiKeyEnv: PI_COMPOSITION_KEY',
+          '        api: openai-responses',
+          `        baseURL: ${server.url}`,
+          '        compat:',
+          '          maxConsecutiveWhitespaceChars: 5000',
+          '          maxRepeatedPatternChars: 5000',
+          '        models:',
+          '          - id: guard-model',
+          '',
+        ].join('\n'))
+        await vi.waitFor(() => {
+          expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['gateway'])
+        }, { timeout: 5000 })
+        const below = await assemble(ctx, { provider: 'gateway', model: 'guard-model', messages: [] })
+        expect(below.finish.kind).toBe('stop')
+        const at = await assemble(ctx, { provider: 'gateway', model: 'guard-model', messages: [] })
+        expect(at.finish).toMatchObject({
+          kind: 'error', failure: { message: expect.stringContaining(errorText) },
+        })
+        expect(server.requests).toHaveLength(2)
+      },
+    )
 
   it('offers OpenAI sign-in by API key only, while other subscription logins stay', async () => {
     const { ctx } = await loadComposition()

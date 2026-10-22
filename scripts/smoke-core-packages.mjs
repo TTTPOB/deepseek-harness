@@ -61,6 +61,22 @@ try {
   assert.throws(() => Schema.resolve({ transport: 'stdio', serverName: 'fixture', command: 'unused', maxBufferSize: 0 }, mcp.Config, {}))
   const [piConfig] = Schema.resolve({}, pi.Config, {})
   assert.deepEqual(piConfig.providers.get(), {})
+  const streamLimits = { maxConsecutiveWhitespaceChars: 5000, maxRepeatedPatternChars: 5000 }
+  const [guardConfig] = Schema.resolve({ providers: { gateway: {
+    api: 'openai-responses', baseURL: 'https://gateway.test/v1', models: [{ id: 'guard-model' }], compat: streamLimits,
+  } } }, pi.Config, {})
+  for (const [field, value] of Object.entries(streamLimits)) assert.equal(guardConfig.providers.get().gateway.compat[field], value)
+  for (const field of Object.keys(streamLimits)) {
+    for (const invalid of [-1, 0.5]) {
+      assert.throws(() => Schema.resolve({ providers: { gateway: { compat: { [field]: invalid } } } }, pi.Config, {}))
+    }
+  }
+  const adapterRequire = createRequire(hostRequire.resolve('@deepseek-ai/dsh-llm-pi-ai'))
+  const responsesParser = adapterRequire.resolve('@earendil-works/pi-ai/api/openai-responses-shared', { conditions: new Set(['import', 'node', 'default']) })
+  const parserSource = await readFile(responsesParser, 'utf8')
+  assert(parserSource.includes('compat?.maxConsecutiveWhitespaceChars'))
+  assert(parserSource.includes('compat?.maxRepeatedPatternChars'))
+  console.log(JSON.stringify({ responsesParser, streamLimits }))
   const { Session, SessionId, default: SessionStore } = await load('@deepseek-ai/dsh-session')
   await ctx.plugin(agent.default)
   const events = []

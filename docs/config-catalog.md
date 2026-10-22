@@ -1975,6 +1975,16 @@ export type PiAiModelOverride = Omit<PiAiModelProfile, 'id'>
  * switch settable on one is settable on all three.
  */
 export interface PiAiCompatProfile {
+  /**
+   * Per-output-item consecutive whitespace limit in UTF-16 code units; the three Responses protocols.
+   * Default 32768; 0 disables only this check. Requires pi-ai fork.
+   */
+  maxConsecutiveWhitespaceChars?: NonNullable<OpenAIResponsesCompat['maxConsecutiveWhitespaceChars']>
+  /**
+   * Per-output-item repeated-pattern limit in UTF-16 code units, periods 1–100; the three Responses protocols.
+   * Default 32768; 0 disables only this check. Requires pi-ai fork.
+   */
+  maxRepeatedPatternChars?: NonNullable<OpenAIResponsesCompat['maxRepeatedPatternChars']>
   /** Whether the endpoint accepts `store`; `openai-completions`. */
   supportsStore?: boolean
   /**
@@ -4283,15 +4293,21 @@ export interface Config {
 export interface Config {
   /**
    * Model presentation. `native` (default) sends every visible schema; `ptc`
-   * sends only `run_code` plus a generated SDK prompt and collapses the
-   * executor to the same surface (a model-direct call may only name
-   * `run_code`; `run_code` SDK sub-dispatches keep every visible tool).
+   * sends `run_code` plus any visible `ptcNativeTools` and a generated SDK
+   * prompt. The executor accepts the same direct-call names; SDK sub-dispatches
+   * keep every visible tool, including the native exceptions.
    * PTC mode requires a `ctx.ptcRuntime` whose `language`
    * has a registered SDK renderer (TypeScript or Python) and fails prompt
    * assembly when it is absent or has no renderer. Under `ptc`, native names
-   * in `toolOrder` are invalid.
+   * in `toolOrder` are invalid unless included in `ptcNativeTools`.
    */
   mode?: ToolPresentationMode
+  /**
+   * Exact tool names that also remain directly callable under `ptc` (default
+   * empty). Missing or invisible names are ignored; restrictions and policy
+   * still apply. Exceptions remain available through the generated SDK.
+   */
+  ptcNativeTools?: string[]
   /**
    * Concurrency cap for a `run_code` program's overlapping sub-calls
    * (default 10, the loop scheduler's own default). Sub-calls follow the
