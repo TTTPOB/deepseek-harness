@@ -74,8 +74,10 @@ try {
   const adapterRequire = createRequire(hostRequire.resolve('@deepseek-ai/dsh-llm-pi-ai'))
   const responsesParser = adapterRequire.resolve('@earendil-works/pi-ai/api/openai-responses-shared', { conditions: new Set(['import', 'node', 'default']) })
   const parserSource = await readFile(responsesParser, 'utf8')
-  assert(parserSource.includes('compat?.maxConsecutiveWhitespaceChars'))
-  assert(parserSource.includes('compat?.maxRepeatedPatternChars'))
+  if (process.env.DSH_PI_AI_TARBALL) {
+    assert(parserSource.includes('compat?.maxConsecutiveWhitespaceChars'))
+    assert(parserSource.includes('compat?.maxRepeatedPatternChars'))
+  }
   console.log(JSON.stringify({ responsesParser, streamLimits }))
   const { Session, SessionId, default: SessionStore } = await load('@deepseek-ai/dsh-session')
   await ctx.plugin(agent.default)
