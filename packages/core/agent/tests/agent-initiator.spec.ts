@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { AsyncResource } from 'node:async_hooks'
 import { Context } from '@deepseek-ai/cordis'
 import { runInNewContext } from 'node:vm'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -63,6 +64,80 @@ describe('AgentRegistry initiator scope', () => {
     await dispose()
   })
 
+  it('clears captured asynchronous contexts when a synchronous operation returns', async () => {
+    const { service, dispose } = await harness()
+    const initiator = agent('sync-captured')
+    const read = service.withInitiator(initiator, () => {
+      expect(service.get(initiator.id)).toBeUndefined()
+      const captured = AsyncResource.bind(() => service.currentInitiator())
+      expect(captured()).toBe(initiator)
+      return captured
+    })
+
+    expect(read()).toBeUndefined()
+    await dispose()
+  })
+
+  it('keeps captured contexts readable across await and clears them on fulfillment', async () => {
+    const { service, dispose } = await harness()
+    const initiator = agent('async-captured')
+    const release = Promise.withResolvers<boolean>()
+    let read = (): Agent | undefined => undefined
+    const pending = service.withInitiator(initiator, async () => {
+      read = AsyncResource.bind(() => service.currentInitiator())
+      await release.promise
+      expect(service.requireInitiator()).toBe(initiator)
+      expect(read()).toBe(initiator)
+    })
+
+    expect(read()).toBe(initiator)
+    release.resolve(true)
+    await pending
+    expect(read()).toBeUndefined()
+    await dispose()
+  })
+
+  it('clears captured contexts after synchronous throws and Promise rejection', async () => {
+    const { service, dispose } = await harness()
+    const initiator = agent('failed-captured')
+    const error = new Error('operation failed')
+    let read = (): Agent | undefined => undefined
+    expect(() => service.withInitiator(initiator, () => {
+      read = AsyncResource.bind(() => service.currentInitiator())
+      throw error
+    })).toThrow(error)
+    expect(read()).toBeUndefined()
+
+    await expect(service.withInitiator(initiator, async () => {
+      read = AsyncResource.bind(() => service.currentInitiator())
+      await Promise.resolve()
+      expect(read()).toBe(initiator)
+      throw error
+    })).rejects.toBe(error)
+    expect(read()).toBeUndefined()
+    await dispose()
+  })
+
+  it('clears a settled child context while its parent operation continues', async () => {
+    const { service, dispose } = await harness()
+    const parent = agent('captured-parent')
+    const child = agent('captured-child')
+    let readParent = (): Agent | undefined => undefined
+    await service.withInitiator(parent, async () => {
+      readParent = AsyncResource.bind(() => service.currentInitiator())
+      const readChild = await service.withInitiator(child, async () => {
+        await Promise.resolve()
+        expect(service.requireInitiator()).toBe(child)
+        return AsyncResource.bind(() => service.currentInitiator())
+      })
+      expect(readChild()).toBeUndefined()
+      expect(service.requireInitiator()).toBe(parent)
+      expect(readParent()).toBe(parent)
+    })
+    expect(readParent()).toBeUndefined()
+    await dispose()
+  })
+
   it('tracks a branded Promise without calling its overridable then property', async () => {
     const { service, dispose } = await harness()
     const initiator = agent('overridden-then')
@@ -97,8 +172,13 @@ describe('AgentRegistry initiator scope', () => {
     })
     void Object.defineProperty(promise, 'constructor', { value: constructor })
 
-    expect(service.withInitiator(initiator, () => promise)).toBe(promise)
-    await dispose()
+    let read = (): Agent | undefined => undefined
+    expect(service.withInitiator(initiator, () => {
+      read = AsyncResource.bind(() => service.currentInitiator())
+      return promise
+    })).toBe(promise)
+    expect(read()).toBe(initiator)
+    await promptly(dispose())
   })
 
   it('isolates overlapping initiators', async () => {
@@ -234,6 +314,30 @@ describe('AgentRegistry initiator scope', () => {
 
     await promptly(returned)
     expect(() => service.currentInitiator()).toThrow('agent initiator scope is disposed')
+  })
+
+  it('keeps an in-flight initiator after reentrant teardown releases its drain count', async () => {
+    const { ctx, service } = await harness()
+    const initiator = agent('reentrant-in-flight')
+    const unrelated = agent('reentrant-unrelated')
+    const release = Promise.withResolvers<boolean>()
+    const pending = service.withInitiator(unrelated, () => release.promise)
+
+    const returned = service.withInitiator(initiator, async () => {
+      const read = AsyncResource.bind(() => service.currentInitiator())
+      const disposal = ctx.fiber.dispose()
+      try {
+        // Closing precedes reentrant release; the drain count distinguishes those teardown phases.
+        await vi.waitFor(() => { expect(Reflect.get(service, 'activeInitiatorRuns')).toBe(1) })
+        expect(service.requireInitiator()).toBe(initiator)
+        expect(read()).toBe(initiator)
+      } finally {
+        release.resolve(true)
+        await disposal
+      }
+    })
+    await pending
+    await promptly(returned)
   })
 
   it('excludes an asynchronous teardown initiator while draining unrelated boundaries', async () => {

@@ -110,7 +110,7 @@ await handle.agent.whenIdle()
 
 ### 发起方作用域
 
-每个驱动器在 `ctx.agents.withInitiator(agent, ...)` 内运行其完整生命周期，因此继承的异步链会观察到该 agent；`withoutInitiator()` 为共享定时器等无关的进程本地工作隐藏它。该边界只是进程本地归因——环境中的身份既不是存活证明，也不是授权，显式身份在 worker、进程、持久化与 wire 边界保持权威。Teardown 拒绝新边界，让返回 Promise 的边界排空，然后禁用底层存储。[发起方作用域决策](../../../.agents/notes/implemented/architecture/2026-07-15-agent-initiator-scope.zh.md) 拥有详细约定。
+每个驱动器在 `ctx.agents.withInitiator(agent, ...)` 内运行其完整生命周期，因此继承的异步链会观察到该 agent，直到操作返回非 Promise 值、抛错或其返回的 Promise 结算。共享发起方 slot 随后清空 Agent 引用，因此仍存活的定时器、监听器或 socket 回调读取到 `undefined`；`withoutInitiator()` 为无关的进程本地工作立即隐藏 Agent。如果 Promise 的 species 阻止观察结算，该 Promise 会保留归因，并被排除在 teardown 排空范围外。该边界只是进程本地归因——环境中的身份既不是存活证明，也不是授权，显式身份在 worker、进程、持久化与 wire 边界保持权威。Teardown 拒绝新边界，让返回 Promise 的边界排空，然后禁用底层存储。[发起方作用域决策](../../../.agents/notes/implemented/architecture/2026-07-15-agent-initiator-scope.zh.md) 拥有详细约定。
 
 ### 所有权不变式
 
