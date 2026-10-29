@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events'
 import { watchFile, unwatchFile } from 'node:fs'
 import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -193,7 +194,7 @@ async function expectCollected(retired: readonly Retired[]): Promise<void> {
       agent: ref.agent.deref() !== undefined,
       session: ref.session.deref() !== undefined,
     }))
-    expect(retained, 'retired Agent and Session must be collectible while shared resources remain open')
+    expect(retained, 'retired Agent and Session must be collectible while their former references remain live')
       .toEqual(retired.map(() => ({ agent: false, session: false })))
   } finally {
     setFlagsFromString('--no-expose-gc')
@@ -262,6 +263,61 @@ describe('initiator retention by shared native resources', () => {
           await rm(root, { recursive: true, force: true })
         }
       }
+    }
+  })
+})
+describe('creation caller signal retention', () => {
+  it.each(['create', 'resume'] as const)('detaches the caller signal after %s publishes', async (mode) => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-caller-signal-'))
+    let ctx: Context | undefined
+    try {
+      ctx = await harness(root)
+      const loop = ctx
+      const agentOptions = { provider: 'mock', model: 'mock' }
+      const targetId = SessionId('target')
+      if (mode === 'resume') {
+        await (await loop.agents.create({
+          sessionId: targetId,
+          agentOptions,
+          seed: [
+            { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+            { type: 'turn/end', seq: SessionSeq(1), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+          ],
+        })).dispose()
+      }
+      let lifetime: AbortSignal | undefined
+      loop.on('agent/created', ({ agent, signal }) => {
+        if (agent.id === targetId) lifetime = signal
+      })
+      // The requester stays reachable only inside this operation.
+      const request = async () => {
+        const requester = await loop.agents.create({ sessionId: SessionId('requester'), agentOptions })
+        const caller = new AbortController()
+        const target = await loop.agents.withInitiator(requester.agent, () => mode === 'create'
+          ? loop.agents.create({ sessionId: targetId, agentOptions, signal: caller.signal })
+          : loop.agents.resume({ resumeSessionId: targetId, agentOptions, signal: caller.signal }))
+        expect.soft(getEventListeners(caller.signal, 'abort')).toHaveLength(0)
+        // The requester's operation settles after the target is live. An Error
+        // built during this abort captures `settle`, whose context holds the requester.
+        const settle = (): void => {
+          if (requester.agent.id !== SessionId('requester')) throw new Error('unexpected requester')
+          caller.abort('requester operation settled')
+        }
+        settle()
+        const retired: Retired = { agent: new WeakRef(requester.agent), session: new WeakRef(requester.agent.session) }
+        await requester.dispose()
+        return { retired, target }
+      }
+      const { retired, target } = await request()
+      try {
+        expect.soft(lifetime?.aborted).toBe(false)
+        expect(loop.agents.get(targetId)).toBe(target.agent)
+        await expectCollected([retired])
+      } finally {
+        await target.dispose()
+      }
+    } finally {
+      try { await ctx?.fiber.dispose() } finally { await rm(root, { recursive: true, force: true }) }
     }
   })
 })

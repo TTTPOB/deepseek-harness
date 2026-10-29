@@ -13,7 +13,7 @@ import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 const expected = plan('core').packages
 const names = expected.map(pkg => pkg.name)
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz>')
+assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz> <agent-loop.tgz>')
 const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
 const root = await mkdtemp(join(tmpdir(), 'dsh-core-artifact-'))
 const run = (args, cwd = root) => execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), ...args], { cwd, stdio: 'inherit', timeout: 600_000 })
