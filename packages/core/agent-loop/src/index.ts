@@ -659,6 +659,9 @@ export class AgentLoop extends Service implements AgentFactory {
             assertLive()
             await loopCtx.agents.announce(agent, source, abort.signal)
             assertLive()
+            // The caller signal cancels creation only; a later abort must not
+            // reach the live lifetime or retain the caller through its reason.
+            callerSignal?.removeEventListener('abort', onCallerAbort)
             return { agent, dispose }
           } finally {
             publication.resolve()
