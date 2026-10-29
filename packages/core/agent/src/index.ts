@@ -219,6 +219,11 @@ interface AgentEntry {
   detachRequested: boolean
 }
 
+/** Shared with inherited resources; settlement releases the Agent independently of resource lifetime. */
+interface InitiatorSlot {
+  agent: Agent | undefined
+}
+
 /** One tracked boundary plus its inherited nesting chain. */
 interface InitiatorRun {
   active: boolean
@@ -241,12 +246,14 @@ interface FactorySlot {
  * remain explicit, as does identity at worker, process, persistence, and wire
  * boundaries. Returned Promise boundaries drain during teardown, except a
  * nested lineage that starts an owning-fiber unload is excluded from its own drain.
+ * Inherited resources share a slot cleared when the operation settles, so they
+ * do not retain its Agent after completion.
  */
 export class AgentRegistry extends Service {
   private store = new Map<SessionId, AgentEntry>()
   private factory: FactorySlot | undefined
   private readonly setups = new Set<AgentSetup>()
-  private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
+  private readonly initiators = new AsyncLocalStorage<InitiatorSlot>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
   private activeInitiatorRuns = 0
@@ -291,13 +298,14 @@ export class AgentRegistry extends Service {
    * that also supports agentless calls. When a parent creates a child, setup
    * reports the causal parent while the setup callback's Agent parameter
    * identifies the child.
-   * @returns the inherited Agent, or `undefined` outside an initiator boundary
-   *   and inside an explicit clearing boundary.
+   * @returns the inherited Agent while its operation is in flight, including
+   *   before registration; `undefined` outside a boundary, inside a clearing
+   *   boundary, or in inherited callbacks after the operation settles.
    * @throws when this service instance has been disposed.
    */
   currentInitiator(): Agent | undefined {
     this.assertInitiatorsReadable()
-    return this.initiators.getStore()
+    return this.initiators.getStore()?.agent
   }
 
   /**
@@ -321,6 +329,9 @@ export class AgentRegistry extends Service {
    * lifetime.
    * A queue or wire receiver may establish this boundary only after validating
    * explicit identity and resolving the exact live Agent; this method does neither.
+   * Inherited callbacks lose attribution when the operation returns a non-Promise
+   * value, throws, or its returned Promise settles. A Promise whose species prevents settlement
+   * observation retains attribution and is excluded from teardown draining.
    * Detached work remains owned by the subsystem that starts it.
    * @param agent - initiating Agent to inherit; presence is neither liveness proof nor authorization.
    * @param operation - synchronous or asynchronous operation to invoke.
@@ -659,28 +670,34 @@ export class AgentRegistry extends Service {
       active: true,
       parent: this.initiatorRuns.getStore(),
     }
+    const slot: InitiatorSlot = { agent }
+    const settle = (): void => {
+      slot.agent = undefined
+      this.releaseInitiatorRun(run)
+    }
     this.activeInitiatorRuns += 1
     let result: T
     try {
-      result = this.initiatorRuns.run(run, () => this.initiators.run(agent, operation))
+      result = this.initiatorRuns.run(run, () => this.initiators.run(slot, operation))
     } catch (error: unknown) {
-      this.releaseInitiatorRun(run)
+      settle()
       throw error
     }
     if (isPromise(result)) {
       try {
         void Promise.prototype.then.call(
           result,
-          () => { this.releaseInitiatorRun(run) },
-          () => { this.releaseInitiatorRun(run) },
+          settle,
+          settle,
         )
       } catch {
         // A branded Promise may expose a failing @@species. Observer setup did
-        // not attach, so preserve the exact return without leaking the run.
+        // not attach: keep attribution for the unobserved operation, but release
+        // its drain count to preserve return identity and teardown behavior.
         this.releaseInitiatorRun(run)
       }
     } else {
-      this.releaseInitiatorRun(run)
+      settle()
     }
     return result
   }
