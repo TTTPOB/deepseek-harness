@@ -13,7 +13,7 @@ import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 const expected = plan('core').packages
 const names = expected.map(pkg => pkg.name)
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz> <agent-loop.tgz>')
+assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz> <agent-loop.tgz> <ptc-runtime-node.tgz>')
 const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
 const root = await mkdtemp(join(tmpdir(), 'dsh-core-artifact-'))
 const run = (args, cwd = root) => execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), ...args], { cwd, stdio: 'inherit', timeout: 600_000 })
@@ -53,7 +53,7 @@ try {
     }
     packages.push(await load(name))
   }
-  const [agent, presets, , pi, mcp] = packages
+  const [agent, presets, , pi, mcp, , , , ptcRuntime] = packages
   await checkSubagentManager(dirname(hostRequire.resolve(names[2] + '/package.json')))
   const { default: Schema } = await load('@deepseek-ai/schemastery')
   const [mcpConfig] = Schema.resolve({ transport: 'stdio', serverName: 'fixture', command: 'unused', maxBufferSize: 1048576 }, mcp.Config, {})
@@ -164,7 +164,27 @@ try {
   } finally {
     ctx.agents.list = originalList
   }
-  console.log('Core artifacts resolve through official Host peers; Config, PTC native exception API, awaited setup, preset leases and Team scope switching/disposal passed. No personal plugins or Host process used.')
+  const { default: FileSystem } = await load('@deepseek-ai/dsh-fs-local')
+  const { default: Subprocess } = await load('@deepseek-ai/dsh-subprocess-local')
+  const { default: Sandbox } = await load('@deepseek-ai/dsh-sandbox-local')
+  const { default: SandboxPolicy } = await load('@deepseek-ai/dsh-sandbox-policy')
+  await ctx.plugin(FileSystem)
+  await ctx.plugin(Subprocess)
+  await ctx.plugin(Sandbox, {})
+  await ctx.plugin(SandboxPolicy, { mode: 'danger-full-access' })
+  const rawText = '"quotes\' C:\\temp ${literal} `tick`\n'
+  for (const executionMode of ['per-call', 'persistent-in-memory']) {
+    const fiber = await ctx.plugin(ptcRuntime.default, { executionMode })
+    const runtime = ctx.get('ptcRuntime')
+    const expression = '@``\n' + rawText + '``'
+    const raw = await runtime.run(runtime.resolve({ program: executionMode === 'per-call' ? 'return ' + expression : expression, bindings: [] }))
+    assert.equal(raw.value, rawText, executionMode)
+    const failure = await runtime.run(runtime.resolve({ program: 'const command = "ssh h x "$HOME" y";', bindings: [] }))
+    assert.equal(failure.error?.kind, 'exception', executionMode)
+    assert(failure.error.message.includes(executionMode === 'per-call' ? 'run_code:1' : 'ptc-repl:1'), failure.error.message)
+    await fiber.dispose()
+  }
+  console.log('Core artifacts resolve through official Host peers; Config, PTC native exception API, awaited setup, preset leases, Team scope switching/disposal, and PTC raw text with parse locations passed. No personal plugins or Host process used.')
 } finally {
   if (ctx) await ctx.fiber.dispose()
   await rm(root, { recursive: true, force: true })

@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-30-ptc-raw-text-and-parse-locations.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-30-ptc-raw-text-and-parse-locations.md
+/agent-note-raw-text-literals-and-parse-locations-for-ptc:
+  en: abcc0cdb2cc00ac1
+  zh: 3201e3f348c5a941
+/agent-note-raw-text-literals-and-parse-locations-for-ptc/problem:
+  en: 30930a559e831523
+  zh: c7c9f3893e6076ac
+/agent-note-raw-text-literals-and-parse-locations-for-ptc/decision:
+  en: 6eec1d5ad1de21c1
+  zh: 83176c3c3f2b663f
+/agent-note-raw-text-literals-and-parse-locations-for-ptc/alternatives-considered:
+  en: 343328f3bab6b1a1
+  zh: 5d85f2d0871f39e0
+/agent-note-raw-text-literals-and-parse-locations-for-ptc/consequences:
+  en: 3569c87711fd1151
+  zh: ba3a81e7dfdeebe7

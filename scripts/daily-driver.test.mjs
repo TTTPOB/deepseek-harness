@@ -36,7 +36,7 @@ test('capability groups track rc.1 owners and toolchain', async () => {
   assert.deepEqual(plan('core').packages.map(pkg => pkg.directory), [
     'packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent',
     'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team', 'packages/core/tools',
-    'packages/core/agent-loop',
+    'packages/core/agent-loop', 'packages/ptc-runtime/ptc-runtime-node',
   ])
   const tools = plan('core', ['packages/core/tools'])
   assert.equal(tools.selected[0].version, '0.2.1-rc.1-fork1')

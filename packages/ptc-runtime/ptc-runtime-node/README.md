@@ -64,6 +64,23 @@ In `per-call` mode, programs are async function bodies: top-level `await` and `r
 
 Direct filesystem, network and subprocess operations remain Node operations, subject to the selected OS sandbox. Nested host bindings cross the control channel; PTC tool calls retain the registry's visibility, ordering, logging and approval rules. Running a program does not change the Session's standing policy or automatically replay it after a denial.
 
+<a id="raw-text-literals"></a>
+### Raw text literals
+
+Both execution modes accept `@` immediately followed by N backticks (N ≥ 2), closed by the next maximal run of exactly N backticks. Shorter or longer runs are content; choose a wider delimiter when the text contains an equal-length run. Quotes, backslashes and `${...}` remain literal text, without escapes or interpolation.
+
+````text
+const command = @``
+printf '%s\n' "$HOME"
+``;
+````
+
+Exactly one LF or CRLF immediately after the opening delimiter is omitted. No indentation is removed; trailing newlines remain. The preprocessor emits an ordinary template, escaping backslashes, backticks and `${`. The omitted opening newline becomes a backslash line continuation inside that template, preserving source lines without introducing ASI-sensitive newlines around expressions. Content CR characters become `\r` escapes so CRLF values remain exact; LF characters remain real source newlines.
+
+Recognition is outer-first: outside an already-open raw body, every ``` @`` ``` opener is recognized before JavaScript parsing, even inside strings, templates, comments or regex literals. The preprocessor does not need to understand JavaScript, so the rule is unambiguous and never has to distinguish regex literals from division. `@identifier` decorators remain unchanged. An unterminated literal reports its opening line, required delimiter width and a repair hint.
+
+The opener is a reserved source sequence. To write ``` @`` ``` as ordinary string text, encode its at-sign as ``` \x40`` ```; inside raw text, choose a longer delimiter. This follows familiar outer-language rules: HTML finds `</script>` without parsing inner JavaScript, where the closing text is written as `<\/script>`; heredoc bodies recognize only their closing marker; Markdown uses longer fences to avoid content conflicts.
+
 <a id="persistent-repl"></a>
 ### In-memory mode
 
@@ -92,6 +109,8 @@ The PTC consumer exposes per-call timeout and approved sandbox choices as descri
 Omitting `timeoutMs` uses the configured elapsed default; numeric requests are validated and capped. Service callers can explicitly pass `timeoutMs: null` to omit the elapsed timer, as the workflow adapter does; `run_code` continues to accept only positive numeric overrides. An enabled deadline covers runtime setup and execution, including time awaiting nested tools or approval. It is not a CPU meter. Timeout or cancellation stops a synchronous loop through the host's managed process owner; successful per-call completion also cleans that managed range. The timer stops when an outcome is selected, before cleanup, so the returned call can take longer than its execution deadline while cleanup settles.
 
 ### Failures
+
+TypeScript parse failures keep the original message and append `Location (JavaScript parse, approximate if TypeScript-only syntax is used):` followed by the filename/line, source, caret marker and JavaScript error. A compilation-only async wrapper accepts top-level await in either mode; the wrapper line is offset out of reported numbers. The location describes preprocessed source, with unchanged LF line counts. If JavaScript compilation succeeds, no location is appended.
 
 Program parse errors and thrown exceptions are `exception`; deadline expiry is `timeout`; cancellation is `abort`; malformed or excessive control traffic is `protocol`; unavailable confinement is `sandbox-unavailable`; early process exit or failed managed cleanup is `worker-exit`. The substrate-independent failure name remains `worker-exit` for process providers. Lossy completions are `invalid-output`, and an oversized outer result is `output-limit`, retaining the fitting log prefix. Invalid or unsupported options and calls after disposal reject as caller misuse.
 
@@ -149,7 +168,7 @@ Read the service contract before using the provider directly; the decisions expl
 <a id="model-experience"></a>
 ## Model Experience
 
-Indirectly, through PTC mode in `dsh-tools` and `dsh-workflow-ptc`, which present program outcomes through their own tool results. Intermediate binding traffic stays outside model history; the outer result follows the ordinary tool spill policy.
+Indirectly, through PTC mode in `dsh-tools` and `dsh-workflow-ptc`, which present program outcomes through their own tool results. Intermediate binding traffic stays outside model history; the outer result follows the ordinary tool spill policy. Raw literals reduce escaping for embedded scripts and file content. Parse failures add short source-location text to the existing failure result; no extra tool schema or prompt text is injected by this feature. Output and token usage grow only by that diagnostic when parsing fails.
 
 #### KV Cache effect
 
@@ -168,6 +187,8 @@ These limits qualify the execution guarantees and retained output.
 - **In-memory environments retain one process per live owner** — idle owners keep their process and heap until explicit release, owner disposal or failure. Fan-out can retain many processes; idle expiration remains deferred.
 - **Output caps reject rather than retain every byte** — spill can preserve only the bounded result delivered by this provider.
 - **Bindings are bounded at transport admission** — control limits do not bound the memory a host binding allocates while producing its result.
+- **Raw openers are reserved everywhere in source** — existing strings, comments or regex literals containing ``` @`` ``` need source changes: write ``` \x40`` ``` where appropriate or put the text inside a longer raw delimiter. JavaScript quoting does not hide an opener from preprocessing.
+- **Locations are JavaScript approximations** — TypeScript annotations may be highlighted before the actual error. Columns refer to transformed text; a bare CR inside raw content preserves its value but not its source-line contribution.
 - **The console shim has five methods** — `log`, `info`, `warn`, `error` and `debug`.
 
 <a id="dev-note"></a>

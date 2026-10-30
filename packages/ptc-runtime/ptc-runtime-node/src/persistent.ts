@@ -1,6 +1,5 @@
 /** Node PTC in-memory execution with retained processes scoped to caller-owned objects. */
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { stripTypeScriptTypes } from 'node:module'
 import { isAbsolute } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PtcRunRequest, PtcRunSpec, PtcRunResult, PtcRunSandbox, PtcRunFailure, PtcBindingNamespace, PtcJsonValue } from '@deepseek-ai/dsh-ptc-runtime'
@@ -17,6 +16,7 @@ import { STARTUP_ENVIRONMENT_NAMES } from './environment.ts'
 import { decodePtcJsonWire } from './json-wire.ts'
 import { OutputLedger } from './output-ledger.ts'
 import { drainOutput, terminateProcess } from './output-stream.ts'
+import { prepareProgram } from './program.ts'
 import type { ProgramBootData } from './protocol.ts'
 
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -339,7 +339,7 @@ export class InMemoryExecution {
       throw new Error('persistent PTC: release the retained environment before changing its sandbox policy')
     }
     let code: string
-    try { code = stripTypeScriptTypes(spec.program) } catch (error: unknown) {
+    try { code = prepareProgram(spec.program, 'repl') } catch (error: unknown) {
       const output = persistentOutput(this.config.maxOutputBytes)
       const outcome = output.failure([], { kind: 'exception', message: messageOf(error) })
       if (outcome.error?.kind === 'output-limit' && spec.stateOwner !== undefined) {

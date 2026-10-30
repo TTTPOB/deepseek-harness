@@ -1,6 +1,5 @@
 /** Node PTC execution with configurable per-call processes or retained in-memory REPL state. */
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { stripTypeScriptTypes } from 'node:module'
 import { isAbsolute } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
@@ -24,11 +23,10 @@ import { OutputLedger } from './output-ledger.ts'
 import { terminateProcess } from './output-stream.ts'
 import { STARTUP_ENVIRONMENT_NAMES } from './environment.ts'
 import { decodePtcJsonWire } from './json-wire.ts'
+import { prepareProgram } from './program.ts'
 import type { ProgramBootData } from './protocol.ts'
 
 interface LiveRun { controller: AbortController; finished: Promise<void> }
-const STRIP_PREFIX = 'async function __dsh_program__() {\n'
-const STRIP_SUFFIX = '\n}'
 
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 function record(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
@@ -197,10 +195,10 @@ export class NodePtcRuntime extends PtcRuntime {
       // Abort callbacks can settle execution before or during an awaited operation.
       // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (settled) return await result.promise
-      const stripped = stripTypeScriptTypes(STRIP_PREFIX + spec.program + STRIP_SUFFIX)
+      const code = prepareProgram(spec.program, 'function-body')
       parsing = false
       const data: ProgramBootData = {
-        code: stripped.slice(STRIP_PREFIX.length, stripped.length - STRIP_SUFFIX.length),
+        code,
         namespaces: [...bindings.values()].map(binding => ({
           global: binding.global,
           names: Object.keys(binding.functions),
