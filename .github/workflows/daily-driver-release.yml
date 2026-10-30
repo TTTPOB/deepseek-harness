@@ -46,6 +46,15 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Prepare Linux sandbox for PTC runtime tests
+        if: inputs.selection == 'core'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq bubblewrap
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent -- true
       - name: Validate, build, smoke and publish immutable assets
         env:
           SELECTION: ${{ inputs.selection || 'session-query' }}
