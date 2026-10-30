@@ -15,8 +15,8 @@ export const selections = {
     smoke: 'smoke-session-query.mjs',
   },
   core: {
-    packages: ['packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent', 'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team', 'packages/core/tools', 'packages/core/agent-loop'],
-    tests: ['packages/core/agent/tests', 'packages/preset/agent-preset-registry/tests', 'packages/subagent/subagent/tests', 'packages/llm/llm-pi-ai/tests', 'packages/mcp/mcp-client/tests', 'packages/experimental/tool-agent-team/tests', 'packages/core/tools/tests', 'packages/core/agent-loop/tests'],
+    packages: ['packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent', 'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team', 'packages/core/tools', 'packages/core/agent-loop', 'packages/ptc-runtime/ptc-runtime-node'],
+    tests: ['packages/core/agent/tests', 'packages/preset/agent-preset-registry/tests', 'packages/subagent/subagent/tests', 'packages/llm/llm-pi-ai/tests', 'packages/mcp/mcp-client/tests', 'packages/experimental/tool-agent-team/tests', 'packages/core/tools/tests', 'packages/core/agent-loop/tests', 'packages/ptc-runtime/ptc-runtime-node/tests'],
     smoke: 'smoke-core-packages.mjs',
   },
   'team-model-selection': {
