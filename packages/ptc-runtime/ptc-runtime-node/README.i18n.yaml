@@ -24,8 +24,8 @@
   en: 411689bd0f6fcf23
   zh: dd29f9a7e061691d
 /deepseek-ai-dsh-ptc-runtime-node/use-this-package/raw-text-literals:
-  en: 1af64c1bcbdcb502
-  zh: 7efdf9f7b2bc5c3c
+  en: 02849356bf8ccc30
+  zh: ad8d0ea1372bd0a0
 /deepseek-ai-dsh-ptc-runtime-node/use-this-package/in-memory-mode:
   en: df9944346e78d7de
   zh: e328efc31cbfb0bb
@@ -33,8 +33,8 @@
   en: ad72b8bdba6a3966
   zh: 28a20fb5fb7c622d
 /deepseek-ai-dsh-ptc-runtime-node/use-this-package/failures:
-  en: aed0c0baf4d8a59c
-  zh: cc00f64f5a9c2486
+  en: 333d265b872c5feb
+  zh: 52f6d8f04c5628da
 /deepseek-ai-dsh-ptc-runtime-node/understand-the-implementation:
   en: 9020b491a39e4bf5
   zh: bcd1b2b1a3bde7f3
@@ -51,14 +51,14 @@
   en: ac2e2ae13d3f1394
   zh: 5d08b9c658fcf83a
 /deepseek-ai-dsh-ptc-runtime-node/model-experience:
-  en: 35b9d670be6aa810
-  zh: 99f4e232b2028529
+  en: 87434d1f90a71392
+  zh: d833b6f362857a64
 /deepseek-ai-dsh-ptc-runtime-node/model-experience/kv-cache-effect:
   en: 40294c1c31b74824
   zh: d91e7b78c0619c7e
 /deepseek-ai-dsh-ptc-runtime-node/known-limitations-and-deferred-work:
-  en: 7c371658c19075d6
-  zh: 0511482b832a901d
+  en: 7176f1757e84aad9
+  zh: 151e6ef4e0c90ee4
 /deepseek-ai-dsh-ptc-runtime-node/known-limitations-and-deferred-work/dev-note:
   en: 6373aba4e08f7205
   zh: 2a8c33d1f2839df4

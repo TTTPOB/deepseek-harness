@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-ptc-runtime-node",
   "description": "Node PTC execution with per-call sandboxed processes or in-memory REPL state",
-  "version": "0.2.1-rc.1-fork1",
+  "version": "0.2.1-rc.1-fork2",
   "publishConfig": {
     "access": "public"
   },
@@ -45,7 +45,9 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-util-values": "workspace:*",
-    "@deepseek-ai/schemastery": "workspace:~"
+    "@deepseek-ai/schemastery": "workspace:~",
+    "@sveltejs/acorn-typescript": "^1.0.13",
+    "acorn": "^8.19.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:~",

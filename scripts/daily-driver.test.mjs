@@ -43,7 +43,11 @@ test('capability groups track rc.1 owners and toolchain', async () => {
   assert(tools.tests.includes('packages/core/tools/tests'))
   assert(plan('core').tests.includes('packages/subagent/subagent/tests'))
   assert(plan('core').tests.includes('packages/experimental/tool-agent-team/tests'))
+  const runtime = plan('core', ['packages/ptc-runtime/ptc-runtime-node'])
+  assert.equal(runtime.selected[0].version, '0.2.1-rc.1-fork2')
+  assert(runtime.tests.includes('packages/ptc-runtime/ptc-runtime-node/tests'))
   const closure = artifactClosure(plan('core').packages)
+
   assert(closure.some(pkg => pkg.directory === 'packages/core/session'))
   assert(closure.some(pkg => pkg.directory === 'packages/session-query/session-query'))
   assert.equal(new Set(closure.map(pkg => pkg.name)).size, closure.length)
