@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-31-ptc-raw-token-recognition.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-31-ptc-raw-token-recognition.md
+/agent-note-lexer-aware-ptc-raw-text-and-exact-parse-locations:
+  en: 13e56fac2ef4233b
+  zh: b44a9174a3d177c2
+/agent-note-lexer-aware-ptc-raw-text-and-exact-parse-locations/problem:
+  en: dfe9b5badf299ade
+  zh: 91e829ef172ab924
+/agent-note-lexer-aware-ptc-raw-text-and-exact-parse-locations/decision:
+  en: fed96c7758b6d920
+  zh: e7f15c7116d559fd
+/agent-note-lexer-aware-ptc-raw-text-and-exact-parse-locations/alternatives-considered:
+  en: 5d70e75a60b53876
+  zh: 4250a4979f26c5a9
+/agent-note-lexer-aware-ptc-raw-text-and-exact-parse-locations/consequences:
+  en: a8976607b42f8183
+  zh: e415c07cb012c940

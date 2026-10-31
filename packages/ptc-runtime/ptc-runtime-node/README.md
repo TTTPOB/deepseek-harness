@@ -77,9 +77,9 @@ printf '%s\n' "$HOME"
 
 Exactly one LF or CRLF immediately after the opening delimiter is omitted. No indentation is removed; trailing newlines remain. The preprocessor emits an ordinary template, escaping backslashes, backticks and `${`. The omitted opening newline becomes a backslash line continuation inside that template, preserving source lines without introducing ASI-sensitive newlines around expressions. Content CR characters become `\r` escapes so CRLF values remain exact; LF characters remain real source newlines.
 
-Recognition is outer-first: outside an already-open raw body, every ``` @`` ``` opener is recognized before JavaScript parsing, even inside strings, templates, comments or regex literals. The preprocessor does not need to understand JavaScript, so the rule is unambiguous and never has to distinguish regex literals from division. `@identifier` decorators remain unchanged. An unterminated literal reports its opening line, required delimiter width and a repair hint.
+Acorn with its TypeScript plugin recognizes raw literals only where code expects tokens. Ordinary strings, comments, regex literals and template text keep the sequence unchanged; expressions inside `${...}` can contain raw literals. `@identifier` decorators remain unchanged. An unterminated literal reports its opening line and column and required delimiter width.
 
-The opener is a reserved source sequence. To write ``` @`` ``` as ordinary string text, encode its at-sign as ``` \x40`` ```; inside raw text, choose a longer delimiter. This follows familiar outer-language rules: HTML finds `</script>` without parsing inner JavaScript, where the closing text is written as `<\/script>`; heredoc bodies recognize only their closing marker; Markdown uses longer fences to avoid content conflicts.
+If Acorn fails for another reason, the runtime falls back to outer-first conversion and lets Node's type stripper decide acceptance. This compatibility path recognizes openers even inside other JavaScript tokens. Successful Acorn parsing replaces only recorded raw ranges; all remaining source bytes stay unchanged.
 
 <a id="persistent-repl"></a>
 ### In-memory mode
@@ -110,7 +110,7 @@ Omitting `timeoutMs` uses the configured elapsed default; numeric requests are v
 
 ### Failures
 
-TypeScript parse failures keep the original message and append `Location (JavaScript parse, approximate if TypeScript-only syntax is used):` followed by the filename/line, source, caret marker and JavaScript error. A compilation-only async wrapper accepts top-level await in either mode; the wrapper line is offset out of reported numbers. The location describes preprocessed source, with unchanged LF line counts. If JavaScript compilation succeeds, no location is appended.
+When type stripping fails and Acorn locates an error, the message starts with `SyntaxError at L:C: <strip message>` and includes the original source line and a caret. Both coordinates are 1-based and refer to the model-written program in either mode, including TypeScript annotations. Acorn's own message is omitted. If Acorn accepts a program that stripping rejects, only the strip message is returned. Unterminated raw literals use the same source frame and report the exact closing width. Diagnostics do not execute model code or include writing advice.
 
 Program parse errors and thrown exceptions are `exception`; deadline expiry is `timeout`; cancellation is `abort`; malformed or excessive control traffic is `protocol`; unavailable confinement is `sandbox-unavailable`; early process exit or failed managed cleanup is `worker-exit`. The substrate-independent failure name remains `worker-exit` for process providers. Lossy completions are `invalid-output`, and an oversized outer result is `output-limit`, retaining the fitting log prefix. Invalid or unsupported options and calls after disposal reject as caller misuse.
 
@@ -168,7 +168,7 @@ Read the service contract before using the provider directly; the decisions expl
 <a id="model-experience"></a>
 ## Model Experience
 
-Indirectly, through PTC mode in `dsh-tools` and `dsh-workflow-ptc`, which present program outcomes through their own tool results. Intermediate binding traffic stays outside model history; the outer result follows the ordinary tool spill policy. Raw literals reduce escaping for embedded scripts and file content. Parse failures add short source-location text to the existing failure result; no extra tool schema or prompt text is injected by this feature. Output and token usage grow only by that diagnostic when parsing fails.
+Indirectly, through PTC mode in `dsh-tools` and `dsh-workflow-ptc`, which present program outcomes through their own tool results. Intermediate binding traffic stays outside model history; the outer result follows the ordinary tool spill policy. Raw literals reduce escaping for embedded scripts and file content without altering raw-looking ordinary strings. Parse failures add `SyntaxError at L:C:` and an original-source frame when a position is available, without duplicating parser messages or adding advice. No extra tool schema or prompt text is injected; output and token usage grow only by the diagnostic on failure.
 
 #### KV Cache effect
 
@@ -187,8 +187,8 @@ These limits qualify the execution guarantees and retained output.
 - **In-memory environments retain one process per live owner** — idle owners keep their process and heap until explicit release, owner disposal or failure. Fan-out can retain many processes; idle expiration remains deferred.
 - **Output caps reject rather than retain every byte** — spill can preserve only the bounded result delivered by this provider.
 - **Bindings are bounded at transport admission** — control limits do not bound the memory a host binding allocates while producing its result.
-- **Raw openers are reserved everywhere in source** — existing strings, comments or regex literals containing ``` @`` ``` need source changes: write ``` \x40`` ``` where appropriate or put the text inside a longer raw delimiter. JavaScript quoting does not hide an opener from preprocessing.
-- **Locations are JavaScript approximations** — TypeScript annotations may be highlighted before the actual error. Columns refer to transformed text; a bare CR inside raw content preserves its value but not its source-line contribution.
+- **Acorn remains supplemental** — unsupported syntax falls back to outer-first conversion, which can recognize raw-looking text inside ordinary tokens. Node's stripper remains the acceptance authority; non-erasable TypeScript stays unsupported.
+- **Not every rejection has a location** — TypeScript-only strip failures return their message alone. Parse locations use original source coordinates; a bare CR inside raw content preserves its value but not its source-line contribution after conversion.
 - **The console shim has five methods** — `log`, `info`, `warn`, `error` and `debug`.
 
 <a id="dev-note"></a>

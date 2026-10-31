@@ -181,7 +181,12 @@ try {
     assert.equal(raw.value, rawText, executionMode)
     const failure = await runtime.run(runtime.resolve({ program: 'const command = "ssh h x "$HOME" y";', bindings: [] }))
     assert.equal(failure.error?.kind, 'exception', executionMode)
-    assert(failure.error.message.includes(executionMode === 'per-call' ? 'run_code:1' : 'ptc-repl:1'), failure.error.message)
+    assert.match(failure.error.message, /^SyntaxError at 1:27: /)
+    assert.match(failure.error.message, /\n  1 \| const command = .*\n    \| +\^$/)
+    const ordinary = '"a @``b`` c"'
+    const preserved = await runtime.run(runtime.resolve({ program: executionMode === 'per-call' ? 'return ' + ordinary : ordinary, bindings: [] }))
+    assert.equal(preserved.value, 'a @``b`` c', executionMode)
+
     await fiber.dispose()
   }
   console.log('Core artifacts resolve through official Host peers; Config, PTC native exception API, awaited setup, preset leases, Team scope switching/disposal, and PTC raw text with parse locations passed. No personal plugins or Host process used.')
