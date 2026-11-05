@@ -62,6 +62,8 @@ import {
 
 export {
   SESSION_QUERY_SQLITE_APPLICATION_ID,
+  SESSION_QUERY_SQLITE_KEYS_APPLICATION_ID,
+  SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION,
   SESSION_QUERY_SQLITE_SCHEMA_VERSION,
   type JournalMode,
 } from './schema.ts'
@@ -100,6 +102,14 @@ export interface Config extends SessionQueryConfig {
    */
   path: string
   /**
+   * Dedicated document-key sidecar path, attached to the index connection so
+   * per-session document lookups use an ordinary B-tree index while the
+   * main index file keeps the upstream schema. `:memory:` is supported.
+   * Defaults to `<path>.keys.db`, or `:memory:` when `path` is `:memory:`.
+   * The sidecar is derived from the main index and rebuilt when stale.
+   */
+  keysPath?: string
+  /**
    * Open the SQLite module and handle at service activation or the first
    * search, or `never` to disable full-text search: the inherited exact
    * reads, filters, and traces stay available, while `searchSessions` and
@@ -131,6 +141,7 @@ export interface Config extends SessionQueryConfig {
 
 interface ResolvedConfig {
   path: string
+  keysPath: string
   openAt: OpenAt
   journalMode: JournalMode
   defaultLimit: number
@@ -239,6 +250,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
 
   static Config: z<Config> = z.object({
     path: z.string().required(),
+    keysPath: z.string(),
     openAt: z.union(['startup', 'first-search', 'never'] as const).default('startup'),
     journalMode: z.union(['wal', 'delete', 'truncate', 'persist'] as const).default('wal'),
     defaultLimit: z.number().step(1).min(1).max(SQLITE_MAX_PAGE_LIMIT).default(SESSION_QUERY_SQLITE_DEFAULT_LIMIT),
@@ -429,7 +441,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   }
 
   private async _open(): Promise<void> {
-    this._db = await openSearchDatabase(this.config.path, this.config.journalMode)
+    this._db = await openSearchDatabase(this.config.path, this.config.journalMode, this.config.keysPath)
     const state = this._db.prepare(
       'SELECT global_generation FROM search_state WHERE singleton = 1',
     ).get() as { global_generation: number }
@@ -557,9 +569,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         db.exec('BEGIN IMMEDIATE')
         began = true
         for (const id of persistentDeletes) this._deleteSession('persisted', id)
-        if (persistentDeletes.length > 0) {
-          db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(staged.generation)
-        }
+        if (persistentDeletes.length > 0) this._writeMainGeneration(staged.generation)
         for (const row of liveDeletes) this._deleteSession('live', row.id as SessionId)
         for (const { entry, generation, persisted } of liveReplacements) {
           this._replaceLiveSession(entry, generation, persisted)
@@ -733,14 +743,16 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
 
   private _deleteSession(source: 'persisted' | 'live', id: SessionId): void {
     const db = this._requireDb()
-    if (source === 'persisted') {
-      db.prepare('DELETE FROM persisted_docs WHERE session_id = ?').run(id)
-      db.prepare('DELETE FROM persisted_sessions WHERE id = ?').run(id)
-    } else {
-      db.prepare('DELETE FROM temp.live_token_lengths WHERE rowid IN (SELECT rowid FROM temp.live_docs WHERE session_id = ?)').run(id)
-      db.prepare('DELETE FROM temp.live_docs WHERE session_id = ?').run(id)
-      db.prepare('DELETE FROM temp.live_sessions WHERE id = ?').run(id)
+    const { docs, keys } = documentTables(source)
+    const rows = db.prepare(`SELECT doc_rowid FROM ${keys} WHERE session_id = ?`).all(id) as Array<{ doc_rowid: number }>
+    const removeDocument = db.prepare(`DELETE FROM ${docs} WHERE rowid = ?`)
+    const removeLength = source === 'live' ? db.prepare('DELETE FROM temp.live_token_lengths WHERE rowid = ?') : undefined
+    for (const { doc_rowid: rowid } of rows) {
+      removeDocument.run(rowid)
+      removeLength?.run(rowid)
     }
+    db.prepare(`DELETE FROM ${keys} WHERE session_id = ?`).run(id)
+    db.prepare(`DELETE FROM ${source === 'live' ? 'temp.live_sessions' : 'persisted_sessions'} WHERE id = ?`).run(id)
   }
 
   private _replacePersistedSession(
@@ -786,9 +798,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
 
   private _upsertDocuments(source: 'persisted' | 'live', entry: ObservedSession): void {
     const db = this._requireDb()
-    const table = source === 'live' ? 'temp.live_docs' : 'persisted_docs'
-    const rows = db.prepare('SELECT rowid, seq, text, type, time, surface FROM ' + table
-      + ' WHERE session_id = ?').all(entry.header.id) as Array<{
+    const { docs: table, keys } = documentTables(source)
+    // CROSS JOIN pins the indexed key table as the outer loop; FTS rows are then fetched by rowid.
+    const rows = db.prepare(`SELECT d.rowid AS rowid, d.seq AS seq, d.text AS text, d.type AS type,
+      d.time AS time, d.surface AS surface
+      FROM ${keys} k CROSS JOIN ${table} d ON d.rowid = k.doc_rowid
+      WHERE k.session_id = ?`).all(entry.header.id) as Array<{
       rowid: number
       seq: number
       text: string
@@ -802,6 +817,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const update = db.prepare('UPDATE ' + table
       + ' SET text=?, type=?, time=?, surface=?, codepoint_length=? WHERE rowid=?')
     const remove = db.prepare('DELETE FROM ' + table + ' WHERE rowid=?')
+    const insertKey = db.prepare(`INSERT INTO ${keys} (doc_rowid, session_id, seq) VALUES (?, ?, ?)`)
+    const removeKey = db.prepare(`DELETE FROM ${keys} WHERE doc_rowid = ?`)
     for (const document of entry.documents) {
       const text = sanitizeFtsText(document.text)
       const row = existing.get(document.seq)
@@ -811,6 +828,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         const inserted = insert.run(text, document.sessionId, document.seq, document.type,
           document.time, document.surface, Array.from(text).length)
         rowid = Number(inserted.lastInsertRowid)
+        insertKey.run(rowid, document.sessionId, document.seq)
       } else {
         rowid = row.rowid
         if (row.text !== text || row.type !== document.type
@@ -825,6 +843,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
     for (const row of existing.values()) {
       remove.run(row.rowid)
+      removeKey.run(row.rowid)
       if (source === 'live') db.prepare('DELETE FROM temp.live_token_lengths WHERE rowid=?').run(row.rowid)
     }
   }
@@ -848,7 +867,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       db.exec('BEGIN IMMEDIATE')
       began = true
       this._replacePersistedSession(entry, revision, generation)
-      db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(generation)
+      this._writeMainGeneration(generation)
       db.exec('COMMIT')
       this._bm25.invalidate()
     } catch (error: unknown) {
@@ -867,6 +886,13 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         { cause: error },
       )
     }
+  }
+
+  /** Record a main generation in both files; the caller owns the enclosing write transaction. */
+  private _writeMainGeneration(generation: number): void {
+    const db = this._requireDb()
+    db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(generation)
+    db.prepare('UPDATE keys.key_state SET main_generation = ? WHERE singleton = 1').run(generation)
   }
 
   /** Advance the in-memory cursor generation past a durable write, even when reconciliation then fails. */
@@ -1044,6 +1070,13 @@ function headerBindings(
     header.delegationDepth ?? null,
     header.agentPreset ?? null,
   ]
+}
+
+/** FTS document table and its session-indexed rowid key table for one source. */
+function documentTables(source: 'persisted' | 'live'): { docs: string; keys: string } {
+  return source === 'live'
+    ? { docs: 'temp.live_docs', keys: 'temp.live_doc_keys' }
+    : { docs: 'persisted_docs', keys: 'keys.persisted_doc_keys' }
 }
 
 function selectedDocumentsSql(target = false): { sql: string } {
@@ -1227,6 +1260,7 @@ function invalidCursor(cause: unknown): SessionQueryError {
 function resolveConfig(config: Config): ResolvedConfig {
   const resolved: ResolvedConfig = {
     path: config.path,
+    keysPath: config.keysPath ?? (config.path === ':memory:' ? ':memory:' : `${config.path}.keys.db`),
     openAt: config.openAt ?? 'startup',
     journalMode: config.journalMode ?? 'wal',
     defaultLimit: config.defaultLimit ?? SESSION_QUERY_SQLITE_DEFAULT_LIMIT,
@@ -1245,6 +1279,9 @@ function resolveConfig(config: Config): ResolvedConfig {
   }
   if (typeof resolved.path !== 'string' || resolved.path.trim().length === 0) {
     throw invalidConfig('path must not be blank')
+  }
+  if (typeof resolved.keysPath !== 'string' || resolved.keysPath.trim().length === 0) {
+    throw invalidConfig('keysPath must not be blank')
   }
   const openPhases: readonly string[] = ['startup', 'first-search', 'never']
   if (!openPhases.includes(resolved.openAt)) throw invalidConfig('openAt is not supported')

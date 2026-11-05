@@ -43,6 +43,7 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `path` | 必填 | 专用派生索引 SQLite 路径，或 `:memory:`；POSIX 上缺失的路径会以仅所有者可访问的方式创建 |
+| `keysPath` | `<path>.keys.db` | 专用文档键旁路库路径，或 `:memory:`（`path` 为 `:memory:` 时的默认值）；必须与 `path` 不同 |
 | `openAt` | `startup` | `startup` 在激活时打开；`first-search` 把 SQLite 模块推迟到首次搜索；`never` 关闭全文搜索，继承的读取保持可用 |
 | `journalMode` | `wal` | `wal`、`delete`、`truncate` 或 `persist` |
 | `defaultLimit` | `20` | 请求省略 `limit` 时的分页大小 |
@@ -106,7 +107,7 @@ kind: "package-reference"
 
 ### 索引生命周期
 
-持久化 FTS 行跨重启保留；实时会话使用连接本地 TEMP 表遮蔽同一会话的持久化基库。首次搜索及持久化服务换源时轻量列举一次快照，重启可按 revision 复用数据库；换源即使 revision 相同也重新读取。运行期间 `session/created`、`session/event`、`session/flush` 与 `session/disposed` 通知标记会话及相关直属子会话的父会话为 dirty，搜索只观察这些存储 id，并只为变化的实时会话投影正文。搜索在读取 dirty 存储前等待持久化 flush，关闭时保留最终实时投影直到存储交接完成。变化会话各自提交事务，以 `(session_id, seq)` 对比文档的文本、类型、时间和 surface，只增改删变化的 FTS 行，不删除重插整会话；不变搜索不列举存储、不冷读、不写索引。超过 `maxIndexedSessionBytes` 的存储日志会被清除旧行并警告，不读取正文；后续观察或事务失败不回滚之前已提交的会话。
+持久化 FTS 行跨重启保留；实时会话使用连接本地 TEMP 表遮蔽同一会话的持久化基库。首次搜索及持久化服务换源时轻量列举一次快照，重启可按 revision 复用数据库；换源即使 revision 相同也重新读取。运行期间 `session/created`、`session/event`、`session/flush` 与 `session/disposed` 通知标记会话及相关直属子会话的父会话为 dirty，搜索只观察这些存储 id，并只为变化的实时会话投影正文。搜索在读取 dirty 存储前等待持久化 flush，关闭时保留最终实时投影直到存储交接完成。变化会话各自提交事务，以 `(session_id, seq)` 对比文档的文本、类型、时间和 surface，只增改删变化的 FTS 行，不删除重插整会话。FTS5 无法为 `UNINDEXED` 元数据列建立索引，因此按会话查找和删除文档都经由以 `session_id` 建索引的 rowid 键表：实时行使用 TEMP 表，持久行使用 `keysPath` 旁路库；其开销随会话大小而非语料总量增长；不变搜索不列举存储、不冷读、不写索引。超过 `maxIndexedSessionBytes` 的存储日志会被清除旧行并警告，不读取正文；后续观察或事务失败不回滚之前已提交的会话。
 
 排序先物化完整 MATCH 候选的元数据及原生 BM25 分数，再过滤、选取会话最佳事件和分页；合并前不截断任一来源。事件查询在物化前将两来源的候选限定为目标会话，但校准及短语统计仍基于全局。只有有界结果页生成完整高亮正文。可复用的 TEMP unicode61 token probe 测量变化的实时正文，TEMP rowid-token 数表与实时 FTS 行在同一事务中更新；不变正文不重新分词，退出实时索引时删除其计数。
 
@@ -115,6 +116,8 @@ kind: "package-reference"
 ### Schema 归属
 
 数据库携带 application id 与 schema 版本 8。打开时拒绝其他应用程序拥有的文件或规范数据库，拒绝未知用户表；只有已识别的不兼容派生 schema 才会原地重置——因此不相关或 session-persistence 数据库绝不会被触碰。在 POSIX 文件系统上，缺失的目录与数据库文件以仅所有者可访问的方式创建（进程 umask 前为 `0700` 与 `0600`）。每个派生索引路径在一个进程中只能由一个服务拥有；世代与 TEMP 遮蔽状态由连接持有。
+
+`keysPath` 处的文档键旁路库挂载到同一连接，带有独立的 application id 与 schema 版本 1，因此主文件的 schema 与表和上游完全一致；不带旁路库的索引拥有者可以原样打开主文件。旁路库记录其对应的主库世代，并与主文件在同一事务中写入。旁路库缺失、schema 版本不同，或记录的世代与主库世代不一致时（例如提交中断，或其他拥有者只写了主文件），打开时扫描一次主 FTS 表重建旁路库，不读取会话日志。打开时拒绝其他应用程序拥有或含未知表的旁路库。
 
 </details>
 

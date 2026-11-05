@@ -2932,7 +2932,7 @@ export interface Config {
 
 - `inject`: `sessions`
 - `refs`: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
-- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:95`](../packages/session-query/session-query-sqlite/src/index.ts)
+- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:97`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 ```ts config-catalog
 /** Combined session-query configuration backed by SQLite full-text search. */
@@ -2943,6 +2943,14 @@ export interface Config extends SessionQueryConfig {
    * POSIX filesystems; existing modes are preserved.
    */
   path: string
+  /**
+   * Dedicated document-key sidecar path, attached to the index connection so
+   * per-session document lookups use an ordinary B-tree index while the
+   * main index file keeps the upstream schema. `:memory:` is supported.
+   * Defaults to `<path>.keys.db`, or `:memory:` when `path` is `:memory:`.
+   * The sidecar is derived from the main index and rebuilt when stale.
+   */
+  keysPath?: string
   /**
    * Open the SQLite module and handle at service activation or the first
    * search, or `never` to disable full-text search: the inherited exact

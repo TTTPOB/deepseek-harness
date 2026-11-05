@@ -15,7 +15,7 @@ function sharedScore(native: number, dl: number, parameters: number[]): number {
 
 describe('public FTS5 BM25 calibration', () => {
   it('calibrates arbitrary Unicode bodies, counts tokenless documents, and reproduces overlapping-phrase scores', async () => {
-    const db = await openSearchDatabase(':memory:', 'wal')
+    const db = await openSearchDatabase(':memory:', 'wal', ':memory:')
     try {
       const scorer = new SharedBm25(db)
       const bodies = ['😀 !!!', 'café alpha alpha alpha', 'alpha alpha gap alpha alpha', '世界 新词', 'other '.repeat(31)]
@@ -54,7 +54,7 @@ describe('public FTS5 BM25 calibration', () => {
   })
 
   it('keeps scores finite for repeated terms near BM25 saturation and a live-only phrase', async () => {
-    const db = await openSearchDatabase(':memory:', 'wal')
+    const db = await openSearchDatabase(':memory:', 'wal', ':memory:')
     try {
       const scorer = new SharedBm25(db)
       db.prepare('INSERT INTO persisted_docs(text) VALUES(?)').run('background '.repeat(1000))

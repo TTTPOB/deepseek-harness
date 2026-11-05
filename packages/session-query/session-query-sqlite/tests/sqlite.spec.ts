@@ -25,6 +25,8 @@ import type {
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SqliteSessionQueryEngine, {
   SESSION_QUERY_SQLITE_DEFAULT_MAX_INDEXED_SESSION_BYTES,
+  SESSION_QUERY_SQLITE_KEYS_APPLICATION_ID,
+  SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION,
   SESSION_QUERY_SQLITE_SCHEMA_VERSION,
 } from '@deepseek-ai/dsh-session-query-sqlite'
 import {
@@ -2463,5 +2465,136 @@ describe('BM25 source-independent ties', () => {
     const page = await ctx.sessionQuery.searchSessions({ query: 'alpha' })
     expect(page.items.map(item => item.header.id)).toEqual([SessionId('a-identical'), stored.id])
     await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
+  })
+})
+
+describe('SQLite document-key sidecar', () => {
+  const upstreamTables = [
+    'persisted_docs', 'persisted_docs_config', 'persisted_docs_content', 'persisted_docs_data',
+    'persisted_docs_docsize', 'persisted_docs_idx', 'persisted_sessions', 'search_state',
+  ]
+
+  async function persistedOwner(
+    config: ConstructorParameters<typeof SqliteSessionQueryEngine>[1],
+  ): Promise<{ ctx: Context; close: () => Promise<void> }> {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    const persistence = await ctx.plugin(TestPersistence)
+    const search = await ctx.plugin(SqliteSessionQueryEngine, config)
+    return { ctx, close: async () => { await search.dispose(); await persistence.dispose() } }
+  }
+
+  function userTables(path: string): string[] {
+    const db = new DatabaseSync(path)
+    const rows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*' ORDER BY name").all() as Array<{ name: string }>
+    db.close()
+    return rows.map(row => row.name)
+  }
+
+  it('keeps the main index on the upstream schema and looks documents up through indexed sidecar keys', async () => {
+    const path = await temporaryPath()
+    TestPersistence.reset([
+      { meta: header('first'), events: messageEvents('first needle') },
+      { meta: header('second'), events: messageEvents('second needle') },
+    ])
+    const owner = await persistedOwner({ path })
+    owner.ctx.sessions.create(SessionId('live'), { seed: messageEvents('live needle') })
+    await owner.ctx.sessionQuery.searchSessions({ query: 'needle' })
+    const db = Reflect.get(owner.ctx.sessionQuery, '_db') as DatabaseSync
+    expect(db.prepare('SELECT count(*) n FROM temp.live_doc_keys').get())
+      .toEqual(db.prepare('SELECT count(*) n FROM temp.live_docs').get())
+    const plan = db.prepare(`EXPLAIN QUERY PLAN SELECT d.rowid FROM keys.persisted_doc_keys k
+      CROSS JOIN persisted_docs d ON d.rowid = k.doc_rowid WHERE k.session_id = ?`).all('first') as Array<{ detail: string }>
+    expect(plan[0]?.detail).toContain('USING COVERING INDEX persisted_doc_keys_session')
+    await owner.close()
+
+    expect(userTables(path)).toEqual(upstreamTables)
+    const main = new DatabaseSync(path)
+    expect(main.prepare('PRAGMA user_version').get()).toEqual({ user_version: SESSION_QUERY_SQLITE_SCHEMA_VERSION })
+    const generation = main.prepare('SELECT global_generation FROM search_state').get() as { global_generation: number }
+    const documents = main.prepare('SELECT rowid AS doc_rowid, session_id, CAST(seq AS INTEGER) AS seq FROM persisted_docs ORDER BY rowid').all()
+    main.close()
+    const keys = new DatabaseSync(`${path}.keys.db`)
+    expect(keys.prepare('PRAGMA application_id').get()).toEqual({ application_id: SESSION_QUERY_SQLITE_KEYS_APPLICATION_ID })
+    expect(keys.prepare('PRAGMA user_version').get()).toEqual({ user_version: SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION })
+    expect(keys.prepare('SELECT doc_rowid, session_id, seq FROM persisted_doc_keys ORDER BY doc_rowid').all()).toEqual(documents)
+    expect(documents).toHaveLength(2)
+    expect(keys.prepare('SELECT main_generation FROM key_state').get()).toEqual({ main_generation: generation.global_generation })
+    keys.close()
+  })
+
+  it('rebuilds a missing or stale sidecar from the main index without rereading unchanged logs', { timeout: 20_000 }, async () => {
+    const path = await temporaryPath()
+    const keysPath = `${path}.keys.db`
+    const changed = header('changed')
+    TestPersistence.reset([
+      { meta: header('unchanged'), events: messageEvents('unchanged needle') },
+      { meta: changed, events: messageEvents('old needle') },
+    ])
+    const first = await persistedOwner({ path })
+    await first.ctx.sessionQuery.searchSessions({ query: 'needle' })
+    await first.close()
+
+    const replaceAndSearch = async (text: string) => {
+      TestPersistence.set({ meta: changed, events: messageEvents(`${text} needle`) })
+      const owner = await persistedOwner({ path })
+      await owner.ctx.sessionQuery.searchSessions({ query: 'needle' })
+      const db = Reflect.get(owner.ctx.sessionQuery, '_db') as DatabaseSync
+      const rows = db.prepare("SELECT text FROM persisted_docs WHERE session_id = 'changed'").all()
+      await owner.close()
+      return rows
+    }
+
+    await rm(keysPath)
+    expect(await replaceAndSearch('missing')).toEqual([{ text: 'missing needle' }])
+
+    // Another index owner writes only the main file and advances its generation.
+    const keys = new DatabaseSync(keysPath)
+    keys.exec('DELETE FROM persisted_doc_keys')
+    keys.close()
+    const main = new DatabaseSync(path)
+    main.exec('UPDATE search_state SET global_generation = global_generation + 1')
+    main.close()
+    expect(await replaceAndSearch('stale')).toEqual([{ text: 'stale needle' }])
+    expect(Object.fromEntries(TestPersistence.reads)).toEqual({ unchanged: 1, changed: 3 })
+  })
+
+  it('honors an explicit keysPath and refuses an unusable sidecar', async () => {
+    const path = await temporaryPath()
+    const keysPath = join(dirname(path), 'nested', 'custom.keys.db')
+    const owner = await liveContext({ path, keysPath })
+    await owner.sessionQuery.searchSessions({ query: 'needle' })
+    await (owner.sessionQuery as SqliteSessionQueryEngine).close()
+    expect(userTables(keysPath)).toEqual(['key_state', 'persisted_doc_keys'])
+    await expect(stat(`${path}.keys.db`)).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const outdated = new DatabaseSync(keysPath)
+    outdated.exec(`PRAGMA user_version = ${SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION + 1}`)
+    outdated.close()
+    const reset = await liveContext({ path, keysPath })
+    await reset.sessionQuery.searchSessions({ query: 'needle' })
+    await (reset.sessionQuery as SqliteSessionQueryEngine).close()
+    const resetKeys = new DatabaseSync(keysPath)
+    expect(resetKeys.prepare('PRAGMA user_version').get()).toEqual({ user_version: SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION })
+    resetKeys.close()
+
+    await expect(liveContext({ path, keysPath: path })).rejects.toThrow(expectCode('SESSION_QUERY_INDEX_FAILED'))
+    const foreignPath = await temporaryPath('foreign.keys.db')
+    const foreign = new DatabaseSync(foreignPath)
+    foreign.exec('PRAGMA application_id = 123')
+    foreign.close()
+    await expect(liveContext({ path, keysPath: foreignPath })).rejects.toThrow(expectCode('SESSION_QUERY_INDEX_FAILED'))
+    const augmented = new DatabaseSync(keysPath)
+    augmented.exec('CREATE TABLE unrelated(value TEXT)')
+    augmented.close()
+    await expect(liveContext({ path, keysPath })).rejects.toThrow(expectCode('SESSION_QUERY_INDEX_FAILED'))
+    const canonicalPath = await temporaryPath('canonical.keys.db')
+    const canonical = new DatabaseSync(canonicalPath)
+    canonical.exec('CREATE TABLE canonical(value TEXT)')
+    canonical.close()
+    await expect(liveContext({ path, keysPath: canonicalPath })).rejects.toThrow(expectCode('SESSION_QUERY_INDEX_FAILED'))
+    expect(() => new SqliteSessionQueryEngine(new Context(), { path, keysPath: ' ' }))
+      .toThrow(expectCode('SESSION_QUERY_INVALID_CONFIG'))
   })
 })
