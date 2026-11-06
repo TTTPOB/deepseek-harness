@@ -1,4 +1,4 @@
-/** Verify the four team-model-selection tarballs through the official CLI and one test-only Loader tree. */
+/** Verify team-model-selection tarballs through the official CLI and one test-only Loader tree. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -7,10 +7,11 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
 import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 
-const USAGE = 'Usage: node scripts/smoke-team-model-selection.mjs <subagent.tgz> <tool-subagent.tgz> <agent-team.tgz> <tool-agent-team.tgz>'
+const USAGE = 'Usage: node scripts/smoke-team-model-selection.mjs <subagent.tgz> <tool-subagent.tgz> <agent-team.tgz> <tool-agent-team.tgz> <client-ui-agent-team.tgz>'
 const expected = plan('team-model-selection').packages
 const tarballs = process.argv.slice(2).map(path => resolve(path))
 assert.equal(tarballs.length, expected.length, USAGE)
@@ -50,6 +51,7 @@ async function openContext(runtime, boot, config) {
     ['session-projection', '@deepseek-ai/dsh-session-projection'],
     ['system-prompt', '@deepseek-ai/dsh-system-prompt', { personaPrefix: '' }],
     ['tools', '@deepseek-ai/dsh-tools'],
+    ['tool-executor', '@deepseek-ai/dsh-tool-executor-native'],
     ['agent', '@deepseek-ai/dsh-agent'],
     ['fs', '@deepseek-ai/dsh-fs-local'],
     ['working-directory', '@deepseek-ai/dsh-working-directory'],
@@ -92,13 +94,23 @@ try {
   const host = await realpath(project.resolve('@deepseek-ai/dsh/package.json'))
   const load = async name => import(pathToFileURL(project.resolve(name)).href)
 
-  // The official Host and the four overridden tarballs share one pnpm peer graph.
+  // The official Host and the overridden tarballs share one pnpm peer graph.
   for (const pkg of expected) {
     const manifest = await realpath(project.resolve(`${pkg.name}/package.json`))
     const metadata = JSON.parse(await readFile(manifest, 'utf8'))
     assert.equal(metadata.name, pkg.name)
     assert.equal(metadata.version, pkg.version)
     assert.match(manifest, /file\+/, `${pkg.name} must resolve from its staged tarball`)
+    if (metadata.dsh?.client) {
+      const entry = metadata.exports['./client']
+      const client = typeof entry === 'string' ? entry : entry.browser ?? entry.default
+      let registered
+      runInNewContext(await readFile(join(dirname(manifest), client), 'utf8'), {
+        window: { __ModuleLoader__: { load(value) { registered = value } } },
+      })
+      assert.equal(registered.id, pkg.name)
+      assert.equal(typeof registered.factory, 'function', 'the packed browser entry registers a loadable module')
+    }
   }
   const { boot } = await load('@deepseek-ai/dsh-app-boot')
   const bootTree = configPath => boot('team-model-selection smoke', configPath, [], undefined, pathToFileURL(host).href)
@@ -190,10 +202,14 @@ try {
   let child
   ctx.on('agent/created', ({ agent }) => { if (agent.id !== lead.id) child = agent })
   let callNumber = 0
-  const execute = (name, args) => ctx.tools.execute({
-    callId: ToolCallId(`team-model-selection-${name}-${++callNumber}`), name, arguments: args,
-    signal: new AbortController().signal, agent: lead,
-  })
+  const execute = async (name, args) => {
+    const batch = await ctx.tools.execute({
+      calls: [{ type: 'tool-call', id: ToolCallId(`team-model-selection-${name}-${++callNumber}`), name, arguments: JSON.stringify(args) }],
+      signal: new AbortController().signal, agent: lead,
+    })
+    assert.equal(batch.results.length, 1)
+    return batch.results[0].result
+  }
   const spawnArgs = name => ({ name, description: 'fixture', prompt: 'work' })
 
   const models = await execute('list_agent_models', { provider: 'mock' })
@@ -228,7 +244,7 @@ try {
   assert.match(text(denied), /not allowed for this Session/)
   assert(!ctx.agentTeams.listMembers(lead).some(member => member.name === 'beta'))
 
-  console.log('Four team-model-selection artifacts resolve through official Host peers; public model-selection helpers, per-call route/effort, preflight before name reservation, and the frozen policy passed. No Host process used.')
+  console.log('Team-model-selection artifacts, including the browser module, resolve through official Host peers; public model-selection helpers, per-call route/effort, preflight before name reservation, and the frozen policy passed. No Host process used.')
 } finally {
   try {
     if (ctx) await ctx.fiber.dispose()

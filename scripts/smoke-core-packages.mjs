@@ -13,7 +13,7 @@ import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 const expected = plan('core').packages
 const names = expected.map(pkg => pkg.name)
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz> <agent-loop.tgz> <ptc-runtime-node.tgz>')
+assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz> <agent-loop.tgz> <ptc-runtime-node.tgz> <tool-executor-ptc.tgz>')
 const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
 const root = await mkdtemp(join(tmpdir(), 'dsh-core-artifact-'))
 const run = (args, cwd = root) => execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), ...args], { cwd, stdio: 'inherit', timeout: 600_000 })
@@ -137,9 +137,18 @@ try {
   const { default: SystemPrompt } = await load('@deepseek-ai/dsh-system-prompt')
   const { default: Tools } = await load('@deepseek-ai/dsh-tools')
   await ctx.plugin(SystemPrompt)
-  await ctx.plugin(Tools, { ptcNativeTools: ['context_compress'] })
-  assert.equal(ctx.tools.isNativeInPtc('context_compress'), true)
-  assert.equal(ctx.tools.isNativeInPtc('ordinary_tool'), false)
+  await ctx.plugin(Tools)
+  const { defineTool } = packages[6]
+  const { ToolCallId } = await load('@deepseek-ai/dsh-llm')
+  const ptcExecutor = await load('@deepseek-ai/dsh-tool-executor-ptc')
+  const calls = []
+  for (const name of ['context_compress', 'ordinary_tool']) {
+    ctx.tools.register(defineTool({
+      name, description: 'Artifact smoke echo', parameters: {},
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      async execute() { calls.push(name); return name },
+    }))
+  }
   ctx.provide('agentTeams', { tryMembership: () => ({ role: 'lead', name: 'lead' }) })
   // Team tools resolve their execution provider only when a teammate is spawned.
   ctx.provide('subagents', { getProvider: () => undefined })
@@ -186,6 +195,15 @@ try {
   for (const executionMode of ['per-call', 'persistent-in-memory']) {
     const fiber = await ctx.plugin(ptcRuntime.default, { executionMode })
     const runtime = ctx.get('ptcRuntime')
+    const executor = await ctx.plugin(ptcExecutor, { ptcNativeTools: ['context_compress'] })
+    calls.length = 0
+    const direct = await ctx.tools.execute({
+      calls: ['context_compress', 'ordinary_tool'].map(name => ({ type: 'tool-call', id: ToolCallId(name), name, arguments: '{}' })),
+      signal: new AbortController().signal,
+    })
+    assert.equal(direct.results[0].result.isError, false, JSON.stringify(direct.results[0].result))
+    assert.equal(direct.results[1].result.error.info.code, 'UNKNOWN_TOOL')
+    assert.deepEqual(calls, ['context_compress'])
     const expression = '@``\n' + rawText + '``'
     const raw = await runtime.run(runtime.resolve({ program: executionMode === 'per-call' ? 'return ' + expression : expression, bindings: [] }))
     assert.equal(raw.value, rawText, executionMode)
@@ -197,6 +215,7 @@ try {
     const preserved = await runtime.run(runtime.resolve({ program: executionMode === 'per-call' ? 'return ' + ordinary : ordinary, bindings: [] }))
     assert.equal(preserved.value, 'a @``b`` c', executionMode)
 
+    await executor.dispose()
     await fiber.dispose()
   }
   console.log('Core artifacts resolve through official Host peers; Config, PTC native exception API, awaited setup, preset leases, Team scope switching/disposal, and PTC raw text with parse locations passed. No personal plugins or Host process used.')
