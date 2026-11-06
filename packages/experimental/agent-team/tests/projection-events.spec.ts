@@ -4,7 +4,10 @@ import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionEventMap, SessionEventType } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { teamProjectionDefinition, teamProjectionView } from '../src/projection.ts'
+import { createTeamProjectionDefinition, teamProjectionView as viewTeam } from '../src/projection.ts'
+const maxMembers = 2
+const teamProjectionDefinition = createTeamProjectionDefinition(maxMembers)
+const teamProjectionView = (state: TeamProjectionState) => viewTeam(state, maxMembers)
 import type { TeamProjectionState, TeamState } from '../src/projection.ts'
 import { TeamId, TeamMessageId, TeamTaskId } from '../src/types.ts'
 import type { TeamMemberSnapshot, TeamMessageSnapshot, TeamTaskSnapshot } from '../src/types.ts'
@@ -494,6 +497,7 @@ describe('Agent Teams projection events', () => {
       const view = teamProjectionView(state)
       expect(teamProjectionDefinition.wire.viewSchema.parse(view)).toEqual(view)
       expect(view).toEqual({
+        maxMembers,
         members: [
           { id: ROOT, name: 'lead', role: 'lead', phase: 'active' },
           { id: CHILD, name: 'worker-a', role: 'teammate', phase: 'active' },
@@ -554,6 +558,7 @@ describe('Agent Teams projection events', () => {
       const lead = ctx.sessions.create(ROOT)
       const other = ctx.sessions.create(SessionId('other-root'))
       expect(ctx.sessionProjections.snapshot(lead).values['agentTeam']).toEqual({
+        maxMembers,
         members: [{ id: ROOT, name: 'lead', role: 'lead', phase: 'active' }],
         tasks: [],
       })

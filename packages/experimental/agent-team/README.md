@@ -29,7 +29,7 @@ Add this package when one agent needs named helpers in a shared working director
 
 ### When to choose it
 
-Choose it for cooperation in one shared workspace with durable roster and task state. Separate working directories, coordination across processes, and automatic task-owner release are unsupported. Durable session storage is required.
+Choose it for cooperation in one shared workspace with durable roster and task state. Separate working directories and coordination across processes are unsupported. Task ownership is released automatically only when its teammate is archived. Durable session storage is required.
 
 ### Smallest working setup
 
@@ -48,7 +48,7 @@ With the tools installed, the model does the rest on request — for example, "c
 
 | Field | Default | Meaning |
 |---|---|---|
-| `maxMembers` | `16` | Maximum teammates a team may ever create, including failed ones |
+| `maxMembers` | `16` | Maximum provisioning and active teammates; failed and archived teammates do not count |
 | `maxTasks` | `256` | Maximum active tasks on the board |
 | `maxMessageBytes` | `65,536` | Maximum size of one sent message |
 | `disposalTimeoutMs` | `5,000` | Time allowed for shutdown cleanup |
@@ -59,9 +59,11 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 Ask the Lead to create a teammate: give it a unique lowercase name such as `reviewer` and describe its job. A teammate starts fresh with no memory of the Lead's conversation, or as a fork that inherits the Lead's completed turns; the creation request chooses which. Teammate names are permanent — even a teammate whose creation failed keeps its name, and no name is ever reused.
 
-The roster shows every member with its role (`lead` or `teammate`) and current status: `running`, `inactive` (no turn is executing, whether loaded or stored), `provisioning`, or `failed`. A member that is not loaded receives its messages when it wakes. A loaded member's row also reports its own latest model — the route recorded by its most recent request, or its creation options before the first request. An unloaded member has no current route, so its row omits `model` rather than borrowing the Lead's.
+The roster shows every member with its role (`lead` or `teammate`) and current status: `running`, `inactive` (no turn is executing, whether loaded or stored), `provisioning`, or `failed` (plus `archived` when explicitly included). A member that is not loaded receives its messages when it wakes. A loaded member's row also reports its own latest model — the route recorded by its most recent request, or its creation options before the first request. An unloaded member has no current route, so its row omits `model` rather than borrowing the Lead's.
 
-Only the Lead can create teammates or interrupt them.
+Only the Lead can create, interrupt, or archive teammates. `archiveTeammate()` drains the resident activation, records `archived`, and releases that teammate's in-progress tasks to pending and unowned; completed task ownership remains intact. Names and Session ids stay reserved, and conversations remain stored. Default member lists omit archived teammates; `listMembers(agent, true)` includes them. Archived teammates cannot receive task assignments.
+
+A Lead message automatically restores an archived teammate only if the configured member limit has room, reports `unarchived: true`, and cold-resumes its original conversation and persisted model selection. At capacity the send changes no state and delivers nothing. Teammates must ask the Lead to restore an archived peer. Restoration does not reclaim released tasks, and there is no separate restore tool.
 
 ### Messages between teammates
 
@@ -103,7 +105,7 @@ The service is built on one separation and three commitments:
 
 - **Durable log, derived state.** The Lead log owns roster and tasks; each target Agent owns its accepted messages.
 - **Process-local ownership.** Continuation delivery owns target locking, cold recovery, and lifecycle authorization.
-- **Explicit authority.** Every service method takes the exact live calling `Agent`; only the Lead spawns, reassigns, or interrupts.
+- **Explicit authority.** Every service method takes the exact live calling `Agent`; only the Lead spawns, reassigns, interrupts, or archives.
 - **Bounds that fail loud.** Every limit is a validated deployment value, and exhaustion reports a typed error instead of reusing an id or name.
 
 The [Agent Teams Agent Note](../../../.agents/notes/implemented/feature/2026-08-05-agent-teams.md) owns the roster, mailbox, task, and shared-checkout decisions. The [runtime-context identity decision](../../../.agents/notes/implemented/architecture/2026-10-13-team-identity-runtime-context.md) owns model-facing identity.
@@ -145,11 +147,11 @@ Roster and task mutations append `team/member` and `team/task` to the exact live
 
 Historical mailbox events and `team-message` sources remain readable, and the projection still reports queued-minus-delivered records. Team never delivers or acknowledges them: a historical message that its target had not recorded stays undelivered.
 
-Mailbox projection and checkpoint admission preserve every decoded JSON field of accepted content outside the locally declared validators, including an own `__proto__` key. Local field checks cover `text`, `reasoning`, `image`, and `tool-call`; accepted unknown tags remain opaque. Team projection cache version 4 rebuilds checkpoints from earlier cache versions from the Session log; the Session format version is unchanged.
+Mailbox projection and checkpoint admission preserve every decoded JSON field of accepted content outside the locally declared validators, including an own `__proto__` key. Local field checks cover `text`, `reasoning`, `image`, and `tool-call`; accepted unknown tags remain opaque. Team projection cache version 5 rebuilds checkpoints from earlier cache versions from the Session log; the Session format version is unchanged.
 
 ### Disposal
 
-The runtime lifecycle tracks sends and complete creation transactions in one operation set. Disposal closes admission, aborts and awaits those operations, then releases the roster’s live children and descendants. Non-Team children remain untouched. Admitted operations share one `disposalTimeoutMs` settlement deadline; each subsequent Team child drain has its own deadline. This value is not a whole-service shutdown bound. Cleanup failures are reported. Team shutdown is independent of projection unregistration; its retained reader follows Session events while admitted work settles.
+The runtime lifecycle tracks sends, archiving, and complete creation transactions in one operation set. Disposal closes admission, aborts and awaits those operations, then releases the roster’s live children and descendants. Non-Team children remain untouched. Admitted operations share one `disposalTimeoutMs` settlement deadline; each subsequent Team child drain has its own deadline. This value is not a whole-service shutdown bound. Cleanup failures are reported. Team shutdown is independent of projection unregistration; its retained reader follows Session events while admitted work settles.
 
 </details>
 
@@ -171,7 +173,7 @@ Read these pages when the package-level contract is not enough. They move from t
 
 ### Browser projection
 
-The `agentTeam` Session projection publishes the Lead Session's durable roster identities and phases, member errors, non-deleted task views, and any `failure` beside the last valid state. Its `apply` replaces only the touched collection; mailbox-only changes retain the client view reference and produce no frame. The [subsystem reference](../../../docs/subsystems/agent-team.md#web-projection) defines the wire types. A failed projection rejects subsequent Team reads and mutations without appending further Team events.
+The `agentTeam` Session projection publishes the Lead Session's durable roster identities and phases, member errors, the configured `maxMembers`, non-deleted task views, and any `failure` beside the last valid state. Its `apply` replaces only the touched collection; mailbox-only changes retain the client view reference and produce no frame. The [subsystem reference](../../../docs/subsystems/agent-team.md#web-projection) defines the wire types. A failed projection rejects subsequent Team reads and mutations without appending further Team events.
 
 The [Web UI](../client-ui-agent-team/README.md) reads the shared Session projections and overlays activity from Session status. Task creation and updates belong to Team agents through the service and model tools. The `./client` export supplies browser-safe roster, task, and projection types.
 
@@ -217,7 +219,7 @@ These limits describe what a team cannot do yet or what needs special operationa
 - **One process and one shared checkout** — members share cwd and observe edits immediately; this package provides no worktree, remote member, merge, or filesystem lock.
 - **Advisory write scopes** — Bash, formatters, code generators, and direct external writers can bypass filesystem version checks; Leads must coordinate ownership and review the final diff.
 - **Flat immutable roster** — only the Lead creates direct teammates; there is no nested Team, rename, deletion, or name reuse.
-- **No automatic ownership release** — inactivity, interruption, process exit, and failed work do not release a task owner.
+- **No inactivity-based ownership release** — only explicit archiving releases in-progress ownership; inactivity, interruption, process exit, and failed work do not.
 - **No send retry guarantee** — Team does not retain or deduplicate new attempts; concurrent processes over one Team are unsupported. Historical queued messages that never reached their target are not delivered.
 
 <a id="dev-note"></a>

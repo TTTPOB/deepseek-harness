@@ -14,7 +14,7 @@ Agent Teams 的公开约定仍处于实验阶段，因此需要显式启用的�
 
 ## Decision
 
-每个普通运行时 Root 都是一个隐式 Team 的 Lead，Team id 等于该 Root 的 `SessionId`。Team 没有 creation event：Lead pseudo-row 由身份直接存在，持久状态从第一条 member、message 或 task event 开始。roster 是扁平结构，最多包含配置数量、不可变且采用小写 kebab-case 的名字。每个 teammate 都是使用预留 Session id 的 continuable 直接 child；只有 Lead 可以创建或 interrupt teammate。roster 外由 provider 管理的普通 subagent 不是 Team member；普通 fork 是新的 Root，继承的 Team 记录会因 ancestor `TeamId` 被排除。
+每个普通运行时 Root 都是一个隐式 Team 的 Lead，Team id 等于该 Root 的 `SessionId`。Team 没有 creation event：Lead pseudo-row 由身份直接存在，持久状态从第一条 member、message 或 task event 开始。roster 是扁平结构，保留不可变的小写 kebab-case 名字。配置只限制 provisioning 与 active 成员数量；[归档决策](2026-11-06-archive-teammates.zh.md)负责名额释放与消息触发的恢复。每个 teammate 都是使用预留 Session id 的 continuable 直接 child；只有 Lead 可以创建或 interrupt teammate。roster 外由 provider 管理的普通 subagent 不是 Team member；普通 fork 是新的 Root，继承的 Team 记录会因 ancestor `TeamId` 被排除。
 
 实现拆分为 `@deepseek-ai/dsh-experimental-agent-team` 与 `@deepseek-ai/dsh-experimental-tool-agent-team`：前者负责 `ctx.agentTeams` 和持久语义，后者负责 scoped schema 与模型指引。每个 Team 工具都声明完整的结果 schema，并把该值渲染为紧凑 JSON，因此编译器会检查每个 `execute` 是否符合对模型的承诺，也没有结果把 token 花在缩进上。部署显式挂载两个插件，并可禁用具有相同模型可见名称的旧 continuable control。共享策略声明 Team 可用，并说明协调责任。两个包都是 `packages/experimental/` 的公开成员；[实验性包参考](../../../../packages/experimental/AGENTS.md)负责发布、依赖隔离与 promotion。
 
@@ -88,6 +88,6 @@ Web panel 读取 Lead Session 的 `agentTeam` 传输投影，因为现有投影�
 
 Lead Session 保留完整 task／member 快照和历史 mailbox 记录。这优先支持可检查的恢复，而不是紧凑增量；deleted 与 delivered 历史在更广泛的 Session 保留策略生效前仍只追加。
 
-active roster 成员可能不驻留，因此 `inactive` 不表示失败，发送可能产生冷恢复延迟。准入失败会拒绝新发送。历史 pending 邮件永远不会被投递。provisioning 失败永久占用其名称和成员槽位。
+active roster 成员可能不驻留，因此 `inactive` 不表示失败，发送可能产生冷恢复延迟。准入失败会拒绝新发送。历史 pending 邮件永远不会被投递。provisioning 失败永久保留其名称，但不占在岗名额。
 
 协调可以降低 checkout 冲突概率，但无法消除文件系统 CAS 工具之外的写入。最终 diff 与测试仍是 Lead 的集成边界。

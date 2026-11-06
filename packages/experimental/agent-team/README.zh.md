@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 何时选择
 
-适用于在同一共享工作区协作并保留持久 roster 和任务状态。不支持独立工作目录、跨进程协调和自动释放任务 owner。需要持久会话存储。
+适用于在同一共享工作区协作并保留持久 roster 和任务状态。不支持独立工作目录和跨进程协调。只有归档队员才会自动释放其进行中任务的 owner。需要持久会话存储。
 
 ### 最小工作配置
 
@@ -48,7 +48,7 @@ kind: "package-reference"
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `maxMembers` | `16` | 一支团队最多可创建的 teammate 数，包括失败的 |
+| `maxMembers` | `16` | provisioning 和 active 队员的数量上限；failed 和 archived 不占名额 |
 | `maxTasks` | `256` | 任务板上最多的活动任务数 |
 | `maxMessageBytes` | `65,536` | 单条发送消息的最大尺寸 |
 | `disposalTimeoutMs` | `5,000` | 关闭清理允许的时间 |
@@ -59,9 +59,11 @@ kind: "package-reference"
 
 请 Lead 创建 teammate：给它一个唯一的小写名字（例如 `reviewer`）并描述其职责。teammate 可以 fresh 启动（不携带 Lead 对话的任何记忆），也可以作为 fork 启动（继承 Lead 已完成的轮次）；创建请求决定用哪种。teammate 名字是永久的——即使创建失败的 teammate 也保留其名字，任何名字都不会被复用。
 
-roster 显示每个成员的职责（`lead` 或 `teammate`）与当前状态：`running`、`inactive`（当前没有执行轮次，包括已加载和仅存储的成员）、`provisioning` 或 `failed`。未加载的成员会在唤醒后收到其消息。已加载成员的 roster 行还会报告其自身最新模型——最近一次请求记录的模型，或在首次请求前使用其创建选项。未加载成员没有当前路由，因此该行省略 `model`，而不是借用 Lead 的路由。
+roster 显示每个成员的职责（`lead` 或 `teammate`）与当前状态：`running`、`inactive`（当前没有执行轮次，包括已加载和仅存储的成员）、`provisioning` 或 `failed`（显式包含归档成员时还有 `archived`）。未加载的成员会在唤醒后收到其消息。已加载成员的 roster 行还会报告其自身最新模型——最近一次请求记录的模型，或在首次请求前使用其创建选项。未加载成员没有当前路由，因此该行省略 `model`，而不是借用 Lead 的路由。
 
-只有 Lead 可以创建 teammate 或中断它们。
+只有 Lead 可以创建、中断或归档队员。`archiveTeammate()` 先释放常驻 activation，再记录 `archived`，并把该队员进行中的任务释放为无主 pending；已完成任务的归属保持不变。名字与 Session id 仍被保留，会话仍在存储中。默认成员列表省略已归档队员，`listMembers(agent, true)` 则包含他们。不能把任务分配给已归档队员。
+
+Lead 给已归档队员发消息时，仅在配置的成员上限还有空位时自动恢复，返回 `unarchived: true`，并冷恢复原会话与持久化模型选择。满员时不改变状态、不投递消息。队员必须请 Lead 恢复已归档同伴。恢复不重新领取此前释放的任务，也没有单独的恢复工具。
 
 ### teammate 之间的消息
 
@@ -103,7 +105,7 @@ Lead 可以停止 teammate 的当前轮次，而不会删除其排队的消息�
 
 - **持久日志，派生状态。** Lead 日志拥有 roster 与任务，各目标 Agent 拥有其接收的消息。
 - **进程内归属。** Continuation 投递拥有目标锁、冷恢复和生命周期授权。
-- **显式权限。** 每个服务方法都接收确切的实时调用方 `Agent`；只有 Lead 可以 spawn、reassign 或 interrupt。
+- **显式权限。** 每个服务方法都接收确切的实时调用方 `Agent`；只有 Lead 可以 spawn、reassign、interrupt 或 archive。
 - **超出上限时明确失败。** 每个限制都是经过校验的部署值，耗尽时报告类型化错误，而不是复用 id 或名字。
 
 [Agent Teams Agent Note](../../../.agents/notes/implemented/feature/2026-08-05-agent-teams.zh.md)负责 roster、mailbox、任务与共享 checkout 决策。[runtime-context 身份决策](../../../.agents/notes/implemented/architecture/2026-10-13-team-identity-runtime-context.zh.md)负责面向模型的身份。
@@ -145,11 +147,11 @@ roster 与任务变更将 `team/member` 和 `team/task` 追加到精确的 live 
 
 历史 mailbox 事件与 `team-message` source 仍可读取，投影仍报告 queued-minus-delivered 记录。Team 不会投递或确认这些记录：目标尚未记录的历史消息保持未投递。
 
-Mailbox 投影与 checkpoint 准入保留本地声明的校验器之外获准内容中全部已解码 JSON 字段，包括自有 `__proto__` 键。本地字段检查覆盖 `text`、`reasoning`、`image` 和 `tool-call`；获准的未知标签保持不透明。Team 投影缓存版本 4 从 Session 日志重建较早缓存版本的 checkpoint；Session 格式版本保持不变。
+Mailbox 投影与 checkpoint 准入保留本地声明的校验器之外获准内容中全部已解码 JSON 字段，包括自有 `__proto__` 键。本地字段检查覆盖 `text`、`reasoning`、`image` 和 `tool-call`；获准的未知标签保持不透明。Team 投影缓存版本 5 从 Session 日志重建较早缓存版本的 checkpoint；Session 格式版本保持不变。
 
 ### Dispose
 
-运行时生命周期用同一个操作集合跟踪发送和完整创建事务。dispose 关闭准入，中止并等待这些操作，然后释放 roster 中的 live child 及其后代。非 Team child 不受影响。已获准操作共享一个 `disposalTimeoutMs` 等待期限；随后每个 Team 的 child drain 各有独立期限。此值不是整个服务关闭的总时限。清理失败会明确报告。 Team 停机与投影注销独立；在已获准操作收尾期间，保留的 reader 仍会根据 Session 事件更新读取结果。
+运行时生命周期用同一个操作集合跟踪发送、归档和完整创建事务。dispose 关闭准入，中止并等待这些操作，然后释放 roster 中的 live child 及其后代。非 Team child 不受影响。已获准操作共享一个 `disposalTimeoutMs` 等待期限；随后每个 Team 的 child drain 各有独立期限。此值不是整个服务关闭的总时限。清理失败会明确报告。 Team 停机与投影注销独立；在已获准操作收尾期间，保留的 reader 仍会根据 Session 事件更新读取结果。
 
 </details>
 
@@ -171,7 +173,7 @@ Mailbox 投影与 checkpoint 准入保留本地声明的校验器之外获准内
 
 ### 浏览器投影
 
-`agentTeam` Session 投影发布 Lead Session 的持久成员身份与阶段、成员错误、未删除任务视图，以及最后有效状态旁的 `failure`。其 `apply` 只替换被触及的集合；仅邮箱的变化保留客户端视图引用，不产生 frame。[子系统参考](../../../docs/subsystems/agent-team.zh.md#web-projection) 定义传输类型。 投影失败后，后续 Team 读取和修改均报错，不再追加 Team 事件。
+`agentTeam` Session 投影发布 Lead Session 的持久成员身份与阶段、成员错误、配置的 `maxMembers`、未删除任务视图，以及最后有效状态旁的 `failure`。其 `apply` 只替换被触及的集合；仅邮箱的变化保留客户端视图引用，不产生 frame。[子系统参考](../../../docs/subsystems/agent-team.zh.md#web-projection) 定义传输类型。 投影失败后，后续 Team 读取和修改均报错，不再追加 Team 事件。
 
 [Web UI](../client-ui-agent-team/README.zh.md) 读取共享 Session 投影，并从 Session 状态叠加活动信息。任务创建与更新由 Team agent 通过服务和模型工具完成。`./client` 导出可供浏览器使用的 roster、任务与投影类型。
 
@@ -217,7 +219,7 @@ Peer 消息追加在 target 可复用历史前缀之后。冷恢复会先复用�
 - **单进程、共享 checkout**——成员共享 cwd，修改立即可见；本包不提供 worktree、远端成员、merge 或文件锁。
 - **write scope 仅作提示**——Bash、formatter、代码生成器与直接外部写入可以绕过文件版本检查；Lead 必须协调 owner 并检查最终 diff。
 - **扁平且不可变的 roster**——只有 Lead 可以创建直接 teammate；不支持嵌套 Team、重命名、删除或名字复用。
-- **不会自动释放 owner**——成员不活动、interrupt、进程退出与工作失败都不会释放任务 owner。
+- **不因不活动而释放 owner**——只有显式归档才会释放进行中的任务归属；成员不活动、interrupt、进程退出与工作失败都不会。
 - **无发送重试保证**——Team 不保留新尝试，也不对其去重；不支持多个进程同时操作一个 Team。从未到达目标的历史排队消息不会被投递。
 
 <a id="dev-note"></a>

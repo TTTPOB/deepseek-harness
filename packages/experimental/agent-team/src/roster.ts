@@ -47,6 +47,9 @@ export function resolveActiveMember(
   const name = rawName.trim()
   if (name === 'lead') return { id: root.id, name }
   const member = state.members.find(candidate => candidate.name === name)
+  if (member?.phase === 'archived') {
+    throw new TeamError(`teammate "${name}" is archived; ask the Team Lead to send it a message first`, 'TEAM_MEMBER_ARCHIVED')
+  }
   if (member === undefined || member.phase !== 'active') {
     throw new TeamError(`active teammate "${name}" not found`, 'TEAM_MEMBER_NOT_FOUND')
   }
@@ -59,7 +62,7 @@ export class TeamRoster {
    * @param ctx - Team service context with Agent, Session, persistence, and subagent services.
    * @param journal - authoritative Lead-log transaction owner.
    * @param lifecycle - shared Team runtime admission cutoff.
-   * @param maxMembers - maximum immutable roster entries per Team.
+   * @param maxMembers - maximum provisioning and active teammates per Team.
    */
   constructor(
     private readonly ctx: Context,
@@ -121,9 +124,10 @@ export class TeamRoster {
   /**
    * List the runtime-enriched roster visible to one Team member.
    * @param membership - exact caller membership resolved by this roster.
-   * @returns Lead and teammate rows in creation order.
+   * @param includeArchived - include archived teammates when explicitly requested.
+   * @returns Lead and visible teammate rows in creation order.
    */
-  list(membership: TeamMembership): TeamMemberView[] {
+  list(membership: TeamMembership, includeArchived = false): TeamMemberView[] {
     const { root } = membership
     const state = this.journal.state(root)
     const leadModel = latestModel(root)
@@ -136,25 +140,8 @@ export class TeamRoster {
       diagnostics: [],
     }]
     for (const member of state.members) {
-      const live = this.ctx.agents.get(member.id)
-      // A teammate's model comes from its own Agent only. An unloaded child
-      // has no current route, and the Lead's route describes no other member.
-      const model = latestModel(live)
-      result.push({
-        id: member.id,
-        name: member.name,
-        role: 'teammate',
-        status: member.phase === 'failed'
-          ? 'failed'
-          : member.phase === 'provisioning'
-            ? 'provisioning'
-            : availability(live),
-        description: member.description,
-        provider: member.provider,
-        context: member.context,
-        ...model === undefined ? {} : { model },
-        diagnostics: member.error === undefined ? [] : [member.error],
-      })
+      if (member.phase === 'archived' && !includeArchived) continue
+      result.push(this.memberView(member))
     }
     return result
   }
@@ -228,6 +215,74 @@ export class TeamRoster {
     await this.lifecycle.withTimeout(this.ctx.subagents.drainChildren(root, childIds))
   }
 
+  /**
+   * Drain and archive one teammate, releasing its unfinished shared work.
+   * @param caller - exact live Team Lead.
+   * @param targetName - durable teammate name.
+   * @returns the archived roster row.
+   */
+  async archive(caller: Agent, targetName: string): Promise<TeamMemberView> {
+    if (this.lifecycle.disposed) throw new TeamError('Agent Teams service is disposing', 'TEAM_DISPOSED')
+    return await this.lifecycle.track(this.archiveAdmitted(caller, targetName))
+  }
+
+  private async archiveAdmitted(caller: Agent, targetName: string): Promise<TeamMemberView> {
+    const membership = this.membership(caller)
+    if (membership.role !== 'lead') throw new TeamError('only the Team Lead can archive teammates', 'TEAM_LEAD_REQUIRED')
+    const { root } = membership
+    const state = this.journal.state(root)
+    const member = state.members.find(candidate => candidate.name === targetName.trim())
+    if (member === undefined) throw new TeamError(`teammate "${targetName}" not found`, 'TEAM_MEMBER_NOT_FOUND')
+    if (member.phase === 'provisioning') throw new TeamError('teammate is still provisioning', 'TEAM_INVALID_TARGET')
+    if (member.phase === 'archived') return this.memberView({ ...member, phase: 'archived' })
+    await this.stopTeammates(root, [member.id])
+    return await this.journal.transact(root.id, async () => {
+      await this.journal.appendAndFlush(root, 'team/member', {
+        version: 2, teamId: membership.id, member: { ...member, phase: 'archived' },
+      })
+      for (const task of this.journal.state(root).tasks) {
+        if (task.ownerId !== member.id || task.status !== 'in_progress') continue
+        const { ownerId: _ownerId, ...unowned } = task
+        await this.journal.appendAndFlush(root, 'team/task', {
+          version: 2, teamId: membership.id,
+          task: { ...unowned, status: 'pending', revision: task.revision + 1 },
+        })
+      }
+      return this.memberView({ ...member, phase: 'archived' })
+    })
+  }
+
+  /**
+   * Restore an archived target only when the Lead dispatches new work.
+   * @param membership - exact sender membership.
+   * @param targetName - durable member name.
+   * @returns whether this send restored the target.
+   */
+  async unarchiveForMessage(membership: TeamMembership, targetName: string): Promise<boolean> {
+    const { root } = membership
+    if (!this.journal.state(root).members.some(member => member.name === targetName.trim() && member.phase === 'archived')) return false
+    return await this.journal.transact(root.id, async () => {
+      const state = this.journal.state(root)
+      const member = state.members.find(candidate => candidate.name === targetName.trim())
+      if (member?.phase !== 'archived') return false
+      if (membership.role !== 'lead') {
+        throw new TeamError(`teammate "${member.name}" is archived; ask the Team Lead to restore it`, 'TEAM_MEMBER_ARCHIVED')
+      }
+      this.assertCapacity(state)
+      await this.journal.appendAndFlush(root, 'team/member', {
+        version: 2, teamId: membership.id, member: { ...member, phase: 'active' },
+      })
+      return true
+    })
+  }
+
+  private assertCapacity(state: TeamState): void {
+    const occupied = state.members.filter(member => member.phase === 'provisioning' || member.phase === 'active').length
+    if (occupied >= this.maxMembers) {
+      throw new TeamError(`member limit ${this.maxMembers} reached; archive another teammate first`, 'TEAM_MEMBER_LIMIT')
+    }
+  }
+
   /** Perform one creation admitted before the Team runtime disposal cutoff. */
   private async spawnAdmitted(
     caller: Agent,
@@ -257,9 +312,7 @@ export class TeamRoster {
       if (state.members.some(member => member.name === name)) {
         throw new TeamError(`teammate name "${name}" was already used in this Team`, 'TEAM_MEMBER_NAME_TAKEN')
       }
-      if (state.members.length >= this.maxMembers) {
-        throw new TeamError(`Team member limit ${this.maxMembers} reached`, 'TEAM_MEMBER_LIMIT')
-      }
+      this.assertCapacity(state)
       await this.journal.appendAndFlush(root, 'team/member', { version: 2, teamId: TeamId(root.id), member })
     })
 
@@ -420,20 +473,20 @@ export class TeamRoster {
     }
   }
 
-  /** Build one runtime member row after successful creation. */
-  private memberView(member: TeamMemberSnapshot & { readonly phase: 'active' }): TeamMemberView {
+  /** Build one roster row from its durable phase and its own live route. */
+  private memberView(member: TeamMemberSnapshot): TeamMemberView {
     const live = this.ctx.agents.get(member.id)
     const model = latestModel(live)
     return {
       id: member.id,
       name: member.name,
       role: 'teammate',
-      status: availability(live),
+      status: member.phase === 'active' ? availability(live) : member.phase,
       description: member.description,
       provider: member.provider,
       context: member.context,
       ...model === undefined ? {} : { model },
-      diagnostics: [],
+      diagnostics: member.error === undefined ? [] : [member.error],
     }
   }
 

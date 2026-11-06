@@ -18,7 +18,8 @@ import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-a
 import { mountWorkingDirectoryFixture } from '../../../subagent/subagent/tests/working-directory-fixture.ts'
 import TeamService, { TeamError, TeamId, TeamMessageId, TeamTaskId } from '../src/index.ts'
 import { TeamRuntimeLifecycle } from '../src/lifecycle.ts'
-import { teamProjectionDefinition } from '../src/projection.ts'
+import { createTeamProjectionDefinition } from '../src/projection.ts'
+const teamProjectionDefinition = createTeamProjectionDefinition(2)
 import type { TeamMemberSnapshot, TeamMessageSnapshot, TeamTaskSnapshot } from '../src/index.ts'
 import { TestSessionQuery } from './test-session-query.ts'
 
@@ -140,6 +141,87 @@ async function waitRunning(ctx: Context, id: SessionId): Promise<Agent> {
     return agent!
   }, { timeout: 5_000 })
 }
+
+describe('Team archiving', () => {
+  it('releases capacity and unfinished tasks without reusing names or losing completed ownership', async () => {
+    const maxMembers = 1
+    const { ctx, lead } = await setup(['hang', textResponse('replacement done')], { maxMembers })
+    const started = await spawn(ctx, lead, 'archived-worker')
+    const worker = await waitRunning(ctx, started.member.id)
+    const pending = await ctx.agentTeams.createTask(lead, { subject: 'unfinished', description: 'resume later' })
+    const claimed = await ctx.agentTeams.updateTask(worker, { taskId: pending.id, expectedRevision: pending.revision, action: 'claim' })
+    const finished = await ctx.agentTeams.createTask(lead, { subject: 'finished', description: 'keep ownership' })
+    const owned = await ctx.agentTeams.updateTask(worker, { taskId: finished.id, expectedRevision: finished.revision, action: 'claim' })
+    const complete = await ctx.agentTeams.updateTask(worker, { taskId: owned.id, expectedRevision: owned.revision, action: 'complete' })
+    const archived = await ctx.agentTeams.archiveTeammate(lead, started.member.name)
+    expect(archived).toMatchObject({ id: worker.id, name: started.member.name, status: 'archived' })
+    expect(ctx.agents.get(worker.id)).toBeUndefined()
+    expect(ctx.agentTeams.listMembers(lead).map(row => row.name)).toEqual(['lead'])
+    expect(ctx.agentTeams.listMembers(lead, true)).toContainEqual(expect.objectContaining({ id: worker.id, status: 'archived' }))
+    const released = ctx.agentTeams.getTask(lead, pending.id)
+    expect(released).toMatchObject({ revision: claimed.revision + 1, status: 'pending', ready: true })
+    expect(released).not.toHaveProperty('ownerName')
+    expect(ctx.agentTeams.getTask(lead, complete.id)).toEqual(complete)
+    await expect(ctx.agentTeams.updateTask(lead, {
+      taskId: released.id, expectedRevision: released.revision, action: 'reassign', owner: started.member.name,
+    })).rejects.toMatchObject({ code: 'TEAM_MEMBER_ARCHIVED' })
+    await expect(spawn(ctx, lead, started.member.name)).rejects.toMatchObject({ code: 'TEAM_MEMBER_NAME_TAKEN' })
+    const replacement = await spawn(ctx, lead, 'replacement')
+    await waitNoAgent(ctx, replacement.member.id)
+    expect(ctx.agentTeams.listMembers(lead).filter(row => row.role === 'teammate')).toHaveLength(maxMembers)
+    const wire = ctx.sessionProjections.snapshot(lead.session).values.agentTeam
+    expect(wire?.maxMembers).toBe(maxMembers)
+    expect(wire?.members).toContainEqual(expect.objectContaining({ phase: 'archived' }))
+  })
+
+  it('rejects automatic restoration at capacity without changing either log, member phase, or tasks', async () => {
+    const maxMembers = 1
+    const { ctx, lead } = await setup([textResponse('old'), textResponse('current')], { maxMembers })
+    const old = await spawn(ctx, lead, 'old-worker')
+    await waitNoAgent(ctx, old.member.id)
+    const task = await ctx.agentTeams.createTask(lead, { subject: 'released work', description: 'remains available' })
+    await ctx.agentTeams.updateTask(lead, { taskId: task.id, expectedRevision: task.revision, action: 'reassign', owner: old.member.name })
+    await ctx.agentTeams.archiveTeammate(lead, old.member.name)
+    const current = await spawn(ctx, lead, 'current-worker')
+    await waitNoAgent(ctx, current.member.id)
+    const before = durable(lead)
+    const count = lead.session.snapshotEvents().length
+    const childEvents = await storedEvents(ctx, old.member.id)
+    await expect(ctx.agentTeams.sendMessage(lead, { target: old.member.name, content: content('not delivered'), signal: SIGNAL }))
+      .rejects.toThrow(`member limit ${maxMembers} reached; archive another teammate first`)
+    expect(durable(lead)).toEqual(before)
+    expect(lead.session.snapshotEvents()).toHaveLength(count)
+    expect(await storedEvents(ctx, old.member.id)).toEqual(childEvents)
+    expect(ctx.agents.get(old.member.id)).toBeUndefined()
+  })
+
+  it('denies teammate archiving and messages to archived peers', async () => {
+    const { ctx, lead } = await setup(['hang', textResponse('peer done')])
+    const sender = await spawn(ctx, lead, 'sender')
+    const caller = await waitRunning(ctx, sender.member.id)
+    const peer = await spawn(ctx, lead, 'peer')
+    await waitNoAgent(ctx, peer.member.id)
+    await expect(ctx.agentTeams.archiveTeammate(caller, peer.member.name)).rejects.toMatchObject({ code: 'TEAM_LEAD_REQUIRED' })
+    expect(durable(lead).members.find(member => member.id === peer.member.id)?.phase).toBe('active')
+    await ctx.agentTeams.archiveTeammate(lead, peer.member.name)
+    const before = lead.session.snapshotEvents().length
+    await expect(ctx.agentTeams.sendMessage(caller, { target: peer.member.name, content: content('wake up'), signal: SIGNAL }))
+      .rejects.toThrow('ask the Team Lead')
+    expect(lead.session.snapshotEvents()).toHaveLength(before)
+    expect(durable(lead).members.find(member => member.id === peer.member.id)?.phase).toBe('archived')
+    ctx.agentTeams.interrupt(lead, sender.member.name)
+    await waitNoAgent(ctx, caller.id)
+  })
+
+  it('does not count failed provisioning against the active member limit', async () => {
+    const { ctx, lead } = await setup([textResponse('new worker done')], { maxMembers: 1 })
+    vi.spyOn(ctx.subagents, 'startActivation').mockRejectedValueOnce(new Error('provider unavailable'))
+    await expect(spawn(ctx, lead, 'failed-worker')).rejects.toThrow('provider unavailable')
+    const replacement = await spawn(ctx, lead, 'healthy-worker')
+    await waitNoAgent(ctx, replacement.member.id)
+    expect(ctx.agentTeams.listMembers(lead)).toContainEqual(expect.objectContaining({ name: 'failed-worker', status: 'failed' }))
+  })
+})
 
 describe('Team identity and provisioning', () => {
   it('rejects reads and mutations after a Team projection fails', async () => {
@@ -334,8 +416,8 @@ describe('Team identity and provisioning', () => {
     if (member !== undefined) await waitNoAgent(ctx, member.id)
   })
 
-  it('records failed provisioning durably, reserves its name, and counts it against the limit', async () => {
-    const { ctx, lead } = await setup([], { maxMembers: 1 })
+  it('records failed provisioning durably and reserves its name without occupying capacity', async () => {
+    const { ctx, lead } = await setup([textResponse('replacement done')], { maxMembers: 1 })
     await expect(spawn(ctx, lead, 'failed-worker', { provider: 'missing' })).rejects.toThrow()
 
     expect(ctx.agentTeams.listMembers(lead)[1]).toMatchObject({
@@ -344,7 +426,8 @@ describe('Team identity and provisioning', () => {
       provider: 'missing',
     })
     await expect(spawn(ctx, lead, 'failed-worker')).rejects.toMatchObject({ code: 'TEAM_MEMBER_NAME_TAKEN' })
-    await expect(spawn(ctx, lead, 'other-worker')).rejects.toMatchObject({ code: 'TEAM_MEMBER_LIMIT' })
+    const replacement = await spawn(ctx, lead, 'other-worker')
+    await waitNoAgent(ctx, replacement.member.id)
   })
 
   it('records non-Error provider failures and contains a reversed provisioning settlement race', async () => {

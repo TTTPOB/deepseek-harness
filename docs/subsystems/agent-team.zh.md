@@ -21,7 +21,7 @@ interface TeamMemberSnapshot {
 }
 ```
 
-每个 member 都从 `provisioning` 开始，并且只到达一个终态 roster phase：`active` 或 `failed`。roster 的 `running`／`inactive` 状态单独派生，绝不会重写该记录。
+每个 member 从 `provisioning` 开始，结算为 `active` 或 `failed`。Lead 可将这两种已结算阶段改为 `archived`；名额充足时 Lead 发消息可把 `archived` 恢复为 `active`。只有 provisioning 与 active 成员占名额。roster 的 `running`／`inactive` 状态单独派生，绝不会重写该记录。
 
 ## 消息与历史 mailbox
 
@@ -114,6 +114,8 @@ interface TeamTaskView {
  * record; members and tasks then stay at the last valid state.
  */
 interface TeamProjection {
+  /** Configured maximum number of provisioning and active teammates. */
+  readonly maxMembers: number
   readonly members: TeamMemberProjection[]
   readonly tasks: TeamTaskView[]
   readonly failure?: string
@@ -149,9 +151,18 @@ membership(agent: Agent): TeamMembership
 /**
  * List the runtime-enriched roster visible to one Team member.
  * @param agent - exact live Team member.
- * @returns Lead and teammate rows in creation order.
+ * @param includeArchived - include archived teammates when explicitly requested.
+ * @returns Lead and visible teammate rows in creation order.
  */
-listMembers(agent: Agent): TeamMemberView[]
+listMembers(agent: Agent, includeArchived: boolean = false): TeamMemberView[]
+
+/**
+ * Archive a teammate without deleting its identity or conversation.
+ * @param caller - exact live Team Lead.
+ * @param targetName - durable teammate name.
+ * @returns the archived roster row after its in-progress tasks have been released.
+ */
+async archiveTeammate(caller: Agent, targetName: string): Promise<TeamMemberView>
 
 /**
  * Create one named, continuable direct child of the Team Lead.

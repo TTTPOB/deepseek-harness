@@ -21,7 +21,7 @@ interface TeamMemberSnapshot {
 }
 ```
 
-Every member starts in `provisioning` and reaches exactly one terminal roster phase, `active` or `failed`. Roster `running`/`inactive` status is derived separately and never rewrites this record.
+Every member starts in `provisioning` and settles to `active` or `failed`. The Lead can move either settled phase to `archived`; a Lead message can restore `archived` to `active` when capacity permits. Only provisioning and active members occupy capacity. Roster `running`/`inactive` status is derived separately and never rewrites this record.
 
 ## Messages and historical mailbox
 
@@ -114,6 +114,8 @@ interface TeamTaskView {
  * record; members and tasks then stay at the last valid state.
  */
 interface TeamProjection {
+  /** Configured maximum number of provisioning and active teammates. */
+  readonly maxMembers: number
   readonly members: TeamMemberProjection[]
   readonly tasks: TeamTaskView[]
   readonly failure?: string
@@ -149,9 +151,18 @@ membership(agent: Agent): TeamMembership
 /**
  * List the runtime-enriched roster visible to one Team member.
  * @param agent - exact live Team member.
- * @returns Lead and teammate rows in creation order.
+ * @param includeArchived - include archived teammates when explicitly requested.
+ * @returns Lead and visible teammate rows in creation order.
  */
-listMembers(agent: Agent): TeamMemberView[]
+listMembers(agent: Agent, includeArchived: boolean = false): TeamMemberView[]
+
+/**
+ * Archive a teammate without deleting its identity or conversation.
+ * @param caller - exact live Team Lead.
+ * @param targetName - durable teammate name.
+ * @returns the archived roster row after its in-progress tasks have been released.
+ */
+async archiveTeammate(caller: Agent, targetName: string): Promise<TeamMemberView>
 
 /**
  * Create one named, continuable direct child of the Team Lead.

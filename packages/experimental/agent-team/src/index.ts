@@ -10,7 +10,7 @@ import { TeamActivity } from './activity.ts'
 import { errorMessage, TeamError } from './error.ts'
 import { TeamJournal } from './journal.ts'
 import { TeamRuntimeLifecycle } from './lifecycle.ts'
-import { teamProjectionDefinition } from './projection.ts'
+import { createTeamProjectionDefinition } from './projection.ts'
 import { resolveActiveMember, TeamRoster } from './roster.ts'
 import type { TeamMembership } from './roster.ts'
 import { TeamTaskBoard } from './task-board.ts'
@@ -90,7 +90,7 @@ export class TeamService extends Service {
 
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
-    const teamProjectionHandle = await ctx.sessionProjections.register(teamProjectionDefinition)
+    const teamProjectionHandle = await ctx.sessionProjections.register(createTeamProjectionDefinition(this.config.maxMembers))
     this.journal = new TeamJournal(ctx, teamProjectionHandle, (root) => { this.activity.notify(TeamId(root.id)) })
     this.roster = new TeamRoster(ctx, this.journal, this.lifecycle, this.config.maxMembers)
     this.tasks = new TeamTaskBoard(this.journal, this.config.maxTasks)
@@ -116,10 +116,21 @@ export class TeamService extends Service {
   /**
    * List the runtime-enriched roster visible to one Team member.
    * @param agent - exact live Team member.
-   * @returns Lead and teammate rows in creation order.
+   * @param includeArchived - include archived teammates when explicitly requested.
+   * @returns Lead and visible teammate rows in creation order.
    */
-  listMembers(agent: Agent): TeamMemberView[] {
-    return this.roster.list(this.roster.membership(agent))
+  listMembers(agent: Agent, includeArchived: boolean = false): TeamMemberView[] {
+    return this.roster.list(this.roster.membership(agent), includeArchived)
+  }
+
+  /**
+   * Archive a teammate without deleting its identity or conversation.
+   * @param caller - exact live Team Lead.
+   * @param targetName - durable teammate name.
+   * @returns the archived roster row after its in-progress tasks have been released.
+   */
+  async archiveTeammate(caller: Agent, targetName: string): Promise<TeamMemberView> {
+    return await this.roster.archive(caller, targetName)
   }
 
   /**
@@ -221,8 +232,6 @@ export class TeamService extends Service {
     const membership = this.roster.membership(caller)
     request.signal.throwIfAborted()
     const { root } = membership
-    const target = resolveActiveMember(root, this.journal.state(root), request.target)
-    if (target.id === caller.id) throw new TeamError('a Team member cannot message itself', 'TEAM_SELF_MESSAGE')
     const content = [
       { type: 'text' as const, text: `Team message from ${membership.name}:` },
       ...structuredClone(request.content),
@@ -230,6 +239,9 @@ export class TeamService extends Service {
     if (Buffer.byteLength(JSON.stringify(content), 'utf8') > this.config.maxMessageBytes) {
       throw new TeamError(`team message exceeds ${this.config.maxMessageBytes} bytes`, 'TEAM_MESSAGE_TOO_LARGE')
     }
+    const unarchived = await this.roster.unarchiveForMessage(membership, request.target)
+    const target = resolveActiveMember(root, this.journal.state(root), request.target)
+    if (target.id === caller.id) throw new TeamError('a Team member cannot message itself', 'TEAM_SELF_MESSAGE')
     const source = { kind: 'agent-message' as const, form: 'relay' as const, senderSessionId: caller.id }
     let messageId
     if (target.id === root.id) {
@@ -240,7 +252,13 @@ export class TeamService extends Service {
       messageId = await steerHostSubagentPrompt(this.ctx.subagents, root, target.id, content, source, request.signal)
     }
     this.activity.notify(membership.id)
-    return { messageId }
+    return {
+      messageId,
+      ...unarchived ? {
+        unarchived: true as const,
+        message: `teammate "${target.name}" was archived and has been unarchived automatically; it now counts toward the member limit.`,
+      } : {},
+    }
   }
 
   /** Queue one contained provisioning reconciliation after publication has unwound. */

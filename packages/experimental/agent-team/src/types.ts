@@ -42,7 +42,7 @@ export function TeamMessageId(id: string): TeamMessageId {
 }
 
 /** Durable teammate lifecycle. */
-export type TeamMemberPhase = 'provisioning' | 'active' | 'failed'
+export type TeamMemberPhase = 'provisioning' | 'active' | 'failed' | 'archived'
 
 /** Whole durable value written on every teammate lifecycle change. */
 export interface TeamMemberSnapshot {
@@ -60,7 +60,7 @@ export interface TeamMemberView {
   readonly id: SessionId
   readonly name: string
   readonly role: 'lead' | 'teammate'
-  readonly status: 'running' | 'inactive' | 'provisioning' | 'failed'
+  readonly status: 'running' | 'inactive' | 'provisioning' | 'failed' | 'archived'
   readonly description?: string
   readonly provider?: string
   readonly context?: 'fresh' | 'fork'
@@ -113,6 +113,8 @@ export interface TeamMemberProjection {
  * record; members and tasks then stay at the last valid state.
  */
 export interface TeamProjection {
+  /** Configured maximum number of provisioning and active teammates. */
+  readonly maxMembers: number
   readonly members: TeamMemberProjection[]
   readonly tasks: TeamTaskView[]
   readonly failure?: string
@@ -151,7 +153,7 @@ declare module '@deepseek-ai/dsh-llm' {
 
 /** Team-service deployment limits. */
 export interface Config {
-  /** Maximum immutable teammate names retained by one Team. */
+  /** Maximum provisioning and active teammates in one Team. */
   readonly maxMembers?: number
   /** Maximum non-deleted tasks retained by one Team. */
   readonly maxTasks?: number
@@ -208,6 +210,8 @@ export interface SendTeamMessageRequest {
 /** Target inbox acceptance under ordinary Agent persistence; no Team retry or deduplication. */
 export interface SendTeamMessageResult {
   readonly messageId: MessageId
+  readonly unarchived?: true
+  readonly message?: string
 }
 
 /** Input for creating one shared task. */

@@ -70,7 +70,7 @@ const teamMemberSnapshotSchema = z.object({
   description: z.string(),
   provider: z.string(),
   context: z.enum(['fresh', 'fork']),
-  phase: z.enum(['provisioning', 'active', 'failed']),
+  phase: z.enum(['provisioning', 'active', 'failed', 'archived']),
   error: z.string().optional(),
 }).strict() as z.ZodType<TeamMemberSnapshot>
 
@@ -255,7 +255,12 @@ function applyCurrentTeamEvent(state: TeamProjectionState, event: TeamSessionEve
         if (prior.name !== member.name || prior.provider !== member.provider || prior.context !== member.context) {
           throw new Error(`teammate "${member.id}" changed immutable identity fields`)
         }
-        if (prior.phase !== 'provisioning' || member.phase === 'provisioning') {
+        const validTransition = prior.phase === 'provisioning'
+          ? member.phase === 'active' || member.phase === 'failed'
+          : prior.phase === 'archived'
+            ? member.phase === 'active'
+            : member.phase === 'archived'
+        if (!validTransition) {
           throw new Error(`teammate "${member.name}" has an invalid ${prior.phase} -> ${member.phase} transition`)
         }
       }
@@ -307,7 +312,7 @@ const teamMemberProjectionSchema = z.object({
   id: sessionIdSchema,
   name: z.string(),
   role: z.enum(['lead', 'teammate']),
-  phase: z.enum(['provisioning', 'active', 'failed']),
+  phase: z.enum(['provisioning', 'active', 'failed', 'archived']),
   error: z.string().optional(),
 }).strict() as z.ZodType<TeamMemberProjection>
 
@@ -325,6 +330,7 @@ const teamTaskViewSchema = z.object({
 }).strict() as z.ZodType<TeamTaskView>
 
 const teamProjectionSchema = z.object({
+  maxMembers: positiveSafeInteger,
   members: z.array(teamMemberProjectionSchema),
   tasks: z.array(teamTaskViewSchema),
   failure: z.string().optional(),
@@ -333,7 +339,7 @@ const teamProjectionSchema = z.object({
 /** Client views keyed by the member and task collections they were derived from. */
 const teamProjectionViews = new WeakMap<readonly TeamMemberSnapshot[], WeakMap<readonly TeamTaskSnapshot[], TeamProjection>>()
 
-function buildTeamProjection(state: TeamProjectionState): TeamProjection {
+function buildTeamProjection(state: TeamProjectionState, maxMembers: number): TeamProjection {
   const rootId = brandString<SessionId>(state.id)
   const members: TeamMemberProjection[] = [{ id: rootId, name: 'lead', role: 'lead', phase: 'active' }]
   for (const member of state.members) {
@@ -346,6 +352,7 @@ function buildTeamProjection(state: TeamProjectionState): TeamProjection {
     })
   }
   return {
+    maxMembers,
     members,
     tasks: state.tasks
       .filter(task => task.status !== 'deleted')
@@ -360,29 +367,36 @@ function buildTeamProjection(state: TeamProjectionState): TeamProjection {
  * A failure is terminal: later events retain the failed state reference and
  * do not republish its view.
  * @param state - current Team state.
- * @returns the roster and non-deleted task board, plus any projection failure.
+ * @param maxMembers - configured limit for provisioning and active teammates.
+ * @returns the roster, configured capacity, and non-deleted task board, plus any projection failure.
  */
-export function teamProjectionView(state: TeamProjectionState): TeamProjection {
-  if (state.failure !== undefined) return buildTeamProjection(state)
+export function teamProjectionView(state: TeamProjectionState, maxMembers: number): TeamProjection {
+  if (state.failure !== undefined) return buildTeamProjection(state, maxMembers)
   let byTasks = teamProjectionViews.get(state.members)
   if (byTasks === undefined) {
     byTasks = new WeakMap()
     teamProjectionViews.set(state.members, byTasks)
   }
   let view = byTasks.get(state.tasks)
-  if (view === undefined) {
-    view = buildTeamProjection(state)
+  if (view === undefined || view.maxMembers !== maxMembers) {
+    view = buildTeamProjection(state, maxMembers)
     byTasks.set(state.tasks, view)
   }
   return view
 }
 
-/** Team projection selected by the projected Session identity; the wire view carries durable roster and task state only. */
-export const teamProjectionDefinition = {
-  key: 'agentTeam',
-  stateVersion: 4,
-  stateSchema: teamProjectionEntrySchema,
-  init: header => emptyTeamState(header.id),
-  apply: applyProjectionEvent,
-  wire: { viewSchema: teamProjectionSchema, view: teamProjectionView },
-} satisfies ProjectionDefinition<'agentTeam', TeamProjectionState>
+/**
+ * Create the Team projection with the deployment's current member capacity.
+ * @param maxMembers - configured limit for provisioning and active teammates.
+ * @returns the registration definition; capacity is wire metadata, not persisted state.
+ */
+export function createTeamProjectionDefinition(maxMembers: number) {
+  return {
+    key: 'agentTeam',
+    stateVersion: 5,
+    stateSchema: teamProjectionEntrySchema,
+    init: header => emptyTeamState(header.id),
+    apply: applyProjectionEvent,
+    wire: { viewSchema: teamProjectionSchema, view: state => teamProjectionView(state, maxMembers) },
+  } satisfies ProjectionDefinition<'agentTeam', TeamProjectionState>
+}

@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-11-06-archive-teammates.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-11-06-archive-teammates.md
+/agent-note-archive-teammates-and-resume-on-lead-messages:
+  en: 135359a59be28634
+  zh: d78e26d35fe25189
+/agent-note-archive-teammates-and-resume-on-lead-messages/problem:
+  en: 4e5a9dcc22ae0832
+  zh: 78e121539f5f8fce
+/agent-note-archive-teammates-and-resume-on-lead-messages/decision:
+  en: 50486e572554f8be
+  zh: 7660666e0b966968
+/agent-note-archive-teammates-and-resume-on-lead-messages/alternatives-considered:
+  en: 10743491435a1797
+  zh: 4bdf915ca1443e97
+/agent-note-archive-teammates-and-resume-on-lead-messages/testing:
+  en: dc105e331e6fd526
+  zh: 1eb0b574ff61e59d
+/agent-note-archive-teammates-and-resume-on-lead-messages/consequences:
+  en: 314d8b0051e2f87d
+  zh: cae517177898dcd1

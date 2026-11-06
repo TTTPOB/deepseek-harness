@@ -16,7 +16,8 @@ import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-a
 import { mountWorkingDirectoryFixture } from '../../../subagent/subagent/tests/working-directory-fixture.ts'
 import TeamService, { TeamId, TeamMessageId } from '../src/index.ts'
 import { readPersistedSession } from '../src/persisted.ts'
-import { teamProjectionDefinition } from '../src/projection.ts'
+import { createTeamProjectionDefinition } from '../src/projection.ts'
+const teamProjectionDefinition = createTeamProjectionDefinition(2)
 import type { TeamMemberSnapshot, TeamMessageSnapshot, TeamTaskSnapshot } from '../src/index.ts'
 import { TestSessionQuery } from './test-session-query.ts'
 

@@ -384,10 +384,16 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'its root, Team identity, role, and model-facing name.',
       },
       {
-        signature: 'listMembers(agent: Agent): TeamMemberView[]',
+        signature: 'listMembers(agent: Agent, includeArchived: boolean = false): TeamMemberView[]',
         description: 'List the runtime-enriched roster visible to one Team member.',
-        parameters: [{ name: 'agent', description: 'exact live Team member.' }],
-        returns: 'Lead and teammate rows in creation order.',
+        parameters: [{ name: 'agent', description: 'exact live Team member.' }, { name: 'includeArchived', description: 'include archived teammates when explicitly requested.' }],
+        returns: 'Lead and visible teammate rows in creation order.',
+      },
+      {
+        signature: 'async archiveTeammate(caller: Agent, targetName: string): Promise<TeamMemberView>',
+        description: 'Archive a teammate without deleting its identity or conversation.',
+        parameters: [{ name: 'caller', description: 'exact live Team Lead.' }, { name: 'targetName', description: 'durable teammate name.' }],
+        returns: 'the archived roster row after its in-progress tasks have been released.',
       },
       {
         signature: 'async spawnTeammate(caller: Agent, request: SpawnTeammateRequest): Promise<SpawnTeammateResult>',
@@ -8233,7 +8239,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SendTeamMessageResult',
-    declaration: 'export interface SendTeamMessageResult {\n    readonly messageId: MessageId;\n}',
+    declaration: 'export interface SendTeamMessageResult {\n    readonly messageId: MessageId;\n    readonly unarchived?: true;\n    readonly message?: string;\n}',
   },
   {
     name: 'SerializedElement',
@@ -9441,7 +9447,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TeamMemberView',
-    declaration: 'export interface TeamMemberView {\n    readonly id: SessionId;\n    readonly name: string;\n    readonly role: \'lead\' | \'teammate\';\n    readonly status: \'running\' | \'inactive\' | \'provisioning\' | \'failed\';\n    readonly description?: string;\n    readonly provider?: string;\n    readonly context?: \'fresh\' | \'fork\';\n    readonly model?: string;\n    readonly diagnostics: string[];\n}',
+    declaration: 'export interface TeamMemberView {\n    readonly id: SessionId;\n    readonly name: string;\n    readonly role: \'lead\' | \'teammate\';\n    readonly status: \'running\' | \'inactive\' | \'provisioning\' | \'failed\' | \'archived\';\n    readonly description?: string;\n    readonly provider?: string;\n    readonly context?: \'fresh\' | \'fork\';\n    readonly model?: string;\n    readonly diagnostics: string[];\n}',
   },
   {
     name: 'TeamTaskAction',
