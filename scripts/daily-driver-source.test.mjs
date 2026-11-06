@@ -57,8 +57,11 @@ appendFileSync(process.env.ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\
     const generation = clientCalls.findIndex(args => args.includes('scripts/generate-typert.ts'))
     const compilation = clientCalls.findIndex(args => args.includes('tsc'))
     assert(generation >= 0 && generation < compilation)
-    const bundle = clientCalls.find(args => args.includes('tsdown'))
-    assert.deepEqual(bundle.slice(1), ['exec', 'tsdown', '--config-loader', 'native', '--workspace', clientDirectory])
+    const bundles = clientCalls.filter(args => args.includes('tsdown'))
+    const prerequisite = bundles.findIndex(args => args.includes('vendor/cosmokit'))
+    const bundle = bundles.findIndex(args => args.includes(clientDirectory))
+    assert(prerequisite >= 0 && prerequisite < bundle, 'inline vendor entry must be bundled before the browser consumer')
+    assert.deepEqual(bundles[bundle].slice(1), ['exec', 'tsdown', '--config-loader', 'native', '--workspace', clientDirectory])
     assert(clientCalls.at(-1).includes('pack'))
   } finally {
     await rm(temporary, { recursive: true, force: true })

@@ -7,14 +7,14 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { withPiFork } from './daily-driver-pi.mjs'
 
-for (const pinned of [false, true]) for (const fails of [false, true]) {
-  test(`Pi source qualification restores canonical files with pinned=${pinned}, fails=${fails}`, () => {
+for (const version of ['1.1.0-fork1', '1.3.0-fork1']) for (const pinned of [false, true]) for (const fails of [false, true]) {
+  test(`Pi source qualification restores canonical files with version=${version}, pinned=${pinned}, fails=${fails}`, () => {
     const temporary = mkdtempSync(join(tmpdir(), 'daily-driver-pi-test-'))
     const previousPath = process.env.PATH
     try {
       mkdirSync(join(temporary, 'package'))
       mkdirSync(join(temporary, 'bin'))
-      writeFileSync(join(temporary, 'package/package.json'), JSON.stringify({ name: '@earendil-works/pi-ai', version: '1.1.0-fork1' }))
+      writeFileSync(join(temporary, 'package/package.json'), JSON.stringify({ name: '@earendil-works/pi-ai', version }))
       const tarball = join(temporary, 'pi.tgz')
       execFileSync('tar', ['-czf', tarball, '-C', temporary, 'package/package.json'])
       const workspace = "overrides:\n  unrelated: '1'\n" + (pinned

@@ -116,6 +116,7 @@ describe('StateController', () => {
       header,
       inheritedEventCount: SessionLogOffset(0),
       events: [],
+      readEvents: () => [],
       cursor: -1,
       projections: { asOfSeq: -1, values: {} },
       retain: () => observation,

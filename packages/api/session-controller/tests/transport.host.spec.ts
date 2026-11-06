@@ -423,6 +423,7 @@ describe('Session history and Web follow', () => {
       header,
       inheritedEventCount: SessionLogOffset(0),
       events: [],
+      readEvents: () => [],
       cursor: -1,
       projections: { asOfSeq: -1, values: {} },
       retain: () => source,
@@ -454,6 +455,7 @@ describe('Session history and Web follow', () => {
       header,
       inheritedEventCount: SessionLogOffset(0),
       events: [],
+      readEvents: () => [],
       cursor: -1,
       projections: { asOfSeq: -1, values: {} },
       retain: vi.fn(),
@@ -480,13 +482,15 @@ describe('Session history and Web follow', () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     const sessionId = SessionId('promotion-failure')
-    const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/workspace' }
+    const meta: SessionHeader = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/workspace', isSeeded: false }
     const disposePromotion = vi.fn()
-    const promotion = {
+    const promotion: SessionObservation = {
       source: 'prepared', header: meta, events: [], cursor: -1,
+      inheritedEventCount: SessionLogOffset(0),
+      readEvents: () => [],
       projections: { asOfSeq: -1, values: {} },
       retain: vi.fn(), [Symbol.dispose]: disposePromotion,
-    } as unknown as SessionObservation
+    }
     const source = {
       ...promotion,
       retain: () => promotion,

@@ -1,8 +1,9 @@
 /** Stage local fork artifacts and their unpublished workspace peer closure for isolated consumers. */
 import assert from 'node:assert/strict'
-import { copyFile, writeFile } from 'node:fs/promises'
+import { copyFile, readFile, writeFile } from 'node:fs/promises'
+import { load as parseYaml } from 'js-yaml'
 import { basename, join, resolve } from 'node:path'
-import { officialVersion, plan, selections } from './daily-driver-plan.mjs'
+import { officialVersion, plan, root, selections } from './daily-driver-plan.mjs'
 
 /** Include forked peers even when another capability owns their tarballs. */
 export function artifactClosure(packages) {
@@ -22,7 +23,8 @@ export function artifactClosure(packages) {
 export async function stageArtifactOverrides(runtime, packages, tarballs) {
   assert.equal(packages.length, tarballs.length)
   const explicit = new Map(packages.map((pkg, index) => [pkg.name, resolve(tarballs[index])]))
-  const overrides = {}
+  const workspace = parseYaml(await readFile(join(root, 'pnpm-workspace.yaml'), 'utf8'))
+  const overrides = { '@earendil-works/pi-ai': workspace.overrides['@earendil-works/pi-ai'] }
   for (const pkg of artifactClosure(packages)) {
     const source = explicit.get(pkg.name) ?? plan(Object.keys(selections).find(selection =>
       selections[selection].packages.includes(pkg.directory))).artifact(pkg)

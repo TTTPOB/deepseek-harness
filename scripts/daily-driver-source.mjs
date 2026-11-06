@@ -26,6 +26,11 @@ if (command === 'install') {
   run(['exec', 'tsx', 'scripts/generate-typert.ts'])
   run(['exec', 'tsc', '-b', 'packages/typert/generator/tsconfig.json',
     ...targets.map(target => `${target.path}/tsconfig.json`)])
+  if (targets.some(target => target.dsh?.client)) {
+    // Browser bundles inline cosmokit from its bundled entry, not tsc's lib/types output.
+    run(['exec', 'tsdown', '--config-loader', 'native', '--workspace', 'vendor/cosmokit',
+      '-F', '@deepseek-ai/cosmokit', '--env.DSH_BUILD_FACE', 'host'])
+  }
   mkdirSync(join(root, 'dist/daily-driver'), { recursive: true })
   for (const target of targets) {
     // The unqualified Client preset emits both entries; its Host-only pass may intentionally be empty.

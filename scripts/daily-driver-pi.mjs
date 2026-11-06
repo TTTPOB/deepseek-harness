@@ -10,7 +10,7 @@ export function withPiFork(tarball, check, directory = root) {
   const source = resolve(tarball)
   const manifest = JSON.parse(execFileSync('tar', ['-xOf', source, 'package/package.json'], { encoding: 'utf8' }))
   assert.equal(manifest.name, '@earendil-works/pi-ai')
-  assert.match(manifest.version, /^1\.1\.0-fork\d+$/)
+  assert.match(manifest.version, /^\d+\.\d+\.\d+-fork\d+$/)
   const workspacePath = join(directory, 'pnpm-workspace.yaml')
   const lockPath = join(directory, 'pnpm-lock.yaml')
   const workspace = readFileSync(workspacePath, 'utf8')
@@ -21,7 +21,7 @@ export function withPiFork(tarball, check, directory = root) {
   const qualified = (existing.test(workspace)
     ? workspace.replace(existing, override)
     : workspace.replace(/^overrides:\s*$/m, `overrides:\n${override}`))
-    .replace(/^  ['"]?@earendil-works\/pi-ai@1\.1\.0['"]?:[^\n]*\n/m, '')
+    .replace(/^  ['"]?@earendil-works\/pi-ai@[^'":\s]+['"]?:[^\n]*\n/m, '')
   const install = frozen => execFileSync('pnpm', [
     '--config.verify-deps-before-run=false', '--filter', '@deepseek-ai/dsh-root',
     '--filter', '@deepseek-ai/dsh-llm-pi-ai...', 'install', frozen ? '--frozen-lockfile' : '--no-frozen-lockfile',

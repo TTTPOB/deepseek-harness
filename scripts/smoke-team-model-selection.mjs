@@ -108,13 +108,12 @@ try {
 
   const shared = await load('@deepseek-ai/dsh-subagent')
   for (const name of ['requestedAgentOptions', 'assertAllowedModelSelection', 'preflightChildLlmRoute',
-    'hasDelegationModelRequest', 'parentAgentOptionsForDelegation', 'selectSubagentModelSelectionPolicy',
-    'recordSubagentModelSelection', 'subagentModelSelectionPolicy', 'listSubagentModels',
+    'hasDelegationModelRequest', 'parentAgentOptionsForDelegation',
+    'subagentModelSelectionPolicy', 'listSubagentModels',
     'assertAllowedModelRoutes', 'modelRouteKey']) {
     assert.equal(typeof shared[name], 'function', `@deepseek-ai/dsh-subagent must export ${name}`)
   }
-  assert.deepEqual(shared.subagentModelSelectionProjectionDefinition.key, 'subagentModelSelectionPolicy')
-  assert.equal(shared.subagentModelSelectionProjectionDefinition.stateVersion, 1)
+  const policyHandle = await ctx.sessionProjections.register(shared.subagentModelSelectionProjectionDefinition)
   assert.equal(typeof shared.AllowedModelRouteSchema, 'function')
 
   const { LlmAdapter, ReasoningEffortId, ToolCallId } = await load('@deepseek-ai/dsh-llm')
@@ -177,14 +176,16 @@ try {
   for (const field of ['provider', 'model', 'reasoning_effort']) assert(spawn.parameters.properties[field], field)
   assert(toolNames.includes('list_agent_models'))
 
-  const recorded = ctx.sessionProjections.stateOf(lead.session, 'subagentModelSelectionPolicy')
+  const recorded = shared.subagentModelSelectionPolicy(policyHandle, lead.session)
   assert.deepEqual(recorded, settings.allowedModels)
   const policyEvents = lead.session.snapshotEvents().filter(event => event.type === 'subagent/model-selection-policy')
   assert.equal(policyEvents.length, 1, 'the tool installation records the route policy once')
-  const frozen = shared.selectSubagentModelSelectionPolicy(
-    { projections: ctx.sessionProjections, sessions: ctx.sessions }, lead.session,
-    { current: () => ({ enabled: true, allowedModels: [{ provider: 'mock', model: 'outside' }] }) })
-  assert.deepEqual(frozen.routes, settings.allowedModels, 'a durable policy wins over later settings')
+  const currentSettings = ctx.get('subagentModelSelection')
+  const originalCurrent = currentSettings.current
+  currentSettings.current = () => ({ enabled: true, allowedModels: [{ provider: 'mock', model: 'outside' }] })
+  ctx.effect(() => () => { currentSettings.current = originalCurrent })
+  assert.deepEqual(shared.subagentModelSelectionPolicy(policyHandle, lead.session), settings.allowedModels,
+    'a durable policy wins over later settings')
 
   let child
   ctx.on('agent/created', ({ agent }) => { if (agent.id !== lead.id) child = agent })
@@ -215,16 +216,12 @@ try {
   assert(row)
   assert.equal(row.provider, 'spawn', 'the Team execution provider stays spawn')
   assert(child, 'the spawned child Agent was published')
-  assert.equal(child.options.provider, 'mock')
-  assert.equal(child.options.model, 'other')
-  assert.equal(child.options.reasoningEffort, 'high')
+  assert.deepEqual(child.model.current(), { provider: 'mock', model: 'other', reasoningEffort: 'high' })
   await waitFor(() => adapter.requests.some(request => request.provider === 'mock' && request.model === 'other'
     && request.reasoningEffort === 'high'), 'the selected child route request')
 
-  const childPolicy = shared.selectSubagentModelSelectionPolicy(
-    { projections: ctx.sessionProjections, sessions: ctx.sessions }, child.session,
-    { current: () => ({ enabled: true, allowedModels: [{ provider: 'mock', model: 'outside' }] }) })
-  assert.deepEqual(childPolicy.routes, settings.allowedModels, 'a child inherits the frozen parent policy')
+  const childPolicy = shared.subagentModelSelectionPolicy(policyHandle, child.session)
+  assert.deepEqual(childPolicy, settings.allowedModels, 'a child inherits the frozen parent policy')
 
   const denied = await execute('spawn_teammate', { ...spawnArgs('beta'), provider: 'mock', model: 'outside' })
   assert.equal(denied.isError, true)

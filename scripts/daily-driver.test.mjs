@@ -92,8 +92,11 @@ if (process.env.FAIL_GENERATION && args.includes('scripts/generate-typert.ts')) 
         assert.deepEqual(compiler.slice(compiler.indexOf('-b') + 1), [
           'packages/typert/generator/tsconfig.json', ...packages.map(pkg => `${pkg.directory}/tsconfig.json`),
         ])
-        assert.deepEqual(calls.filter(args => args.includes('tsdown')).map(args => args[args.indexOf('--workspace') + 1]),
-          packages.map(pkg => pkg.directory))
+        const bundles = calls.filter(args => args.includes('tsdown')).map(args => args[args.indexOf('--workspace') + 1])
+        assert.deepEqual(bundles, [
+          ...packages.some(pkg => pkg.dsh?.client) ? ['vendor/cosmokit'] : [],
+          ...packages.map(pkg => pkg.directory),
+        ])
         assert.deepEqual(calls.filter(args => args.includes('pack')).map(args => args[args.indexOf('--dir') + 1]),
           packages.map(pkg => pkg.directory))
       }
@@ -140,6 +143,23 @@ test('consumer overrides and build permissions belong to its workspace, includin
     if (previous === undefined) delete process.env.DSH_PI_AI_TARBALL
     else process.env.DSH_PI_AI_TARBALL = previous
     await rm(temporary, { recursive: true, force: true })
+  }
+})
+
+test('isolated consumers preserve the qualified source Pi override without copying workspace links', async () => {
+  const runtime = await mkdtemp(join(tmpdir(), 'daily-driver-pi-default-'))
+  const previous = process.env.DSH_PI_AI_TARBALL
+  try {
+    delete process.env.DSH_PI_AI_TARBALL
+    const source = parseYaml(await readFile(join(root, 'pnpm-workspace.yaml'), 'utf8'))
+    await stageArtifactOverrides(runtime, [], [])
+    const consumer = JSON.parse(await readFile(join(runtime, 'pnpm-workspace.yaml'), 'utf8'))
+    assert.equal(consumer.overrides['@earendil-works/pi-ai'], source.overrides['@earendil-works/pi-ai'])
+    assert(!Object.values(consumer.overrides).some(value => value.startsWith('link:')))
+  } finally {
+    if (previous === undefined) delete process.env.DSH_PI_AI_TARBALL
+    else process.env.DSH_PI_AI_TARBALL = previous
+    await rm(runtime, { recursive: true, force: true })
   }
 })
 

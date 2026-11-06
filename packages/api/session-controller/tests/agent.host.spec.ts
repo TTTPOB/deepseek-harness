@@ -6,7 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
-import SessionStore, { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
@@ -92,15 +92,17 @@ describe('ApiSession Agent lookup and recovery', () => {
       agent: resumed,
       dispose: () => Promise.resolve(),
     })
-    const observed = {
+    const observed: SessionObservation = {
       source: 'prepared',
       header: meta,
+      inheritedEventCount: SessionLogOffset(0),
       events: [],
+      readEvents: () => [],
       cursor: -1,
       projections: { asOfSeq: -1, values: {} },
       retain: vi.fn(),
       [Symbol.dispose]: vi.fn(),
-    } as unknown as SessionObservation
+    }
 
     await expect(agents.resolveObservedAgent(observed)).resolves.toEqual({ agent: resumed })
     expect(resume).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: meta.id }))
@@ -216,14 +218,16 @@ describe('ApiSession Agent lookup and recovery', () => {
   it('requires projected observations before activation', async () => {
     const { agents } = await harness()
     const meta = header('unprojected-observation')
-    const observed = {
+    const observed: SessionObservation = {
       source: 'prepared',
       header: meta,
+      inheritedEventCount: SessionLogOffset(0),
       events: [],
+      readEvents: () => [],
       cursor: -1,
       retain: vi.fn(),
       [Symbol.dispose]: vi.fn(),
-    } as unknown as SessionObservation
+    }
 
     expect(() => agents.presetForObservation(observed)).toThrow(
       'Agent activation requires a projected Session observation',

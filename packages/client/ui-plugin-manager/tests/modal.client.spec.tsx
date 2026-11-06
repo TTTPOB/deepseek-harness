@@ -13,7 +13,7 @@ const PACKAGE = 'dsh-modal-test'
 const BUNDLE: BundleInfo = {
   name: PACKAGE, version: '1.0.0', enabled: true, installed: true, optional: false,
   official: false, availability: 'profile',
-  removable: true, rows: [{ rowId: 'row', moduleName: PACKAGE, meta: { description: 'Row description.' } }], overrides: [],
+  removable: true, updatable: false, rows: [{ rowId: 'row', moduleName: PACKAGE, meta: { description: 'Row description.' } }], overrides: [],
 }
 type FrameProps = PropsRuntime<'root'> & PropsRenderSlots<'main' | 'shell.overlay'>
 
