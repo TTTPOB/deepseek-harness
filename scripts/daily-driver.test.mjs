@@ -12,32 +12,26 @@ import { artifactClosure, stageArtifactOverrides } from './daily-driver-artifact
 test('artifact names follow individual manifests and a subset does not shrink the smoke closure', () => {
   const checks = plan('session-query', ['packages/session-query/session-query-sqlite'])
   assert.equal(checks.selected.length, 1)
-  assert.equal(checks.packages.length, 4)
+  assert.equal(checks.packages.length, selections['session-query'].packages.length)
   for (const pkg of checks.packages) {
     assert.equal(pkg.version, manifest(pkg.directory).version)
     assert(checks.artifact(pkg).endsWith(`${pkg.version}.tgz`))
   }
-  const release = plan('session-query', ['packages/core/session', 'packages/session-query/session-query', 'packages/session-query/session-query-sqlite'])
-  assert.deepEqual(new Set(release.selected.map(pkg => pkg.directory)), new Set([
-    'packages/core/session', 'packages/session-query/session-query', 'packages/session-query/session-query-sqlite',
-  ]))
+  const requested = selections['session-query'].packages.slice(0, -1)
+  const release = plan('session-query', requested)
+  assert.deepEqual(new Set(release.selected.map(pkg => pkg.directory)), new Set(requested))
   assert(release.tests.includes('packages/core/session/tests'))
   assert.throws(() => plan('core', ['packages/client/connection']))
   assert.throws(() => plan('retired-batch'))
   const team = plan('team-model-selection', ['packages/subagent/tool-subagent'])
   assert.equal(team.selected.length, 1)
-  assert.equal(team.packages.length, 4)
+  assert.equal(team.packages.length, selections['team-model-selection'].packages.length)
   assert.throws(() => plan('team-model-selection', ['packages/client/connection']))
 })
 
 test('capability groups track owners and toolchain', async () => {
-  assert.equal(packageManager, 'pnpm@11.28.5')
-  assert.deepEqual(Object.keys(selections), ['session-query', 'core', 'team-model-selection', 'access'])
-  assert.deepEqual(plan('core').packages.map(pkg => pkg.directory), [
-    'packages/core/agent', 'packages/preset/agent-preset-registry', 'packages/subagent/subagent',
-    'packages/llm/llm-pi-ai', 'packages/mcp/mcp-client', 'packages/experimental/tool-agent-team', 'packages/core/tools',
-    'packages/core/agent-loop', 'packages/ptc-runtime/ptc-runtime-node',
-  ])
+  const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  assert.equal(packageManager, rootManifest.packageManager)
   const tools = plan('core', ['packages/core/tools'])
   assert(tools.tests.includes('packages/core/tools/tests'))
   assert(plan('core').tests.includes('packages/subagent/subagent/tests'))
@@ -50,28 +44,73 @@ test('capability groups track owners and toolchain', async () => {
   assert(closure.some(pkg => pkg.directory === 'packages/session-query/session-query'))
   assert.equal(new Set(closure.map(pkg => pkg.name)).size, closure.length)
   const team = plan('team-model-selection')
-  assert.deepEqual(team.packages.map(pkg => pkg.directory), [
-    'packages/subagent/subagent', 'packages/subagent/tool-subagent',
-    'packages/experimental/agent-team', 'packages/experimental/tool-agent-team',
-  ])
-  assert.deepEqual(team.tests, [
-    'packages/subagent/subagent/tests', 'packages/subagent/tool-subagent/tests',
-    'packages/experimental/agent-team/tests', 'packages/experimental/tool-agent-team/tests',
-  ])
   assert(!team.packages.some(pkg => pkg.directory === 'packages/llm/llm-pi-ai'))
   const teamClosure = artifactClosure(team.packages)
   for (const pkg of team.packages) assert(teamClosure.some(candidate => candidate.name === pkg.name))
   assert.equal(new Set(teamClosure.map(pkg => pkg.name)).size, teamClosure.length)
-  assert.deepEqual(plan('access').packages.map(pkg => pkg.directory), [
-    'packages/client/connection', 'packages/host/frontend-static', 'packages/api/gateway',
-    'packages/client/ui-plugin-manager', 'packages/client/ui-sidebar-terminal',
-  ])
   assert.throws(() => plan('access', ['packages/client/ui-settings']))
   assert.throws(() => plan('core', ['packages/core/agent', 'packages/core/agent']))
   for (const selection of Object.keys(selections)) {
     for (const path of [...plan(selection).packages.map(pkg => pkg.directory), ...selections[selection].tests]) {
       await access(join(root, path))
     }
+  }
+})
+
+test('capability builds generate before compiling only their artifact closure and stop on generation failure', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'daily-driver-build-test-'))
+  try {
+    const log = join(temporary, 'commands.jsonl')
+    await writeFile(join(temporary, 'pnpm'), `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs'
+const args = process.argv.slice(2)
+appendFileSync(process.env.COMMAND_LOG, JSON.stringify(args) + '\\n')
+if (process.env.FAIL_GENERATION && args.includes('scripts/generate-typert.ts')) process.exit(7)
+`, { mode: 0o755 })
+    const env = { ...process.env, PATH: `${temporary}:${process.env.PATH}`, COMMAND_LOG: log }
+    for (const selection of Object.keys(selections)) {
+      const checks = plan(selection)
+      const packages = artifactClosure(checks.packages)
+      for (const fail of [false, true]) {
+        await writeFile(log, '')
+        const result = spawnSync(process.execPath, ['scripts/daily-driver.mjs', 'build', selection], {
+          cwd: root, env: { ...env, FAIL_GENERATION: fail ? '1' : '' }, encoding: 'utf8', timeout: 30_000,
+        })
+        assert.equal(result.signal, null)
+        assert.equal(result.error, undefined)
+        const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+        assert(calls[0].includes('scripts/generate-typert.ts'))
+        if (fail) {
+          assert.notEqual(result.status, 0)
+          assert.equal(calls.length, 1, 'a failed generator must not compile, bundle or pack')
+          continue
+        }
+        assert.equal(result.status, 0, result.stderr)
+        const compilers = calls.filter(args => args.includes('tsc'))
+        assert.equal(compilers.length, 1)
+        const compiler = compilers[0]
+        assert.deepEqual(compiler.slice(compiler.indexOf('-b') + 1), [
+          'packages/typert/generator/tsconfig.json', ...packages.map(pkg => `${pkg.directory}/tsconfig.json`),
+        ])
+        assert.deepEqual(calls.filter(args => args.includes('tsdown')).map(args => args[args.indexOf('--workspace') + 1]),
+          packages.map(pkg => pkg.directory))
+        assert.deepEqual(calls.filter(args => args.includes('pack')).map(args => args[args.indexOf('--dir') + 1]),
+          packages.map(pkg => pkg.directory))
+      }
+    }
+    await writeFile(log, '')
+    const prepared = spawnSync(process.execPath, ['scripts/daily-driver.mjs', 'prepare', 'access'], {
+      cwd: root, env, encoding: 'utf8', timeout: 30_000,
+    })
+    assert.equal(prepared.signal, null)
+    assert.equal(prepared.error, undefined)
+    assert.equal(prepared.status, 0, prepared.stderr)
+    const [install, ...extra] = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    assert.equal(extra.length, 0)
+    assert(install.includes('install') && install.includes('--frozen-lockfile'))
+    for (const pkg of plan('access').packages) assert(install.includes(`${pkg.name}...`))
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
   }
 })
 

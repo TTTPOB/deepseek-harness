@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { manifest, plan, root } from './daily-driver-plan.mjs'
+import { plan, root } from './daily-driver-plan.mjs'
 import { artifactClosure } from './daily-driver-artifacts.mjs'
 import { withPiFork } from './daily-driver-pi.mjs'
 
@@ -28,16 +28,7 @@ function verify() {
   if (selection === 'core' && process.env.DSH_PI_AI_TARBALL) withPiFork(process.env.DSH_PI_AI_TARBALL, check)
   else check()
 }
-function build() {
-  // Client programs consume generated Host Remote declarations.
-  if (selection === 'access') {
-    pnpm(['exec', 'tsc', '-b', 'packages/typert/generator/tsconfig.json', 'packages/host/frontend-static/tsconfig.json'])
-    for (const directory of ['vendor/cosmokit', 'packages/host/frontend-static']) {
-      pnpm(['exec', 'tsdown', '--config-loader', 'native', '--workspace', directory, '-F', manifest(directory).name, '--env.DSH_BUILD_FACE', 'host'])
-    }
-  }
-  source('build')
-}
+function build() { source('build') }
 function smoke() {
   for (const pkg of checks.packages) {
     const metadata = JSON.parse(execFileSync('tar', ['-xOf', checks.artifact(pkg), 'package/package.json'], { encoding: 'utf8' }))

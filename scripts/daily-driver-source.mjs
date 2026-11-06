@@ -22,6 +22,8 @@ if (command === 'install') {
   run(['--filter', '@deepseek-ai/dsh-root', ...names.flatMap(name => ['--filter', `${name}...`]),
     'install', '--frozen-lockfile'])
 } else {
+  // Source-only Typert emits /remote projections before any Client project consumes them.
+  run(['exec', 'tsx', 'scripts/generate-typert.ts'])
   run(['exec', 'tsc', '-b', 'packages/typert/generator/tsconfig.json',
     ...targets.map(target => `${target.path}/tsconfig.json`)])
   mkdirSync(join(root, 'dist/daily-driver'), { recursive: true })
