@@ -209,13 +209,13 @@ try {
       assert.deepEqual(history.items.map(item => item.header.id), ids,
         'BM25 ranks the shorter document first when actual phrase TF is equal')
       const live = ctx.sessions.prepare(ids[0], { meta: { createdAt: 20 } })
-      appendTo(live, texts[0])
       const leaveLive = ctx.sessions.enter(live)
       ctx.sessions.announce(live)
+      appendTo(live, texts[0])
       const unrelated = ctx.sessions.prepare(sessionModule.SessionId('artifact-unrelated'), { meta: { createdAt: 30 } })
-      appendTo(unrelated, 'unrelated '.repeat(1000))
       const leaveUnrelated = ctx.sessions.enter(unrelated)
       ctx.sessions.announce(unrelated)
+      appendTo(unrelated, 'unrelated '.repeat(1000))
       try {
         const mixed = await ctx.sessionQuery.searchSessions(request)
         assert.deepEqual(mixed.items.map(item => item.header.id), ids,
@@ -226,9 +226,9 @@ try {
         leaveUnrelated()
       }
       const updated = ctx.sessions.prepare(ids[0], { meta: { createdAt: 20 } })
-      appendTo(updated, 'fresh live marker')
       const leaveUpdated = ctx.sessions.enter(updated)
       ctx.sessions.announce(updated)
+      appendTo(updated, 'fresh live marker')
       try {
         const fresh = await ctx.sessionQuery.searchSessions({ query: 'fresh live marker' })
         assert.equal(fresh.items[0].header.id, ids[0])
