@@ -1,9 +1,10 @@
 name: Daily-driver verify
 
-# Every push to the release branch runs all capability checks; a manual run checks one.
+# Every push to the release branch or an upgrade branch runs all capability checks;
+# a manual run checks one.
 on:
   push:
-    branches: [daily-driver]
+    branches: [daily-driver, 'upgrade/**']
   workflow_dispatch:
     inputs:
       selection:
