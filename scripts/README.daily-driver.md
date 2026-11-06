@@ -21,7 +21,6 @@ Independent plugins qualify their releases in their own repositories. Source del
 
 Locally, run doc-sync scripts gate by gate with `NODE_OPTIONS=--max-old-space-size=4096`; the aggregate’s `doc-typecheck` builds the entire Host reference graph. Leave whole-repository typecheck to `Daily-driver verify` CI.
 
-Known upstream failure: `repository-references` (`verify-repository-references`) also fails on upstream 0.2.1-rc.1 because `python/sdk/uv.lock` contains a commit-hash reference. Skip this known failure without fixing it in the fork; recheck after every upstream upgrade and remove this note once upstream passes.
 
 ## Long-term branch
 

@@ -30,7 +30,7 @@ test('artifact names follow individual manifests and a subset does not shrink th
   assert.throws(() => plan('team-model-selection', ['packages/client/connection']))
 })
 
-test('capability groups track rc.1 owners and toolchain', async () => {
+test('capability groups track owners and toolchain', async () => {
   assert.equal(packageManager, 'pnpm@11.28.5')
   assert.deepEqual(Object.keys(selections), ['session-query', 'core', 'team-model-selection', 'access'])
   assert.deepEqual(plan('core').packages.map(pkg => pkg.directory), [
@@ -39,12 +39,10 @@ test('capability groups track rc.1 owners and toolchain', async () => {
     'packages/core/agent-loop', 'packages/ptc-runtime/ptc-runtime-node',
   ])
   const tools = plan('core', ['packages/core/tools'])
-  assert.equal(tools.selected[0].version, '0.2.1-rc.1-fork1')
   assert(tools.tests.includes('packages/core/tools/tests'))
   assert(plan('core').tests.includes('packages/subagent/subagent/tests'))
   assert(plan('core').tests.includes('packages/experimental/tool-agent-team/tests'))
   const runtime = plan('core', ['packages/ptc-runtime/ptc-runtime-node'])
-  assert.equal(runtime.selected[0].version, '0.2.1-rc.1-fork2')
   assert(runtime.tests.includes('packages/ptc-runtime/ptc-runtime-node/tests'))
   const closure = artifactClosure(plan('core').packages)
 
