@@ -5,6 +5,10 @@ export const NS = 'agent-team'
 
 /** Simplified Chinese dictionary and key source. */
 export const zh = {
+  'memberStatus.archived': '已归档',
+  'archivedGroup': '已归档（{n}）',
+  'onDuty': '在岗 {n} / {max}',
+  'ownerArchived': '（已归档）',
   trigger: '智能体团队',
   loading: '正在加载团队…',
   unavailable: 'Team 暂不可用',
@@ -37,6 +41,10 @@ export type TeamKey = keyof typeof zh
 
 /** English dictionary checked against the Chinese key set. */
 export const en = {
+  'memberStatus.archived': 'Archived',
+  'archivedGroup': 'Archived ({n})',
+  'onDuty': 'On duty {n} / {max}',
+  'ownerArchived': ' (archived)',
   trigger: 'Agent team',
   loading: 'Loading team…',
   unavailable: 'Team is unavailable',
@@ -66,6 +74,10 @@ export const en = {
 
 /** Japanese copy, checked against the English keys. */
 export const ja = {
+  'memberStatus.archived': 'アーカイブ済み',
+  'archivedGroup': 'アーカイブ済み（{n}）',
+  'onDuty': '稼働中 {n} / {max}',
+  'ownerArchived': '（アーカイブ済み）',
   'trigger': 'エージェントチーム',
   'loading': 'チームを読み込み中…',
   'unavailable': 'チームは利用できません',
@@ -95,6 +107,10 @@ export const ja = {
 
 /** Spanish dictionary, checked against the English keys. */
 export const es = {
+  'memberStatus.archived': 'Archivado',
+  'archivedGroup': 'Archivados ({n})',
+  'onDuty': 'En servicio {n} / {max}',
+  'ownerArchived': ' (archivado)',
   trigger: 'equipo de agentes',
   loading: 'Cargando equipo…',
   unavailable: 'El equipo no está disponible',
@@ -124,6 +140,10 @@ export const es = {
 
 /** French dictionary, checked against the English keys. */
 export const fr = {
+  'memberStatus.archived': 'Archivé',
+  'archivedGroup': 'Archivés ({n})',
+  'onDuty': 'En poste {n} / {max}',
+  'ownerArchived': ' (archivé)',
   trigger: "Équipe d'agents",
   loading: "Chargement de l'équipe…",
   unavailable: "L'équipe n'est pas disponible",
@@ -153,6 +173,10 @@ export const fr = {
 
 /** German dictionary, checked against the English keys. */
 export const de = {
+  'memberStatus.archived': 'Archiviert',
+  'archivedGroup': 'Archiviert ({n})',
+  'onDuty': 'Im Einsatz {n} / {max}',
+  'ownerArchived': ' (archiviert)',
   trigger: 'Agententeam',
   loading: 'Team wird geladen…',
   unavailable: 'Team ist nicht verfügbar',
@@ -182,6 +206,10 @@ export const de = {
 
 /** Russian dictionary, checked against the English keys. */
 export const ru = {
+  'memberStatus.archived': 'В архиве',
+  'archivedGroup': 'В архиве ({n})',
+  'onDuty': 'В работе {n} / {max}',
+  'ownerArchived': ' (в архиве)',
   trigger: 'Команда агентов',
   loading: 'Загрузка команды…',
   unavailable: 'Команда недоступна',
@@ -211,6 +239,10 @@ export const ru = {
 
 /** Portuguese dictionary, checked against the English keys. */
 export const pt = {
+  'memberStatus.archived': 'Arquivado',
+  'archivedGroup': 'Arquivados ({n})',
+  'onDuty': 'Em atividade {n} / {max}',
+  'ownerArchived': ' (arquivado)',
   trigger: 'Equipe de agentes',
   loading: 'Carregando equipe…',
   unavailable: 'A equipe não está disponível',

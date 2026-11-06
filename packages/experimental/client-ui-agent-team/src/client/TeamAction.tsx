@@ -8,7 +8,7 @@ import type {
 } from '@deepseek-ai/dsh-experimental-agent-team/client'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import {
-  IconChevronDownOutlineRegular,
+  IconArchiveOutlineRegular, IconChevronDownOutlineRegular,
   IconUserOutlineRegular, IconUsersOutlineRegular, StateDot, Tag, Tooltip,
   useAnchoredPosition, useDismissOnOutsidePointer, type StateDotState,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -25,7 +25,7 @@ export interface TeamActionInjected {
 }
 
 /** Durable lifecycle overlaid with the member Session's live turn activity. */
-type MemberStatus = 'running' | 'inactive' | 'provisioning' | 'failed'
+type MemberStatus = 'running' | 'inactive' | 'provisioning' | 'failed' | 'archived'
 
 /** Full props of the Team conversation-header action. */
 export type TeamActionProps =
@@ -47,10 +47,11 @@ function memberStatusKey(status: MemberStatus): TeamKey {
     case 'inactive': return 'memberStatus.inactive'
     case 'provisioning': return 'memberStatus.provisioning'
     case 'failed': return 'memberStatus.failed'
+    case 'archived': return 'memberStatus.archived'
   }
 }
 
-function memberDotState(status: Exclude<MemberStatus, 'inactive'>): StateDotState {
+function memberDotState(status: Exclude<MemberStatus, 'inactive' | 'archived'>): StateDotState {
   switch (status) {
     case 'running':
     case 'provisioning': return 'ongoing'
@@ -95,6 +96,7 @@ function TeamMemberRow({
         type="button"
         className={highlightCurrent ? `${css.member} ${css.memberCurrent}` : css.member}
         disabled={inert}
+        data-archived={status === 'archived' || undefined}
         onClick={() => {
           try {
             openTeammate(sessionId, member.id)
@@ -104,9 +106,11 @@ function TeamMemberRow({
         }}
       >
         <span className={css.memberDot}>
-          {status === 'inactive'
-            ? <IconUserOutlineRegular size={14} className={css.inactiveIcon} />
-            : <StateDot state={memberDotState(status)} />}
+          {status === 'archived'
+            ? <IconArchiveOutlineRegular size={14} className={css.inactiveIcon} />
+            : status === 'inactive'
+              ? <IconUserOutlineRegular size={14} className={css.inactiveIcon} />
+              : <StateDot state={memberDotState(status)} />}
         </span>
         <span className={css.memberText}>
           <span className={css.memberName}>
@@ -127,7 +131,7 @@ function TeamMemberRow({
 }
 
 /** Task card with a two-line description clamp expanded from a toggle in the meta row. */
-function TaskCard({ task, t }: { task: TeamTask; t: TranslateNS<typeof NS> }) {
+function TaskCard({ task, archivedOwner, t }: { task: TeamTask; archivedOwner: boolean; t: TranslateNS<typeof NS> }) {
   const [expanded, setExpanded] = useState(false)
   const [clamped, setClamped] = useState(false)
   const textRef = useRef<HTMLParagraphElement>(null)
@@ -166,7 +170,7 @@ function TaskCard({ task, t }: { task: TeamTask; t: TranslateNS<typeof NS> }) {
           </button>
         )}
         <span>{task.id}</span>
-        <span>{t('owner')}: {task.ownerName ?? t('unowned')}</span>
+        <span>{t('owner')}: {task.ownerName ?? t('unowned')}{archivedOwner && t('ownerArchived')}</span>
         {task.status === 'pending' && <span>{task.ready ? t('ready') : t('blocked')}</span>}
         {task.blockedBy.length > 0 && <span>{t('blockedBy')}: {task.blockedBy.join(', ')}</span>}
         {task.writeScopes.length > 0 && <span>{t('writeScopes')}: {task.writeScopes.join(', ')}</span>}
@@ -261,6 +265,23 @@ export function TeamAction({
     return () => { document.removeEventListener('keydown', dismiss) }
   }, [open])
 
+  const archivedMembers = team?.members.filter(member => member.phase === 'archived') ?? []
+  const visibleMembers = team?.members.filter(member => member.phase !== 'archived') ?? []
+  const onDuty = visibleMembers.filter(member => member.role === 'teammate'
+    && (member.phase === 'active' || member.phase === 'provisioning')).length
+  const renderMember = (member: TeamMemberProjection) => (
+    <TeamMemberRow
+      key={member.id}
+      member={member}
+      memberCount={team?.members.length ?? 0}
+      sessionId={sessionId}
+      useSessions={useSessions}
+      useSessionStatus={useSessionStatus}
+      openTeammate={openTeammate}
+      onError={setError}
+      t={t}
+    />
+  )
   const compact = team !== undefined && team.members.length === 1 && team.tasks.length === 0
 
   return (
@@ -318,23 +339,17 @@ export function TeamAction({
                 <section>
                   <h3>
                     {t('roster')}
-                    {team.members.length > 1 && <span className={css.count}>{team.members.length}</span>}
+                    <span className={css.count}>{t('onDuty', { n: onDuty, max: team.maxMembers })}</span>
                   </h3>
                   <div className={css.roster}>
-                    {team.members.map(member => (
-                      <TeamMemberRow
-                        key={member.id}
-                        member={member}
-                        memberCount={team.members.length}
-                        sessionId={sessionId}
-                        useSessions={useSessions}
-                        useSessionStatus={useSessionStatus}
-                        openTeammate={openTeammate}
-                        onError={setError}
-                        t={t}
-                      />
-                    ))}
+                    {visibleMembers.map(renderMember)}
                   </div>
+                  {archivedMembers.length > 0 && (
+                    <details className={css.archivedGroup}>
+                      <summary>{t('archivedGroup', { n: archivedMembers.length })}</summary>
+                      <div className={css.roster}>{archivedMembers.map(renderMember)}</div>
+                    </details>
+                  )}
                 </section>
                 <section>
                   {team.tasks.length === 0
@@ -343,7 +358,14 @@ export function TeamAction({
                       <>
                         <h3>{t('tasks')}<span className={css.count}>{team.tasks.length}</span></h3>
                         <div className={css.tasks}>
-                          {team.tasks.map(task => <TaskCard key={task.id} task={task} t={t} />)}
+                          {team.tasks.map(task => (
+                            <TaskCard
+                              key={task.id}
+                              task={task}
+                              archivedOwner={archivedMembers.some(member => member.name === task.ownerName)}
+                              t={t}
+                            />
+                          ))}
                         </div>
                       </>
                     )}

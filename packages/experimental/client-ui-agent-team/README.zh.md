@@ -31,13 +31,15 @@ kind: "package-reference"
 
 面板从共享 Session store 展示 Lead Session 的 roster 与任务板。面板保持打开时，任务和成员更新会直接出现。打开面板不发起投影请求。会话或 Session 列表正在加载时，面板显示加载提示；加载结束后仍无 Team 值时，显示不可用提示。
 
-Roster 行展示持久名称与阶段。provisioning 和 running 成员使用共享 ongoing loading，inactive 成员使用人物图标，failed 成员使用 error 红点。实时 Session 状态提供运行活动；共享 `modelSelection` 投影在可用时提供模型。当前会话带有“当前会话”标签且不可选择。在 teammate 会话中选择 Lead 会直接打开 Lead Session。选择 active teammate 会打开其普通 continuable 子会话地址。Host 在打开历史时校验 parent、child 与 mode；后续人类提示词使用同一 addressed-subagent 会话。
+Roster 行展示持久名称与阶段。provisioning 和 running 成员使用共享 ongoing loading，inactive 成员使用人物图标，failed 成员使用 error 红点。实时 Session 状态提供运行活动；共享 `modelSelection` 投影在可用时提供模型。当前会话带有“当前会话”标签且不可选择。在 teammate 会话中选择 Lead 会直接打开 Lead Session。选择 active 或 archived teammate 会打开其普通 continuable 子会话地址。Host 在打开历史时校验 parent、child 与 mode；后续人类提示词使用同一 addressed-subagent 会话。
+
+已归档队员放在其他成员下方默认折叠的分组中，名称变淡，显示灰色归档图标与“已归档”状态，行仍可打开原会话。已完成任务保留 owner，已归档 owner 名称附加“（已归档）”。面板不提供归档或恢复按钮。
 
 ### 查看任务板
 
 可开始的 pending 任务使用 idle 灰点，被依赖阻塞的 pending 任务使用 warning 橙点，in-progress 任务使用 ongoing loading，completed 任务使用 done 绿点。
 
-只读任务板展示任务标识、负责人、依赖、就绪状态、提示性写入范围与重叠警告。超过两行的描述提供展开按钮。分区标题显示成员与任务数量；空任务板显示简短描述，只有一名成员且无任务时采用单列面板。Team agent 通过工具创建和更新任务；面板不提供任务修改控件。当投影报告某条持久 Team 记录被拒绝时，面板在最后有效的 roster 与任务上方显示该失败。
+只读任务板展示任务标识、负责人、依赖、就绪状态、提示性写入范围与重叠警告。超过两行的描述提供展开按钮。成员标题显示在岗队员数与服务端配置上限，不计 Lead、failed 和 archived；任务标题显示任务数；空任务板显示简短描述，只有一名成员且无任务时采用单列面板。Team agent 通过工具创建和更新任务；面板不提供任务修改控件。当投影报告某条持久 Team 记录被拒绝时，面板在最后有效的 roster 与任务上方显示该失败。
 
 -----
 

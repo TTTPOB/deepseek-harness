@@ -31,13 +31,15 @@ Enable this package through [`@deepseek-ai/dsh-experimental-agent-team-profile`]
 
 The panel shows the Lead Session's roster and task board from the shared Session store. Task and roster updates appear while the panel stays open. Opening the panel performs no projection requests. The panel shows a loading notice while the conversation or Session list is loading, and an unavailable notice when no Team value is present afterward.
 
-Roster rows show durable names and phases. Provisioning and running members use the shared ongoing loader, inactive members use a person icon, and failed members use error. Live Session status supplies running activity; the shared `modelSelection` projection supplies a model when available. The current conversation carries a Current chat tag and cannot be selected. Selecting the Lead from a teammate conversation opens the Lead Session directly. Selecting an active teammate opens its ordinary continuable child address. The Host validates the parent, child, and mode when history opens; later human prompts use the same addressed-subagent conversation.
+Roster rows show durable names and phases. Provisioning and running members use the shared ongoing loader, inactive members use a person icon, and failed members use error. Live Session status supplies running activity; the shared `modelSelection` projection supplies a model when available. The current conversation carries a Current chat tag and cannot be selected. Selecting the Lead from a teammate conversation opens the Lead Session directly. Selecting an active or archived teammate opens its ordinary continuable child address. The Host validates the parent, child, and mode when history opens; later human prompts use the same addressed-subagent conversation.
+
+Archived teammates appear in a default-collapsed group below the other members, with muted names, a gray archive icon, and an Archived status. Their rows still open the original conversation. Completed tasks retain their owner and mark archived owners with an archived suffix. The panel has no archive or restore buttons.
 
 ### Inspect the task board
 
 Ready pending tasks use idle, blocked pending tasks use warning, in-progress tasks use ongoing, and completed tasks use done.
 
-The read-only task board shows task identity, owner, blockers, readiness, advisory write scopes, and overlap warnings. Descriptions longer than two lines have an expand toggle. Section headings show member and task counts; an empty board shows a short description, and a lone member with no tasks uses a single-column panel. Team agents create and update tasks through their tools; the panel provides no task mutation controls. When the projection reports a rejected persisted Team record, the panel shows that failure above the last valid roster and tasks.
+The read-only task board shows task identity, owner, blockers, readiness, advisory write scopes, and overlap warnings. Descriptions longer than two lines have an expand toggle. The member heading shows on-duty teammates against the server-configured limit, excluding the Lead, failed, and archived members; the task heading shows the task count; an empty board shows a short description, and a lone member with no tasks uses a single-column panel. Team agents create and update tasks through their tools; the panel provides no task mutation controls. When the projection reports a rejected persisted Team record, the panel shows that failure above the last valid roster and tasks.
 
 -----
 

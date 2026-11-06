@@ -150,6 +150,21 @@
   cursor: pointer;
 }
 
+.member[data-archived] {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.archivedGroup {
+  margin-top: 12px;
+}
+
+.archivedGroup summary {
+  margin: 0 4px 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .member:disabled {
   cursor: default;
 }

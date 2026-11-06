@@ -42,7 +42,7 @@ const lead: TeamMemberProjection = { id: SESSION, name: 'lead', role: 'lead', ph
 const worker: TeamMemberProjection = {
   id: WORKER, name: 'worker', role: 'teammate', phase: 'active',
 }
-const team: TeamProjection = { members: [lead, worker], tasks: [task] }
+const team: TeamProjection = { maxMembers: 4, members: [lead, worker], tasks: [task] }
 
 type Projections = SessionListState['projectionsBySession']
 
@@ -123,6 +123,38 @@ function setProjection(sessions: ReturnType<typeof bench>['sessions'], sessionId
 }
 
 describe('TeamAction', () => {
+  it('collapses archived teammates while keeping their conversations accessible and counts only on-duty teammates', () => {
+    const b = bench()
+    const archived = { ...worker, phase: 'archived' as const }
+    const members: TeamMemberProjection[] = [
+      lead, archived,
+      { id: 'preparing' as SessionId, name: 'preparing', role: 'teammate', phase: 'provisioning' },
+      { id: 'failed' as SessionId, name: 'failed', role: 'teammate', phase: 'failed' },
+      { id: 'active' as SessionId, name: 'active', role: 'teammate', phase: 'active' },
+    ]
+    const maxMembers = 3
+    setProjection(b.sessions, SESSION, {
+      maxMembers, members, tasks: [{ ...task, status: 'completed', ownerName: archived.name }],
+    })
+    render(<TeamAction {...b.props} />)
+    openPanel()
+    expect(screen.getByRole('heading', { name: `成员在岗 2 / ${maxMembers}` })).toBeTruthy()
+    const summary = screen.getByText('已归档（1）')
+    const group = summary.closest('details')!
+    expect(group.open).toBe(false)
+    expect(screen.getByText('Owner: worker（已归档）')).toBeTruthy()
+    fireEvent.click(summary)
+    const row = screen.getByRole<HTMLButtonElement>('button', { name: /^worker.*已归档/u })
+    expect(row.disabled).toBe(false)
+    expect(row.dataset.archived).toBe('true')
+    expect(row.querySelector('svg')).not.toBeNull()
+    fireEvent.click(row)
+    expect(b.injected.openTeammate).toHaveBeenCalledWith(SESSION, WORKER)
+    setProjection(b.sessions, SESSION, { maxMembers, members: [lead, worker], tasks: [] })
+    expect(screen.queryByText('已归档（1）')).toBeNull()
+    expect(screen.getByRole('heading', { name: `成员在岗 1 / ${maxMembers}` })).toBeTruthy()
+  })
+
   it('renders the Lead projection and applies later projection frames without any user action', async () => {
     const b = bench()
     render(<TeamAction {...b.props} />)
@@ -133,12 +165,13 @@ describe('TeamAction', () => {
     expect(screen.queryByRole('button', { name: /刷新|Refresh/u })).toBeNull()
 
     setProjection(b.sessions, SESSION, {
+      maxMembers: team.maxMembers,
       members: [lead, worker, { id: 'worker-b' as SessionId, name: 'worker-b', role: 'teammate', phase: 'provisioning' }],
       tasks: [task, { ...task, id: TASK_2, subject: 'Pushed task', status: 'pending', ready: true, writeScopeWarnings: [] }],
     })
     expect(screen.getByText('Pushed task')).toBeTruthy()
     expect(screen.getByRole('button', { name: /worker-b/u })).toHaveProperty('disabled', true)
-    expect(screen.getByRole('heading', { name: '成员3' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: `成员在岗 2 / ${team.maxMembers}` })).toBeTruthy()
   })
 
   it('overlays live Session status and the durable model selection on roster rows', () => {
@@ -198,7 +231,7 @@ describe('TeamAction', () => {
     expect(screen.queryByRole('status')).toBeNull()
     setProjectionSnapshot(b.sessions, SESSION, { state: 'idle', error: null, values: {} })
     expect(screen.getByRole('status').textContent).toBe(zh.unavailable)
-    setProjection(b.sessions, SESSION, { members: [lead], tasks: [] })
+    setProjection(b.sessions, SESSION, { maxMembers: team.maxMembers, members: [lead], tasks: [] })
     expect(screen.getByText(zh.empty)).toBeTruthy()
   })
 
@@ -232,7 +265,7 @@ describe('TeamAction', () => {
         byId: { ...current.byId, ['unrelated' as SessionId]: summary('unrelated' as SessionId, true) },
         projectionsBySession: {
           ...projectionsBySession,
-          ['unrelated' as SessionId]: { state: 'ready', error: null, values: { agentTeam: { members: [], tasks: [] } } },
+          ['unrelated' as SessionId]: { state: 'ready', error: null, values: { agentTeam: { maxMembers: team.maxMembers, members: [], tasks: [] } } },
         },
       })
       b.statuses.set(new Map([['unrelated' as SessionId, { running: true, pendingInteraction: undefined, completionUnread: false }]]))
@@ -274,6 +307,7 @@ describe('TeamAction', () => {
           state: 'ready', error: null,
           values: {
             agentTeam: {
+              maxMembers: team.maxMembers,
               members: [
                 lead,
                 worker,
