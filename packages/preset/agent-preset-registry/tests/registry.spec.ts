@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createScope, scopeOf, scopeParentOf } from '@deepseek-ai/dsh-scope'
-import { assembleContextFor } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { assembleContextFor } from '@deepseek-ai/dsh-agent'
 import { entryListProblem } from '../src/index.ts'
 import { currentKey, harness, declare, contribution, agentOn, liveRegistries, plugin } from './harness.ts'
 import { omitsGeneratedPage } from '../../../settings/settings/tests/live-config.ts'
@@ -50,6 +50,30 @@ describe('workspace placement', () => {
     await unplaced.dispose()
     await workspace.dispose()
     await other.dispose()
+  })
+
+  it('isolates concurrent mounts by workspace and keeps cold reads independent', async () => {
+    const ctx = await setup()
+    await declare(ctx, contribution('standard'))
+    const workspaces = [createScope(ctx, {}), createScope(ctx, {})]
+    const agents = [createScope(ctx, {}), createScope(ctx, {}), createScope(ctx, {})]
+    for (const [index, agent] of agents.entries()) {
+      const workspace = workspaces[index === 2 ? 1 : 0]!
+      ctx.agentPresets.place(agent.ctx, {
+        key: scopeOf(workspace.ctx)!, ctx: workspace.ctx, release: async () => {},
+      })
+    }
+    await Promise.all(agents.map(agent => ctx.agentPresets.mount(agent.ctx)))
+    const keys = agents.map(agent => scopeParentOf(scopeOf(agent.ctx)!))
+    expect(keys[0]).toBe(keys[1])
+    expect(keys[2]).not.toBe(keys[0])
+    expect(ctx.agentPresets.inspectCompositions()).toHaveLength(2)
+    await using cold = await ctx.agentPresets.acquireScope()
+    expect(keys).not.toContain(cold.key)
+    expect(ctx.agentPresets.inspectCompositions()).toHaveLength(3)
+    for (const agent of agents) await agent.dispose()
+    expect(ctx.agentPresets.inspectCompositions()).toHaveLength(1)
+    for (const workspace of workspaces) await workspace.dispose()
   })
 
   it('removes a mount from inspection when its workspace owner is disposed', async () => {
@@ -179,7 +203,7 @@ describe('declarative preset revisions', () => {
     await declare(ctx, contribution('minimal'))
     const agent = await agentOn(ctx, 'selection')
     expect(await ctx.agentPresets.select(agent, 'minimal')).toBe('minimal')
-    expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBe('minimal')
+    expect(ctx.sessionProjections.checkpoint(agent.session).agentPreset?.val).toBe('minimal')
     agent.session.append('turn/start', { turn: 1 })
     await expect(ctx.agentPresets.select(agent, 'standard')).rejects.toThrow('already started')
   })
@@ -320,6 +344,7 @@ it('ignores a retired modeSelectionEnabled field in the user patch', async () =>
 it('keeps its own instance off the generated Settings pages', () => omitsGeneratedPage(async (ctx) => {
   await ctx.plugin(Loader)
   await ctx.plugin(SessionProjectionRegistry)
+  await ctx.plugin(AgentRegistry)
   return ctx.plugin(AgentPresets, { default: 'standard' })
 }))
 
@@ -350,7 +375,7 @@ it('serializes competing blank-session selections and recovers after a failed se
     ctx.agentPresets.select(agent, 'absent'), ctx.agentPresets.select(agent, 'minimal'), ctx.agentPresets.select(agent, 'standard'),
   ])
   expect(results.map(row => row.status)).toEqual(['rejected', 'fulfilled', 'fulfilled'])
-  expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBe('standard')
+  expect(ctx.sessionProjections.checkpoint(agent.session).agentPreset?.val).toBe('standard')
 })
 
 it('retains a newly acquired generation when a previous activation is replaced', async () => {
@@ -391,11 +416,11 @@ it('logs the default preset a blank Session runs once it is selected without a r
   const ctx = await setup()
   await declare(ctx, contribution('standard'))
   const agent = await agentOn(ctx, 'unrecorded')
-  expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBeNull()
+  expect(ctx.agentPresets.presetForSession(agent.session)).toBeNull()
 
   expect(await ctx.agentPresets.select(agent, 'standard')).toBe('standard')
 
-  expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBe('standard')
+  expect(ctx.agentPresets.presetForSession(agent.session)).toBe('standard')
 })
 
 it('recomposes and logs a repeated selection once the preset definition was replaced', async () => {
@@ -422,7 +447,18 @@ it('does not log a selection when lazy mounting fails', async () => {
   const agent = await agentOn(ctx, 'observer')
   ctx.on('tools/change', () => { throw new Error('observer refused') })
   await expect(ctx.agentPresets.select(agent, 'minimal')).rejects.toThrow('observer refused')
-  expect(ctx.sessionProjections.stateOf(agent.session, 'agentPreset')).toBeNull()
+  expect(ctx.agentPresets.presetForSession(agent.session)).toBeNull()
+})
+
+it('commits a mounted selection despite a throwing tools observer', async () => {
+  const ctx = await setup()
+  await declare(ctx, contribution('standard'))
+  await declare(ctx, contribution('minimal'))
+  const agent = await agentOn(ctx, 'mounted-observer')
+  await using _lease = await ctx.agentPresets.acquireScope('minimal')
+  ctx.on('tools/change', () => { throw new Error('observer refused') })
+  expect(await ctx.agentPresets.select(agent, 'minimal')).toBe('minimal')
+  expect(ctx.agentPresets.presetForSession(agent.session)).toBe('minimal')
 })
 
 it('inventories failed conditional entries without executing their expressions again', async () => {

@@ -1,22 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ToolCallId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createSettlementMessage, withContinuableReturnGuidance } from '../src/continuation-messages.ts'
-
-describe('continuable return guidance', () => {
-  it('tells the child to send its result to the parent before finishing', () => {
-    const content = withContinuableReturnGuidance(SessionId('parent'), [
-      { type: 'text', text: 'Do the task.' },
-    ])
-    const guidance = content.at(-1)
-
-    expect(guidance).toMatchObject({ type: 'text' })
-    if (guidance?.type !== 'text') throw new Error('expected text guidance')
-    expect(guidance.text).toContain('Before you finish, send your result to that agent with')
-    expect(guidance.text).toContain('Send earlier messages as well when a finding changes what the parent should do next')
-    expect(guidance.text).toContain('sending a message does not end your turn')
-  })
-})
+import { createSettlementMessage } from '../src/continuation-messages.ts'
 
 const childId = SessionId('settled-child')
 const summary = { type: 'text', text: `Background subagent ${childId} finished and will do no further work unless you send it more.` }
@@ -78,6 +63,18 @@ it('includes closing text alongside structured results and diagnostics', () => {
     summary,
     { type: 'text', text: 'Its closing message:' },
     { type: 'text', text: 'final answer' },
+    { type: 'text', text: 'Structured result: {"answer":42}' },
+    { type: 'text', text: 'safe diagnostic' },
+  ])
+})
+
+it('omits the closing text after the child messaged its parent, keeping structured results and diagnostics', () => {
+  expect(createSettlementMessage(childId, {
+    stopReason: 'completed', output: [{ type: 'text', text: 'final answer, restated' }],
+    structured: { answer: 42 }, diagnostic: 'safe diagnostic',
+  }, true, true).content).toEqual([
+    summary,
+    { type: 'text', text: 'It sent you a message just before finishing, so its closing message is omitted.' },
     { type: 'text', text: 'Structured result: {"answer":42}' },
     { type: 'text', text: 'safe diagnostic' },
   ])

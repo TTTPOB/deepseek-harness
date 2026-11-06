@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRenderFactories, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import type { createNavigationStore } from './navigation-store.ts'
+import type { PluginHeaderLayoutFace } from './header-scroll.ts'
 import type { PluginManagerFace } from './manager-store.ts'
 import css from './ManagerEntry.module.css'
 
@@ -13,7 +14,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       scope: 'root'
       locale: 'pluginManager'
       store: ReturnType<typeof createNavigationStore>
-      inject: PluginManagerFace
+      inject: PluginManagerFace & PluginHeaderLayoutFace
       children: {
         'plugins.add.actions': { kind: 'list'; scope: 'root' }
         'plugins.tab': { kind: 'list'; scope: 'root' }

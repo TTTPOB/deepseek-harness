@@ -8,7 +8,7 @@ import type { ModelSelectionPolicy } from './model-selection.ts'
 export interface SubagentModelDiscoveryRequest {
   /** Registered LLM provider id. Omit to list providers. */
   readonly provider?: string
-  /** Exact model id to inspect. Requires provider; omit to list that provider's advertised models. */
+  /** Exact model id to inspect. Requires provider. */
   readonly model?: string
 }
 
@@ -34,20 +34,20 @@ function modelLine(provider: string, model: { id: string; name: string; descript
 }
 
 /**
- * Read the requested provider, that provider's advertised models, or one exact
- * model's reasoning efforts, filtered to the routes a Session froze. Catalog
- * membership remains advisory; only the route policy restricts discovery.
- * @param llm - Live LLM runtime that owns provider and model metadata.
- * @param policy - routes frozen for the composition that registered discovery.
+ * Discover authorized routes and reasoning efforts without changing the Agent.
+ * @param llm - live runtime owning provider and model metadata.
+ * @param policy - authorized routes, or the current parent route when selection is disabled.
  * @param request - provider and optional exact-model filter.
- * @param signal - caller cancellation for exact-model resolution.
- * @returns model-facing directory text; empty results render their own line.
+ * @param signal - caller cancellation for metadata resolution.
+ * @param selectionEnabled - whether to list authorized catalog entries instead of resolving the parent model.
+ * @returns model-facing directory text.
  */
 export async function listSubagentModels(
   llm: LlmRuntime,
   policy: ModelSelectionPolicy,
   request: SubagentModelDiscoveryRequest,
   signal: AbortSignal,
+  selectionEnabled = true,
 ): Promise<string> {
   if (request.model !== undefined && request.provider === undefined) {
     throw new Error('`model` requires `provider`')
@@ -61,13 +61,16 @@ export async function listSubagentModels(
   }
   if (request.provider.length === 0) throw new Error('`provider` must be non-empty')
   const allowedRoutes = policy.routes.filter(route => route.provider === request.provider)
-  if (allowedRoutes.length === 0) {
+  const [firstRoute] = allowedRoutes
+  if (firstRoute === undefined) {
     throw new Error(`LLM provider "${request.provider}" is not allowed for this Session`)
   }
   const provider = registeredProvider(llm, policy, request.provider)
   if (request.model === undefined) {
-    const models = (await llm.listModels(provider.id))
-      .filter(model => allowedRoutes.some(route => route.model === model.id))
+    const models = selectionEnabled
+      ? (await llm.listModels(provider.id)).filter(model => allowedRoutes.some(route => route.model === model.id))
+      : [await llm.resolveModelInfo(provider.id, firstRoute.model, signal)]
+    signal.throwIfAborted()
     return models.length === 0
       ? `(no advertised models for ${provider.id})`
       : models.map(model => modelLine(provider.id, model)).join('\n')

@@ -47,6 +47,7 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `freshProvider` | `spawn` | 启动 fresh teammate 的提供方 |
+| `freshAgentOptions` | 省略 | 仅当 fresh teammate 调用未指定 provider/model 对时使用的子 `provider`、`model`、`reasoningEffort` 与 `maxTokens` 默认项；fork teammate 继承 Lead 当前路由 |
 | `forkProvider` | `fork` | 启动 fork teammate 的提供方 |
 | `modelSelectionSettings` | `false` | 为每个 Team Session 读取 Host 的 `subagent-model-selection` 偏好；当该 Session 带有精确路由策略时，公开子 LLM 路由字段与 `list_agent_models` |
 
@@ -71,7 +72,7 @@ kind: "package-reference"
 
 默认关闭。设置 `modelSelectionSettings: true` 并加载 Host 拥有的 `@deepseek-ai/dsh-tool-subagent/model-selection-settings` 服务；缺少该服务时插件加载失败，而不是静默保持固定路由。每个新建顶层 Team Session 会读取该服务的 `subagent-model-selection` 偏好，并把精确允许路由记录为 `subagent/model-selection-policy`；teammate Session 继承其 Lead 已记录的路由，恢复的 Session 保留组合时的路由。设置修改只影响之后的顶层 Session，因此运行中的 Team 拥有稳定的授权集合。
 
-此后 `spawn_teammate` 接受成对出现的 `provider` 与 `model`，以及可选的 `reasoning_effort`；省略时继承 Lead 当前已记录的路由。执行器会在 `ctx.agentTeams.spawnTeammate` 占名之前检查参数对、Session 的精确路由策略、`ctx.llm.resolveCallConfig()` 以及执行提供方的 `agentOptions` 能力，因此被拒绝的请求不会改变 roster。`list_agent_models` 只列出该 Session 已授权的路由及其适配器拥有的推理强度。
+此后 `spawn_teammate` 接受成对出现的 `provider` 与 `model`，以及可选的 `reasoning_effort`；省略时，fresh teammate 使用 `freshAgentOptions`，否则继承 Lead 的 `agent.model.current()` 选择，包括下一次请求前的模型切换。执行器会在 `ctx.agentTeams.spawnTeammate` 占名之前检查参数对、Session 的精确路由策略、`ctx.llm.resolveCallConfig()` 以及执行提供方的 `agentOptions` 能力，因此被拒绝的请求不会改变 roster。`list_agent_models` 只列出该 Session 已授权的路由及其适配器拥有的推理强度。
 
 这些字段选择子 Agent 的输入 LLM 路由，不会改变 `freshProvider`/`forkProvider`，`list_agents` 仍报告执行提供方。对 `fork` teammate 而言，改变 provider 或 model 可能使提供方无法复用继承的对话前缀。
 
@@ -110,7 +111,7 @@ kind: "package-reference"
 
 member scope 上的一个 `team:policy` 段落说明共享的协作规则；固定文本与九个工具注册都声明在 [`src/index.ts`](src/index.ts)。九个工具 schema 注册在发布时被识别为 Team member 的 scope 中。与旧全局 continuable-subagent 控件同名的 scoped 注册只会为团队成员覆盖这些全局控件。
 
-启用 `modelSelectionSettings` 时，适配器注册共享的 `subagentModelSelectionPolicy` 投影，在安装某 Agent 的工具时冻结其 Session 的路由策略，并只为已冻结策略添加 `list_agent_models` 与路由字段。策略选择、授权、LLM preflight 与发现均使用共享 subagent 函数；本包只拥有工具 schema、执行器检查与冻结策略的应用点。
+启用 `modelSelectionSettings` 时，适配器保留共享 `subagentModelSelectionPolicy` 投影的句柄，并读取 Host 设置服务在 Agent 创建期间记录的策略。它只为已授权 Session 添加 `list_agent_models` 与路由字段。授权、LLM preflight 与发现使用共享 subagent 函数；Team 适配器拥有工具 schema、执行检查与 fresh 子智能体默认项。
 
 ### 按作用域注册与拆除
 

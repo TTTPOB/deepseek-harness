@@ -31,7 +31,7 @@ kind: "package-reference"
 
 ### 启用委派
 
-挂载服务、提供方与委派工具。提供方按配置名称注册，每个工具行选择一个提供方。最小配置如下：
+一起挂载本服务、`@deepseek-ai/dsh-session-projection`、提供方与委派工具；本服务等待投影注册表可用后才初始化。提供方按配置名称注册，每个工具行选择一个提供方。最小配置如下：
 
 ```yaml
 - name: '@deepseek-ai/dsh-subagent'
@@ -68,11 +68,6 @@ kind: "package-reference"
 
 每个确切在线 Agent 都可以对直接可继续 child 使用 `sendMessage()`；驻留的可继续 child 还可以对自己的直接 parent 使用它。正在工作的目标通过 Steer 在最近 step 接收 Agent 消息；空闲目标启动轮次，且只有直接 child 可以冷恢复。parent 也可以随时中断正在运行的后代或列举自己的子级。浏览器发出的继续执行 prompt 会独立选择 Queue 或 Steer，并且可以携带图片部分：Host 先通过附件存储完成整批图片的准入与持久化，子级 inbox 才接受这条消息；当子级声明的模型不接受图片输入时拒绝投递。 直接子级发现读取 parent 自有的 `subagentCatalog` projection。`listChildren(parentSessionId, signal?)` 持有一次优先实时来源的 Session 观察，异步返回目录，不读取子级日志。它转发取消信号，并在物化后释放观察。物化以 O(D) 时间保留 D 条事实的父日志事件顺序。外部条目是叶节点，不需要观察子 Session。后代发现按父事件顺序递归读取子级目录，每个可达 Session 观察一次。无法读取目录的分支会被跳过，并返回诊断；两条路径都不加载或恢复子级 Agent。
 
-<a id="shared-model-selection-policy"></a>
-### 共享的模型选择策略
-
-注册自有面向模型工具的委派消费方共享本包的路由策略，而不必重复实现。`selectSubagentModelSelectionPolicy()` 在组合某个 Session 的工具时冻结其策略：已记录的策略优先，因此恢复的 Session 保留原路由；子代理子级继承委派父级已记录的策略；只有全新的顶层 Session 才会读取当前用户偏好。策略只记录一次，后续设置编辑与 spawn 都不会改变在线或已恢复的 Session。`requestedAgentOptions()`、`assertAllowedModelSelection()`、`preflightChildLlmRoute()` 与 `parentAgentOptionsForDelegation()` 负责合并并执行所选路由；`listSubagentModels()` 渲染与 `list_subagent_models` 相同的 provider、model 与推理等级目录，并按冻结的路由过滤。可选的偏好服务仍位于 [`dsh-tool-subagent`](../tool-subagent/README.zh.md#selecting-a-child-llm) 的 `model-selection-settings` 入口；这些辅助函数不会在每次 spawn 时读取它。
-
 ### 失败与恢复
 
 缺少 `agents` 服务时，启动请求以 `CONTINUATION_UNAVAILABLE` 拒绝；运行时可用但父级缺失或被替换时，以 `UNAUTHORIZED` 拒绝。未实现任何执行方法的提供方会在注册时以 `UNSUPPORTED_CAPABILITY` 被拒绝；请求不受支持的能力会以同一码使创建失败。调用方信号仅取消尚未发布的工作；发布后通过 `dispose()` 取消该次 activation，并等待其后代（包括正在启动的后代）及其资源清理完成。`result` 在清理与通知结束后完成，携带输出、可选结构化数据与停止原因；结果捕获故障在清理后使其拒绝。清理失败使 `dispose()` 拒绝，并将生命周期结束事件标记为失败；结果 promise 与父级通知保留已捕获的执行结果。
@@ -108,9 +103,9 @@ kind: "package-reference"
 | [`src/descriptor.ts`](src/descriptor.ts) | 版本化的 `subagent/descriptor` 会话事件词汇 |
 | [`src/catalog.ts`](src/catalog.ts) | parent 自有的 `subagent/catalog` 事件与分块 host projection |
 | [`src/child-agent.ts`](src/child-agent.ts) | 子级组装、委派策略、深度辅助函数 |
-| [`src/model-selection.ts`](src/model-selection.ts) | 共享的子级路由合并、白名单执行与实时 LLM 预检 |
-| [`src/model-selection-state.ts`](src/model-selection-state.ts) | 持久化的 `subagent/model-selection-policy` 事件、projection 与 Session 策略冻结 |
-| [`src/model-discovery.ts`](src/model-discovery.ts) | 面向模型的发现工具所用的 `listSubagentModels` 核心 |
+| [`src/model-selection.ts`](src/model-selection.ts) | 委派和 Team 工具共享的子路由合并、授权与实时 LLM preflight |
+| [`src/model-selection-state.ts`](src/model-selection-state.ts) | 共享的 Session 路由授权保留投影 |
+| [`src/model-discovery.ts`](src/model-discovery.ts) | 共享的已授权提供方、模型与推理强度发现 |
 | [`src/list-children.ts`](src/list-children.ts) | 直接与递归的 parent 目录读取 |
 | [`src/control.ts`](src/control.ts) | 浏览器控制请求校验与稳定失败分码 |
 | [`src/control-types.ts`](src/control-types.ts) | client-safe 的目录行、控制面请求、回执与失败 |
@@ -118,7 +113,7 @@ kind: "package-reference"
 
 ### 提供方准备与结构化输出
 
-服务在创建前校验请求能力。本地提供方只提供 `prepareContinuable()`：spawn 返回全新状态，fork 返回已完成轮次的初始内容。管理器在创建子级前捕获父级模型设置、委派权限和组合。外部提供方保留 `start()` 作为传输适配器，并保留各自的权限系统；统一管理器拥有已发布的执行。结构化工具、指令、校验与终止保护仅属于一次本地 activation，不作为恢复配置持久化。子代理只能在消费已接受的输入且所属后代释放后提交结构化结果。结果暂存后，在工具结果策略及外层 PTC 执行完成前拒绝继续输入；结果被拒绝后重新开放输入，提交成功后则保持关闭。后续冷恢复不带结构化 schema。
+服务在创建前校验请求能力。本地提供方只提供 `prepareContinuable()`：spawn 返回全新状态，fork 返回已完成轮次的初始内容。管理器在创建子级前捕获 `parent.model.current()`、委派权限和组合，并在发布每个新建本地子级前记录解析后的路由，避免 fork 较旧的请求头覆盖父级当前路由或显式子级选项。冷恢复保留子级已持久化的模型选择。外部提供方保留 `start()` 作为传输适配器，并保留各自的权限系统；统一管理器拥有已发布的执行。结构化工具、指令、校验与终止保护仅属于一次本地 activation，不作为恢复配置持久化。子代理只能在消费已接受的输入且所属后代释放后提交结构化结果。结果暂存后，在工具结果策略及外层 PTC 执行完成前拒绝继续输入；结果被拒绝后重新开放输入，提交成功后则保持关闭。后续冷恢复不带结构化 schema。
 
 外部提供方为每次执行生成新的 `SubagentRun.id`，在运行时共享的 Session id 命名空间中跨所有父级和提供方保持唯一。与驻留 Agent、Session 或 activation 冲突时，启动以 `DUPLICATE_CHILD` 拒绝，并释放新的外部句柄，不替换已有执行。
 
@@ -172,7 +167,7 @@ kind: "package-reference"
 
 #### 模型看到什么
 
-父级投递且子级可使用相邻 agent 的 `send_message` 时，可继续子级的初始任务要求它在结束前通过 `send_message` 向父级发送完整结果，并在发现会改变父级下一步行动时提前报告。父级投递发送包含子级最终输出中非空文本块的 user-role 状态通知，不受 `send_message` 是否可用或是否调用影响。外部通知还说明不支持后续消息。推理及其他非文本块被排除。每条父级通知都会以 `Structured result: <JSON>` 附带可用的结构化输出，并以独立文本块附带提供方安全诊断。收尾文本为空时，通知使用 `It left no closing message.`。调用方投递不发送通知；清理成功时 SDK 生命周期通知保留完整子级输出。
+父级投递发送包含子级最终输出中非空文本块的 user-role 状态通知。若子级在该文本之前的最后一个动作是向父级发送消息，且此后既未领取输入也未记录任何工具调用，通知会以 `It sent you a message just before finishing, so its closing message is omitted.` 替代这些文本块；父级只有再次向子级发送消息才能取回被省略的收尾文本。外部通知还说明不支持后续消息。推理及其他非文本块被排除。每条父级通知都会以 `Structured result: <JSON>` 附带可用的结构化输出，并以独立文本块附带提供方安全诊断。收尾文本为空时，通知使用 `It left no closing message.`。调用方投递不发送通知；清理成功时 SDK 生命周期通知保留完整子级输出。
 
 #### Token 影响
 

@@ -2,17 +2,18 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { Agent } from '@deepseek-ai/dsh-agent'
-import type {} from '@deepseek-ai/dsh-llm'
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import {
   assertAllowedModelSelection,
   hasDelegationModelRequest,
+  hasConfiguredLlmSelection,
   listSubagentModels,
   parentAgentOptionsForDelegation,
   preflightChildLlmRoute,
   requestedAgentOptions,
-  selectSubagentModelSelectionPolicy,
+  subagentModelSelectionPolicy,
   subagentModelSelectionProjectionDefinition,
 } from '@deepseek-ai/dsh-subagent'
 import type {
@@ -36,12 +37,14 @@ export interface Config {
   readonly interrupt?: boolean
   /** Continuable-subagent provider used for fresh teammates. */
   readonly freshProvider?: string
+  /** Child defaults for fresh teammates; fork teammates inherit the Lead's route. */
+  readonly freshAgentOptions?: AgentOptions
   /** Continuable-subagent provider used for completed-prefix fork teammates. */
   readonly forkProvider?: string
   /**
-   * Sample the Host `subagent-model-selection` setting for each Team Session and
-   * expose child LLM `provider`, `model`, and `reasoning_effort` arguments on
-   * `spawn_teammate` while that Session carries a route policy. Requires the
+   * Read each Team Session's Host-recorded route policy and expose child LLM
+   * `provider`, `model`, and `reasoning_effort` arguments on `spawn_teammate`
+   * while that Session carries a route policy. Requires the
    * Host-owned `@deepseek-ai/dsh-tool-subagent/model-selection-settings`
    * service, whose exact-route authorization owns every selectable route.
    */
@@ -52,9 +55,17 @@ export interface Config {
 export const Config: z<Config> = z.object({
   interrupt: z.boolean().default(true),
   freshProvider: z.string().default('spawn'),
+  freshAgentOptions: (z.object({
+    provider: z.string(),
+    model: z.string(),
+    reasoningEffort: z.string().min(1) as z<ReturnType<typeof ReasoningEffortId> | undefined>,
+    maxTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+  }) as z<AgentOptions | undefined>).default(undefined),
   forkProvider: z.string().default('fork'),
   modelSelectionSettings: z.boolean().default(false),
 })
+
+type ResolvedConfig = Required<Omit<Config, 'freshAgentOptions'>> & Pick<Config, 'freshAgentOptions'>
 
 /** Model-facing collaboration guidance shared by Lead and teammates. */
 function teamPolicy(interrupt: boolean, modelSelection: boolean): string {
@@ -204,7 +215,7 @@ function callingAgent(agent: Agent | undefined, toolName: string): Agent {
 function install(
   agent: Agent,
   ctx: Context,
-  config: Required<Config>,
+  config: ResolvedConfig,
   policy: ModelSelectionPolicy | undefined,
 ): () => void {
   const scoped = agent.ctx
@@ -252,11 +263,11 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
         ...modelSelectionEnabled ? {
           provider: {
             type: 'string' as const,
-            description: 'LLM provider route for the teammate child Agent. Supply together with model; omit both to inherit the Lead\'s current route. This is the child input LLM provider, not the Team execution provider reported by list_agents.',
+            description: 'LLM provider route for the teammate child Agent. Supply together with model; omit both to use fresh defaults for fresh teammates or inherit the Lead\'s current route. This is the child input LLM provider, not the Team execution provider reported by list_agents.',
           },
           model: {
             type: 'string' as const,
-            description: 'Model id interpreted by provider. Supply together with provider; omit both to inherit the Lead\'s current route.',
+            description: 'Model id interpreted by provider. Supply together with provider; omit both to use fresh defaults for fresh teammates or inherit the Lead\'s current route.',
           },
           reasoning_effort: {
             type: 'string' as const,
@@ -273,9 +284,13 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
         // a rejected request leaves the roster unchanged.
         const modelRequest = args as DelegationModelRequest
         const parentOptions = parentAgentOptionsForDelegation(agent)
+        const configuredOptions = context === 'fresh'
+          && modelRequest.provider === undefined && modelRequest.model === undefined
+          ? config.freshAgentOptions
+          : undefined
         const requestedChildAgentOptions = requestedAgentOptions(
           parentOptions,
-          undefined,
+          configuredOptions,
           modelRequest,
           modelSelectionEnabled,
         )
@@ -287,7 +302,7 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
         if (requestedChildAgentOptions !== undefined && !provider.capabilities.agentOptions) {
           throw new Error(`subagent provider "${provider.name}" does not support child agentOptions`)
         }
-        if (hasDelegationModelRequest(modelRequest)) {
+        if (hasDelegationModelRequest(modelRequest) || hasConfiguredLlmSelection(configuredOptions)) {
           const llm = ctx.get('llm')
           if (llm === undefined) {
             throw new Error('cannot resolve the selected teammate LLM route because the `llm` service is unavailable')
@@ -535,8 +550,9 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
 }
 
 /** Install Team tools for members inside this plugin’s composition scope. */
-export function apply(ctx: Context, config: Config = {}): void {
-  const resolved: Required<Config> = {
+export async function apply(ctx: Context, config: Config = {}): Promise<void> {
+  const resolved: ResolvedConfig = {
+    ...config.freshAgentOptions === undefined ? {} : { freshAgentOptions: config.freshAgentOptions },
     interrupt: config.interrupt ?? true,
     freshProvider: config.freshProvider ?? 'spawn',
     forkProvider: config.forkProvider ?? 'fork',
@@ -555,12 +571,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       + '@deepseek-ai/dsh-tool-subagent/model-selection-settings in the Host scope',
     )
   }
-  if (settings !== undefined) {
-    ctx.effect(
-      () => ctx.sessionProjections.register(subagentModelSelectionProjectionDefinition),
-      'tool-team.modelSelectionProjection()',
-    )
-  }
+  const policyHandle = settings === undefined
+    ? undefined
+    : await ctx.sessionProjections.register(subagentModelSelectionProjectionDefinition)
   const compositionScope = scopeOf(ctx)
   const installed = new Map<Agent, () => void>()
   let disposed = false
@@ -582,13 +595,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     try {
       // The frozen Session policy decides both the visible schema and the
       // executor's authorization for the whole life of this installation.
-      const policy = settings === undefined
+      const routes = policyHandle === undefined
         ? undefined
-        : selectSubagentModelSelectionPolicy(
-          { projections: ctx.sessionProjections, sessions: ctx.sessions },
-          agent.session,
-          settings,
-        )
+        : subagentModelSelectionPolicy(policyHandle, agent.session)
+      const policy = routes === undefined ? undefined : { routes }
       installed.set(agent, install(agent, ctx, resolved, policy))
     } catch (error) {
       installed.delete(agent)

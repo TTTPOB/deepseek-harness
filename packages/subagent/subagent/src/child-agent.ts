@@ -58,15 +58,14 @@ export function resolveChildDepth(parent: Agent, maxDepth: number | undefined): 
 }
 
 /**
- * Resolve the parent values inherited by a child. The latest request header
- * owns provider, model, and reasoning effort after request-time selection;
- * creation options remain the fallback before the first request and retain
- * the configured output-token limit.
+ * Resolve the parent values inherited by a child. The Agent's current model
+ * selection owns provider, model, and reasoning effort, including selections
+ * made before a request. Creation options retain the output-token limit.
  * @param parent - delegating parent Agent.
  * @returns detached Agent options for child-option merging.
  */
 export function parentAgentOptionsForDelegation(parent: Agent): AgentOptions {
-  const requestConfig = parent.session.requestHeader()?.config
+  const requestConfig = parent.model.current()
   if (requestConfig === undefined) return { ...parent.options }
   const {
     provider: _createdProvider,
@@ -256,11 +255,11 @@ export function captureDelegatedPolicyOverrides(parent: Agent): DelegatedPolicyO
 
 /**
  * Append the captured delegation policy onto the child's own log as
- * `source: 'delegation'` events inside the unpublished creation window, so the
+ * `source: 'delegation'` events after Session announcement and before Agent registration, so the
  * child's effective policy is reconstructable from its log alone. Appends land
  * after any fork seed, so fresh policy wins stale seed state; later child
  * switches still win over these events.
- * @param childSession - the unpublished child's session.
+ * @param childSession - the child's announced, writable Session.
  * @param overrides - the policy captured at delegation.
  */
 export function appendDelegatedPolicyOverrides(

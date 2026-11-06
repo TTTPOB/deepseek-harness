@@ -47,6 +47,7 @@ The smallest addition to an existing composition is the two-package fragment fro
 | Field | Default | Meaning |
 |---|---|---|
 | `freshProvider` | `spawn` | Provider that starts fresh teammates |
+| `freshAgentOptions` | omitted | Child `provider`, `model`, `reasoningEffort`, and `maxTokens` defaults used only for fresh teammates when the call supplies no provider/model pair; fork teammates inherit the Lead's current route |
 | `forkProvider` | `fork` | Provider that starts fork teammates |
 | `modelSelectionSettings` | `false` | Sample the Host `subagent-model-selection` preference for each Team Session and, when that Session carries an exact route policy, expose the child LLM route fields and `list_agent_models` |
 
@@ -71,7 +72,7 @@ Creation and listing results identify members by `target`, with no member Sessio
 
 Off by default. Set `modelSelectionSettings: true` and load the Host-owned `@deepseek-ai/dsh-tool-subagent/model-selection-settings` service; the plugin fails to load without it instead of silently keeping the fixed route. Each fresh top-level Team Session samples that service's `subagent-model-selection` preference and records the exact allowed routes as `subagent/model-selection-policy`; a teammate Session inherits its Lead's recorded routes, and a restored Session keeps the routes it was composed with. Settings edits affect only later top-level Sessions, so a running Team keeps a stable authority set.
 
-`spawn_teammate` then accepts `provider` and `model` as one pair plus optional `reasoning_effort`; omission inherits the Lead's current logged route. The executor checks the argument pair, the Session's exact-route policy, `ctx.llm.resolveCallConfig()`, and the executing provider's `agentOptions` capability before `ctx.agentTeams.spawnTeammate` reserves the name, so a rejected request leaves the roster unchanged. `list_agent_models` lists only the Session's authorized routes and their adapter-owned reasoning efforts.
+`spawn_teammate` then accepts `provider` and `model` as one pair plus optional `reasoning_effort`; omission uses `freshAgentOptions` for fresh teammates and otherwise inherits the Lead's `agent.model.current()` selection, including a model switch before the next request. The executor checks the argument pair, the Session's exact-route policy, `ctx.llm.resolveCallConfig()`, and the executing provider's `agentOptions` capability before `ctx.agentTeams.spawnTeammate` reserves the name, so a rejected request leaves the roster unchanged. `list_agent_models` lists only the Session's authorized routes and their adapter-owned reasoning efforts.
 
 The fields select the child Agent's input LLM route. They never change `freshProvider`/`forkProvider`, and `list_agents` continues to report the execution provider. For a `fork` teammate, changing provider or model can prevent provider-side reuse of the inherited conversation prefix.
 
@@ -110,7 +111,7 @@ The [Agent Teams Agent Note](../../../.agents/notes/implemented/feature/2026-08-
 
 One `team:policy` section on the member scope states the shared coordination rules; the fixed text and the nine tool registrations are declared in [`src/index.ts`](src/index.ts). The nine tool schemas are registered in scopes recognized as Team members at publication. Scoped registrations with the same names as the legacy global continuable-subagent controls shadow those globals for team members only.
 
-With `modelSelectionSettings`, the adapter registers the shared `subagentModelSelectionPolicy` projection, freezes each Agent Session's route policy when its tools are installed, and adds `list_agent_models` plus the route fields only for a frozen policy. Policy selection, authorization, LLM preflight, and discovery are the shared subagent functions; this package owns only the tool schema, the executor checks, and the frozen-policy application point.
+With `modelSelectionSettings`, the adapter retains a handle to the shared `subagentModelSelectionPolicy` projection and reads the policy recorded by the Host settings service during Agent creation. It adds `list_agent_models` and route fields only for an authorized Session. Authorization, LLM preflight, and discovery use shared subagent functions; the Team adapter owns tool schemas, execution checks, and fresh-child defaults.
 
 ### Scoped registration and teardown
 

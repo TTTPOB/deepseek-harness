@@ -1,4 +1,4 @@
-/** Lexer-aware raw text literals and source diagnostics shared by both Node execution modes. */
+/** Lexer-aware raw text literals and source diagnostics shared by all Node execution modes. */
 import { stripTypeScriptTypes } from 'node:module'
 import { Parser, getLineInfo, tokTypes, type TokenType } from 'acorn'
 import { tsPlugin } from '@sveltejs/acorn-typescript'
@@ -37,7 +37,7 @@ function readRawRange(source: string, start: number): RawRange {
   throw new UnterminatedRawString(start, width)
 }
 
-function scanRawStrings(source: string): RawRange[] {
+function scanRawStrings(source: string, allowReturnOutsideFunction: boolean): RawRange[] {
   // TS speculative parsing can revisit a token; offsets identify each literal once.
   const ranges = new Map<number, RawRange>()
   const RawParser = Parser.extend(tsPlugin(), (Base) => {
@@ -60,9 +60,9 @@ function scanRawStrings(source: string): RawRange[] {
   })
   RawParser.parse(source, {
     ecmaVersion: 'latest', sourceType: 'script', locations: true,
-    // Both execution modes allow await. Sloppy script mode preserves legacy octal handling
+    // All execution modes allow await. Sloppy script mode preserves legacy octal handling
     // by stripTypeScriptTypes; imports are left to the selected execution mode's stripper.
-    allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true, allowImportExportEverywhere: true,
+    allowReturnOutsideFunction, allowAwaitOutsideFunction: true, allowImportExportEverywhere: true,
   })
   return [...ranges.values()].sort((a, b) => a.start - b.start)
 }
@@ -106,9 +106,9 @@ function diagnostic(source: string, offset: number, message: string): string {
   return `SyntaxError at ${line}:${column + 1}: ${message}\n  ${label} | ${text}\n  ${padding} | ${' '.repeat(column)}^`
 }
 
-function prepareRawStrings(source: string): { program: string; errorOffset?: number | undefined } {
+function prepareRawStrings(source: string, allowReturnOutsideFunction = true): { program: string; errorOffset?: number | undefined } {
   try {
-    return { program: replaceRawRanges(source, scanRawStrings(source)) }
+    return { program: replaceRawRanges(source, scanRawStrings(source, allowReturnOutsideFunction)) }
   } catch (error: unknown) {
     if (error instanceof UnterminatedRawString) throw new SyntaxError(diagnostic(source, error.start, error.message), { cause: error })
     // Acorn is supplemental: a false rejection must not block a program Node accepts.
@@ -141,14 +141,14 @@ export function preprocessRawStrings(source: string): string {
  * Strip failures use Acorn's original-source position when available, without its message;
  * TypeScript-only rejections retain only the strip message. No model-written code is executed.
  * @param source - Original model-written program.
- * @param format - Async function body or retained REPL statements.
+ * @param format - Async function body, retained REPL statements, or VM Script statements.
  * @returns JavaScript ready for the existing bootstrap.
  * @throws Error with a task-facing parse message; unterminated raw literals include their opener position.
  */
-export function prepareProgram(source: string, format: 'function-body' | 'repl'): string {
-  const { program, errorOffset } = prepareRawStrings(source)
+export function prepareProgram(source: string, format: 'function-body' | 'repl' | 'script'): string {
+  const { program, errorOffset } = prepareRawStrings(source, format === 'function-body')
   try {
-    if (format === 'repl') return stripTypeScriptTypes(program)
+    if (format !== 'function-body') return stripTypeScriptTypes(program)
     const stripped = stripTypeScriptTypes(FUNCTION_PREFIX + program + FUNCTION_SUFFIX)
     return stripped.slice(FUNCTION_PREFIX.length, stripped.length - FUNCTION_SUFFIX.length)
   } catch (error: unknown) {

@@ -3,13 +3,19 @@ import type { Volatile } from '@deepseek-ai/cordis'
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { AllowedModelRouteSchema, assertAllowedModelRoutes } from '@deepseek-ai/dsh-subagent'
-import type {
-  AllowedModelRoute,
-  SubagentModelSelectionSettings,
-  SubagentModelSelectionSettingsSource,
+import { SessionSeq } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-agent'
+import {
+  subagentModelSelectionPolicy,
+  subagentModelSelectionProjectionDefinition,
+} from '@deepseek-ai/dsh-subagent'
+import {
+  AllowedModelRouteSchema,
+  assertAllowedModelRoutes,
+  type AllowedModelRoute,
 } from '@deepseek-ai/dsh-subagent'
 
+import type { SubagentModelSelectionSettings, SubagentModelSelectionSettingsSource } from '@deepseek-ai/dsh-subagent'
 export type { SubagentModelSelectionSettings } from '@deepseek-ai/dsh-subagent'
 
 /** Optional deployment base for the preference. */
@@ -20,8 +26,10 @@ export interface Config {
   allowedModels: Volatile<AllowedModelRoute[]>
 }
 
-/** Singleton settings owner read when delegation tools are composed for a Session. */
+/** Host settings owner that records Session authorization before the first model request. */
 export class SubagentModelSelectionConfig extends Service implements SubagentModelSelectionSettingsSource {
+  static inject = ['sessionProjections', 'sessions']
+
   static Config = z.object({
     enabled: z.boolean().default(false).volatile(),
     allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile(),
@@ -31,8 +39,32 @@ export class SubagentModelSelectionConfig extends Service implements SubagentMod
     super(ctx, 'subagentModelSelection')
   }
 
+  protected async [Service.init](): Promise<void> {
+    const ctx = this.ctx
+    const policyReady = ctx.sessionProjections.register(subagentModelSelectionProjectionDefinition)
+    ctx.on('agent/created', async ({ agent }) => {
+      const policy = await policyReady
+      ctx.fiber.assertActive()
+      const target = agent.session
+      if (subagentModelSelectionPolicy(policy, target) !== undefined) return
+      let allowedModels: AllowedModelRoute[] | undefined
+      const parentId = target.header.origin === 'subagent' ? target.header.parentSession : undefined
+      if (parentId !== undefined) {
+        const parent = ctx.sessions.get(parentId)
+        if (parent !== undefined) allowedModels = subagentModelSelectionPolicy(policy, parent)
+      } else if (target.firstLiveSeq === 0
+        // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+        && target.eventAt(SessionSeq(0))?.type !== 'session/end-seed') {
+        const current = this.current()
+        allowedModels = current.enabled ? current.allowedModels : undefined
+      }
+      if (allowedModels !== undefined) target.append('subagent/model-selection-policy', { allowedModels })
+    })
+    await policyReady
+  }
+
   /**
-   * Read a detached selection preference for the next eligible Session composition.
+   * Read a detached selection preference for the next fresh top-level Session.
    * @returns the enabled state and exact allowed routes.
    */
   current(): SubagentModelSelectionSettings {

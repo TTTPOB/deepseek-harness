@@ -482,13 +482,12 @@ function availability(agent: Agent | undefined): 'running' | 'inactive' {
 }
 
 /**
- * Latest model of one live Agent: a request-time selection owns the logged
- * route after the first request, while creation options only supply the
- * fallback before it. An unloaded Agent has no model to report.
+ * Current model of one live Agent, including choices made before a request.
+ * An unloaded Agent has no model to report.
  * @param agent - live Team member, or undefined when its Agent is not loaded.
- * @returns the model actually in use, or undefined when unknown.
+ * @returns the model selected for the next step, or undefined when unknown.
  */
 function latestModel(agent: Agent | undefined): string | undefined {
   if (agent === undefined) return undefined
-  return agent.session.requestHeader()?.config.model ?? agent.options.model
+  return agent.model.current()?.model
 }

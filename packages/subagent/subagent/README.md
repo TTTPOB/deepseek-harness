@@ -31,7 +31,7 @@ This package is the contract every delegation setup shares. You enable it by mou
 
 ### Enabling delegation
 
-Mount the service with a provider and the delegation tool. The provider registers under its configured name; each tool row selects one provider. A minimal setup:
+Mount the service with `@deepseek-ai/dsh-session-projection`, a provider, and the delegation tool; the service waits for the projection registry before initializing. The provider registers under its configured name; each tool row selects one provider. A minimal setup:
 
 ```yaml
 - name: '@deepseek-ai/dsh-subagent'
@@ -68,11 +68,6 @@ In-process spawn accepts an independent `agentPreset`; fork and external backend
 
 Every exact live Agent can use `sendMessage()` with a direct continuable child; a resident continuable child can also use it with its direct parent. A working target receives the Agent message through Steer at its nearest step; an idle target starts a turn, and only a direct child can be cold-resumed. The parent can also interrupt a running descendant or list its children at any time. A browser continuation prompt independently selects Queue or Steer and may carry image parts: the Host admits and persists each image batch through the attachment store before the child inbox accepts the message, and refuses delivery when the child's declared model does not accept image input. Direct-child discovery reads the parent-owned `subagentCatalog` projection. `listChildren(parentSessionId, signal?)` owns a live-preferred Session observation and returns the catalog asynchronously without reading child logs. It forwards cancellation and releases the observation after materialization. Materialization preserves parent event order in O(D) time for D facts. External entries are leaves and require no child Session observation. Descendant discovery recursively reads local child catalogs in parent event order, observing each reachable Session once. It skips branches whose catalogs cannot be read and returns diagnostics for them; neither path loads or resumes a child Agent.
 
-<a id="shared-model-selection-policy"></a>
-### Shared model-selection policy
-
-Delegation consumers that register their own model-facing tools share this package's routing policy instead of reimplementing it. `selectSubagentModelSelectionPolicy()` freezes one Session's policy when its tools are composed: an already recorded policy wins, so a restored Session keeps its routes; a subagent child inherits its delegating parent's recorded policy; only a fresh top-level Session samples the current user preference. Recording happens once, so later settings edits and spawns never change a live or restored Session. `requestedAgentOptions()`, `assertAllowedModelSelection()`, `preflightChildLlmRoute()`, and `parentAgentOptionsForDelegation()` merge and enforce the selected route, while `listSubagentModels()` renders the same provider, model, and reasoning-effort directory that `list_subagent_models` returns, filtered to the frozen routes. The optional preference service stays in [`dsh-tool-subagent`](../tool-subagent/README.md#selecting-a-child-llm)'s `model-selection-settings` entry; these helpers never read it per spawn.
-
 ### Failure and recovery
 
 Starting without the `agents` service rejects with `CONTINUATION_UNAVAILABLE`; an available runtime rejects a missing or replaced parent with `UNAUTHORIZED`. Providers implementing neither execution method are rejected at registration with `UNSUPPORTED_CAPABILITY`; unsupported requested capabilities reject creation with the same code. The caller signal cancels only unpublished work; after publication, `dispose()` cancels the exact activation and waits for its descendants, including pending startups, and their resource cleanup. `result` settles after teardown and notifications, carrying output, optional structured data, and a stop reason; capture failures reject it after teardown. Cleanup failures reject `dispose()` and mark the lifecycle end as failed; the result promise and parent notification retain the captured execution result.
@@ -108,9 +103,9 @@ This section explains how the service is built and where the observable behavior
 | [`src/descriptor.ts`](src/descriptor.ts) | Versioned `subagent/descriptor` session-event vocabulary |
 | [`src/catalog.ts`](src/catalog.ts) | Parent-owned `subagent/catalog` event and chunked host projection |
 | [`src/child-agent.ts`](src/child-agent.ts) | Child composition, delegated policy, depth helpers |
-| [`src/model-selection.ts`](src/model-selection.ts) | Shared child route merge, allowlist enforcement, and live LLM preflight |
-| [`src/model-selection-state.ts`](src/model-selection-state.ts) | Durable `subagent/model-selection-policy` event, projection, and Session policy freezing |
-| [`src/model-discovery.ts`](src/model-discovery.ts) | `listSubagentModels` discovery core used by model-facing discovery tools |
+| [`src/model-selection.ts`](src/model-selection.ts) | Shared child-route merging, authorization, and live LLM preflight for delegation and Team tools |
+| [`src/model-selection-state.ts`](src/model-selection-state.ts) | Shared retained projection of Session route authorization |
+| [`src/model-discovery.ts`](src/model-discovery.ts) | Shared authorized provider, model, and reasoning-effort discovery |
 | [`src/list-children.ts`](src/list-children.ts) | Direct and recursive parent-catalog reads |
 | [`src/control.ts`](src/control.ts) | Browser control request validation and stable failure codes |
 | [`src/control-types.ts`](src/control-types.ts) | Client-safe catalog row, control requests, receipts, and failures |
@@ -118,7 +113,7 @@ This section explains how the service is built and where the observable behavior
 
 ### Provider preparation and structured output
 
-The service validates requested capabilities before creation. Local providers supply only `prepareContinuable()`: spawn returns fresh state and fork returns a completed-turn seed. The manager captures the parent model settings, delegated permissions, and composition before creating the child. External providers retain `start()` as a transport adapter and retain their own permission systems. The common manager owns their published execution. Structured tools, instructions, validation, and terminal guards belong to one local activation; they are not persisted as resume configuration. The child can submit its structured result after consuming accepted input and releasing owned descendants. Staging a result closes further input through tool-result policy and any enclosing PTC execution; a rejected result reopens input, while a committed result keeps it closed. Later cold resume has no structured schema.
+The service validates requested capabilities before creation. Local providers supply only `prepareContinuable()`: spawn returns fresh state and fork returns a completed-turn seed. The manager captures `parent.model.current()`, delegated permissions, and composition before creating the child. It records the resolved route on each new local child before publication, so a fork's older request headers cannot override the current parent route or explicit child options. Cold resume preserves the child's persisted model selection. External providers retain `start()` as a transport adapter and retain their own permission systems. The common manager owns their published execution. Structured tools, instructions, validation, and terminal guards belong to one local activation; they are not persisted as resume configuration. The child can submit its structured result after consuming accepted input and releasing owned descendants. Staging a result closes further input through tool-result policy and any enclosing PTC execution; a rejected result reopens input, while a committed result keeps it closed. Later cold resume has no structured schema.
 
 External providers mint a fresh `SubagentRun.id` for each execution in the runtime's shared Session id namespace, across all parents and providers. A collision with a resident Agent, Session, or activation rejects startup with `DUPLICATE_CHILD` and disposes the new external handle without replacing the existing execution.
 
@@ -172,7 +167,7 @@ Read these pages when the package-level contract is not enough. They move from t
 
 #### What the model sees
 
-For parent delivery with the adjacent-Agent `send_message` tool available to the child, a continuable child’s initial task instructs it to send a self-contained result to its parent through `send_message` before finishing, and to report earlier findings that change the parent’s next action. Parent delivery emits a user-role status notice containing the child’s nonempty final text blocks, regardless of `send_message` availability or use. External notices also state that further messages are unsupported. Reasoning and other nontext blocks are excluded. Every parent notice includes available structured output as `Structured result: <JSON>` and the provider’s safe diagnostic as a separate text block. Empty closing text is reported as `It left no closing message.` Caller delivery emits no notice; SDK lifecycle notifications retain complete child output when cleanup succeeds.
+Parent delivery emits a user-role status notice containing the child’s nonempty final text blocks. When the child's last action before that text was a message to its parent, with no input claimed and no tool call logged after it, the notice replaces them with `It sent you a message just before finishing, so its closing message is omitted.`; the parent recovers omitted closing text only by messaging the child again. External notices also state that further messages are unsupported. Reasoning and other nontext blocks are excluded. Every parent notice includes available structured output as `Structured result: <JSON>` and the provider’s safe diagnostic as a separate text block. Empty closing text is reported as `It left no closing message.` Caller delivery emits no notice; SDK lifecycle notifications retain complete child output when cleanup succeeds.
 
 #### Token effect
 

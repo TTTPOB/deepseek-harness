@@ -29,7 +29,13 @@ function Frame({ usePanelInfo, renderSlot }: FrameProps) {
 
 async function bench() {
   const rt = await SlotTestRuntime.create()
-  onTestFinished(() => rt.dispose())
+  const fontsDescriptor = Object.getOwnPropertyDescriptor(document, 'fonts')
+  Object.defineProperty(document, 'fonts', { configurable: true, value: new EventTarget() })
+  onTestFinished(async () => {
+    await rt.dispose()
+    if (fontsDescriptor === undefined) Reflect.deleteProperty(document, 'fonts')
+    else Object.defineProperty(document, 'fonts', fontsDescriptor)
+  })
   const locale = new LocaleRuntime(rt.ctx)
   locale.setLocale('en')
   rt.ctx.provide('locale', locale)
@@ -39,6 +45,7 @@ async function bench() {
     pluginInventory: { list: vi.fn(async () => ({ ok: true, value: { entries: [], managementAvailable: true } })) },
     pluginRegistryProbe: { fastest: vi.fn(async () => ({ ok: true, value: null })) },
     pluginManager: {
+      readBundleDetail: vi.fn(async () => ({ ok: true, value: { status: 'none' } })),
       listBundles: vi.fn(async () => ({ ok: true, value: [BUNDLE] })),
       listPlugins: vi.fn(async () => ({ ok: true, value: [] })),
       registries: vi.fn(async () => ({ ok: true, value: { registry: null, fallbackRegistries: [], resolved: null } })),

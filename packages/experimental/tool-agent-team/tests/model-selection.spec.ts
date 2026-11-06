@@ -1,3 +1,4 @@
+import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -110,7 +111,7 @@ async function setup(script: ConstructorParameters<typeof MockAdapter>[0], optio
 }
 
 function execute(ctx: Context, agent: Agent, name: string, args: unknown) {
-  return ctx.tools.execute({
+  return executeToolFixture(ctx, {
     callId: ToolCallId(`team-model-call-${++callNumber}`),
     name,
     arguments: args,
@@ -156,6 +157,80 @@ async function storedEvents(ctx: Context, id: SessionId) {
 }
 
 describe('dsh-tool-team model selection', () => {
+  it.each([
+    { previous: false, context: 'fresh' }, { previous: true, context: 'fresh' },
+    { previous: false, context: 'fork' }, { previous: true, context: 'fork' },
+  ] as const)('inherits a switched route before the next request ($context, previous: $previous)', async ({ previous, context }) => {
+    const { ctx, lead, adapter } = await setup(
+      previous ? [textResponse('lead answer'), 'hang', textResponse('settled')] : ['hang', textResponse('settled')],
+      { enabled: true },
+    )
+    if (previous) await runTurn(lead, 'Parent task')
+    const selection = { provider: 'mock', model: 'other-model', reasoningEffort: ReasoningEffortId('low') }
+    lead.model.select(selection)
+    expect(ctx.agentTeams.listMembers(lead)[0]?.model).toBe(selection.model)
+    const spawned = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'switched-worker', description: 'current route', prompt: 'wait', context,
+    })
+    expect(spawned.isError, text(spawned)).toBe(false)
+    const childId = ctx.agentTeams.listMembers(lead)[1]!.id
+    const child = await waitRunning(ctx, childId)
+    expect(child.model.current()).toMatchObject(selection)
+    expect(adapter.requests.find(request => request.sessionId === childId)?.model).toBe(selection.model)
+    child.model.select({ ...selection, model: 'mock' })
+    expect(ctx.agentTeams.listMembers(lead)[1]?.model).toBe('mock')
+    ctx.agentTeams.interrupt(lead, 'switched-worker')
+    await waitNoAgent(ctx, childId)
+    await lead.whenIdle()
+  })
+
+  it.each(['fresh', 'fork'] as const)('uses fresh defaults only for fresh teammates (%s)', async (context) => {
+    const defaults = { provider: 'mock', model: 'other-model', reasoningEffort: ReasoningEffortId('low'), maxTokens: 731 }
+    const { ctx, lead, adapter } = await setup([textResponse('lead answer'), 'hang', textResponse('settled')], {
+      config: { freshAgentOptions: defaults },
+      leadOptions: { provider: 'mock', model: 'mock', reasoningEffort: ReasoningEffortId('high') },
+    })
+    await runTurn(lead, 'Parent task')
+    const spawned = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'default-worker', description: 'configured defaults', prompt: 'wait', context,
+    })
+    expect(spawned.isError, text(spawned)).toBe(false)
+    const childId = ctx.agentTeams.listMembers(lead)[1]!.id
+    const child = await waitRunning(ctx, childId)
+    const expected = context === 'fresh'
+      ? { provider: defaults.provider, model: defaults.model, reasoningEffort: defaults.reasoningEffort }
+      : lead.model.current()
+    expect(child.model.current()).toMatchObject(expected!)
+    const request = adapter.requests.find(request => request.sessionId === childId)
+    expect(request?.model).toBe(expected?.model)
+    if (context === 'fresh') expect(child.options.maxTokens).toBe(defaults.maxTokens)
+    ctx.agentTeams.interrupt(lead, 'default-worker')
+    await waitNoAgent(ctx, childId)
+    await lead.whenIdle()
+  })
+
+  it('uses an explicit route instead of fresh defaults and validates defaults before reserving a name', async () => {
+    const { ctx, lead } = await setup(['hang', textResponse('settled')], {
+      enabled: true,
+      config: { freshAgentOptions: { provider: 'missing-provider', model: 'unavailable' } },
+    })
+    const rejected = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'default-worker', description: 'invalid defaults', prompt: 'wait',
+    })
+    expect(rejected.isError).toBe(true)
+    expect(ctx.agentTeams.listMembers(lead)).toHaveLength(1)
+    const accepted = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'default-worker', description: 'explicit route', prompt: 'wait', provider: 'mock', model: 'mock',
+    })
+    expect(accepted.isError, text(accepted)).toBe(false)
+    const childId = ctx.agentTeams.listMembers(lead)[1]!.id
+    const child = await waitRunning(ctx, childId)
+    expect(child.model.current()).toMatchObject({ provider: 'mock', model: 'mock' })
+    ctx.agentTeams.interrupt(lead, 'default-worker')
+    await waitNoAgent(ctx, childId)
+    await lead.whenIdle()
+  })
+
   it('rejects invalid or unauthorized routes before reserving a teammate name', async () => {
     const { ctx, lead } = await setup(['hang'], { enabled: true })
     const cases: Array<[Record<string, unknown>, string]> = [
@@ -235,6 +310,32 @@ describe('dsh-tool-team model selection', () => {
     expect(text(await execute(ctx, child, 'list_agent_models', { provider: 'mock' })))
       .toContain('mock/other-model — Other')
     ctx.agentTeams.interrupt(lead, 'discovery-worker')
+    await waitNoAgent(ctx, childId)
+    await lead.whenIdle()
+  })
+
+  it('preserves a persisted pending model selection across cold resume', async () => {
+    const { ctx, lead, adapter } = await setup([
+      'hang', textResponse('settled'), 'hang', textResponse('settled'),
+    ], { enabled: true })
+    const spawned = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'pending-worker', description: 'pending model', prompt: 'wait',
+    })
+    expect(spawned.isError, text(spawned)).toBe(false)
+    const childId = ctx.agentTeams.listMembers(lead)[1]!.id
+    const child = await waitRunning(ctx, childId)
+    const selection = { provider: 'mock', model: 'other-model', reasoningEffort: ReasoningEffortId('low') }
+    child.model.select(selection)
+    ctx.agentTeams.interrupt(lead, 'pending-worker')
+    await waitNoAgent(ctx, childId)
+    await lead.whenIdle()
+    await ctx.agentTeams.sendMessage(lead, {
+      target: 'pending-worker', content: [{ type: 'text', text: 'continue' }], signal: SIGNAL,
+    })
+    const resumed = await waitRunning(ctx, childId)
+    expect(resumed.model.current()).toMatchObject(selection)
+    expect(adapter.requests.findLast(request => request.sessionId === childId)?.model).toBe(selection.model)
+    ctx.agentTeams.interrupt(lead, 'pending-worker')
     await waitNoAgent(ctx, childId)
     await lead.whenIdle()
   })
@@ -425,7 +526,7 @@ describe('dsh-tool-team model selection', () => {
   it('clears the inherited effort when a selected route changes and keeps it otherwise', async () => {
     const { ctx, lead } = await setup(
       [textResponse('lead answer'), 'hang', 'hang', textResponse('settled'), textResponse('settled')],
-      { enabled: true },
+      { enabled: true, leadOptions: { provider: 'mock', model: 'mock', reasoningEffort: ReasoningEffortId('high') } },
     )
     await runTurn(lead, 'Parent task')
     expect(lead.session.requestHeader()?.config.reasoningEffort).toBe('high')
