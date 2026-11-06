@@ -1,6 +1,22 @@
 {
   "initial": [
     {
+      "name": "archive_teammate",
+      "description": "Archive a teammate that is no longer needed, freeing its member slot and releasing its in-progress tasks. Only the Team Lead may call this tool. A later Lead message automatically restores the same conversation if capacity allows.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Durable teammate name to archive."
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    },
+    {
       "name": "bash",
       "description": "Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Managed `$DSH_*` variables expose current harness environment facts. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Provide `description` before `command` in the arguments. Before any delete or move, verify that the resolved absolute target path is the intended one; never run it against a computed path you have not checked. An unset variable expands to an empty string, so guard variables in such paths with `${VAR:?}`. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]`, a policy denial: do not retry another way.",
       "parameters": {
@@ -262,10 +278,15 @@
     },
     {
       "name": "list_agents",
-      "description": "List the Lead and every durable teammate with an addressable target and current availability. inactive means no turn is executing, not a task result. provisioning and failed describe member creation.",
+      "description": "List the Lead and non-archived teammates with an addressable target and current availability. inactive means no turn is executing, not a task result. provisioning and failed describe member creation. Set include_archived to include archived teammates.",
       "parameters": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "include_archived": {
+            "type": "boolean",
+            "description": "Include archived teammates. Defaults to false."
+          }
+        }
       }
     },
     {
