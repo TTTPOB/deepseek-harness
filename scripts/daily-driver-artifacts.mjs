@@ -1,7 +1,6 @@
 /** Stage local fork artifacts and their unpublished workspace peer closure for isolated consumers. */
 import assert from 'node:assert/strict'
 import { copyFile, readFile, writeFile } from 'node:fs/promises'
-import { load as parseYaml } from 'js-yaml'
 import { basename, join, resolve } from 'node:path'
 import { officialVersion, plan, root, selections } from './daily-driver-plan.mjs'
 
@@ -23,6 +22,8 @@ export function artifactClosure(packages) {
 export async function stageArtifactOverrides(runtime, packages, tarballs) {
   assert.equal(packages.length, tarballs.length)
   const explicit = new Map(packages.map((pkg, index) => [pkg.name, resolve(tarballs[index])]))
+  // Loaded lazily: daily-driver.mjs imports this module before `prepare` installs root dependencies.
+  const { load: parseYaml } = await import('js-yaml')
   const workspace = parseYaml(await readFile(join(root, 'pnpm-workspace.yaml'), 'utf8'))
   const overrides = { '@earendil-works/pi-ai': workspace.overrides['@earendil-works/pi-ai'] }
   for (const pkg of artifactClosure(packages)) {
