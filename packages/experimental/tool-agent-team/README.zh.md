@@ -62,7 +62,7 @@ kind: "package-reference"
 - **创建 teammate**——`spawn_teammate` 接收名字、描述与初始任务；只有 Lead 可以调用它。
 - **发送消息**——`send_message` 在最近的步骤边界对运行中的成员进行 steering（中途引导）、启动或恢复非活动成员。
 - **查看与等待**——`list_agents` 返回各成员的 `target` 与可用状态；`wait_agent` 等待下一次团队变化；`interrupt_agent` 停止 teammate 的当前轮次（仅限 Lead）。
-- **归档已完成工作的队员**——仅 Lead 可用 `archive_teammate` 释放名额与进行中任务，不删除会话。`list_agents` 默认隐藏归档成员，`include_archived: true` 才包含；`wait_agent` 不把他们视为可能推进工作的成员。名额充足时 Lead 发消息自动恢复归档目标，并返回 `unarchived: true` 和说明；满员或队员发送方不能恢复。没有 `unarchive_teammate` 工具。
+- **归档已完成工作的队员**——仅 Lead 可用 `archive_teammate` 释放名额与进行中任务，不删除会话。`list_agents` 默认隐藏归档成员，`include_archived: true` 才包含；`wait_agent` 不把他们视为可能推进工作的成员。Lead 给已归档队员发消息时，若有空余名额会恢复该队员，并返回 `unarchived: true` 和说明；Team 满员或发送方是队员时，发送失败。没有 `unarchive_teammate` 工具。
 - **管理任务板**——`team_task_create`、`team_task_list`、`team_task_get` 与 `team_task_update` 添加、浏览、读取与更新共享任务。
 
 当 Session 启用模型选择时，`spawn_teammate` 还会接受 `provider`、`model` 与 `reasoning_effort`，并由 `list_agent_models` 发现该 Session 可选的精确路由。roster 的 `provider` 始终是执行提供方（`spawn` 或 `fork`），绝不是子 LLM 提供方。

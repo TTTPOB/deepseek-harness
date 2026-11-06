@@ -206,7 +206,7 @@ describe('Team archiving', () => {
     await ctx.agentTeams.archiveTeammate(lead, peer.member.name)
     const before = lead.session.snapshotEvents().length
     await expect(ctx.agentTeams.sendMessage(caller, { target: peer.member.name, content: content('wake up'), signal: SIGNAL }))
-      .rejects.toThrow('ask the Team Lead')
+      .rejects.toThrow('only the Team Lead can restore it')
     expect(lead.session.snapshotEvents()).toHaveLength(before)
     expect(durable(lead).members.find(member => member.id === peer.member.id)?.phase).toBe('archived')
     ctx.agentTeams.interrupt(lead, sender.member.name)

@@ -2251,7 +2251,7 @@ subagent_oar 工具在为外部提供方配置的别名之间选择。本目录�
 
 ### `archive_teammate`
 
-归档不再需要的队员，释放其成员名额与进行中的任务。只有 Team Lead 能调用。名额允许时，后续 Lead 消息会自动恢复同一会话。
+归档不再需要的队员。该队员的成员名额被释放，它名下 in_progress 的任务回到无人认领的 pending 状态。只有 Team Lead 能调用。之后给该队员发消息，若有空余名额，会恢复同一会话。
 
 ```json
 {
@@ -2259,7 +2259,7 @@ subagent_oar 工具在为外部提供方配置的别名之间选择。本目录�
   "properties": {
     "target": {
       "type": "string",
-      "description": "Durable teammate name to archive."
+      "description": "Teammate target returned by spawn_teammate or list_agents."
     }
   },
   "required": [

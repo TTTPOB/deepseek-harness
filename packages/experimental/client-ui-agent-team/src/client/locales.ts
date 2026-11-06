@@ -43,7 +43,7 @@ export type TeamKey = keyof typeof zh
 export const en = {
   'memberStatus.archived': 'Archived',
   'archivedGroup': 'Archived ({n})',
-  'onDuty': 'On duty {n} / {max}',
+  'onDuty': 'Active {n} / {max}',
   'ownerArchived': ' (archived)',
   trigger: 'Agent team',
   loading: 'Loading team…',
@@ -109,7 +109,7 @@ export const ja = {
 export const es = {
   'memberStatus.archived': 'Archivado',
   'archivedGroup': 'Archivados ({n})',
-  'onDuty': 'En servicio {n} / {max}',
+  'onDuty': 'Activos {n} / {max}',
   'ownerArchived': ' (archivado)',
   trigger: 'equipo de agentes',
   loading: 'Cargando equipo…',
@@ -142,7 +142,7 @@ export const es = {
 export const fr = {
   'memberStatus.archived': 'Archivé',
   'archivedGroup': 'Archivés ({n})',
-  'onDuty': 'En poste {n} / {max}',
+  'onDuty': 'Actifs {n} / {max}',
   'ownerArchived': ' (archivé)',
   trigger: "Équipe d'agents",
   loading: "Chargement de l'équipe…",
@@ -175,7 +175,7 @@ export const fr = {
 export const de = {
   'memberStatus.archived': 'Archiviert',
   'archivedGroup': 'Archiviert ({n})',
-  'onDuty': 'Im Einsatz {n} / {max}',
+  'onDuty': 'Aktiv {n} / {max}',
   'ownerArchived': ' (archiviert)',
   trigger: 'Agententeam',
   loading: 'Team wird geladen…',
@@ -208,7 +208,7 @@ export const de = {
 export const ru = {
   'memberStatus.archived': 'В архиве',
   'archivedGroup': 'В архиве ({n})',
-  'onDuty': 'В работе {n} / {max}',
+  'onDuty': 'Активны {n} / {max}',
   'ownerArchived': ' (в архиве)',
   trigger: 'Команда агентов',
   loading: 'Загрузка команды…',
@@ -241,7 +241,7 @@ export const ru = {
 export const pt = {
   'memberStatus.archived': 'Arquivado',
   'archivedGroup': 'Arquivados ({n})',
-  'onDuty': 'Em atividade {n} / {max}',
+  'onDuty': 'Ativos {n} / {max}',
   'ownerArchived': ' (arquivado)',
   trigger: 'Equipe de agentes',
   loading: 'Carregando equipe…',

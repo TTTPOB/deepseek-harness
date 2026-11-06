@@ -2245,7 +2245,7 @@ The kind-agnostic background-job controller: background bash commands and PTY se
 
 ### `archive_teammate`
 
-Archive a teammate that is no longer needed, freeing its member slot and releasing its in-progress tasks. Only the Team Lead may call this tool. A later Lead message automatically restores the same conversation if capacity allows.
+Archive a teammate that is no longer needed. Its member slot is freed and its in_progress tasks return to pending without an owner. Only the Team Lead may call this. Sending the teammate a message later restores the same conversation when a member slot is free.
 
 ```json
 {
@@ -2253,7 +2253,7 @@ Archive a teammate that is no longer needed, freeing its member slot and releasi
   "properties": {
     "target": {
       "type": "string",
-      "description": "Durable teammate name to archive."
+      "description": "Teammate target returned by spawn_teammate or list_agents."
     }
   },
   "required": [

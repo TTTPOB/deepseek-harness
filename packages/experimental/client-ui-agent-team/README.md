@@ -33,7 +33,7 @@ The panel shows the Lead Session's roster and task board from the shared Session
 
 Roster rows show durable names and phases. Provisioning and running members use the shared ongoing loader, inactive members use a person icon, and failed members use error. Live Session status supplies running activity; the shared `modelSelection` projection supplies a model when available. The current conversation carries a Current chat tag and cannot be selected. Selecting the Lead from a teammate conversation opens the Lead Session directly. Selecting an active or archived teammate opens its ordinary continuable child address. The Host validates the parent, child, and mode when history opens; later human prompts use the same addressed-subagent conversation.
 
-Archived teammates appear in a default-collapsed group below the other members, with muted names, a gray archive icon, and an Archived status. Their rows still open the original conversation. Completed tasks retain their owner and mark archived owners with an archived suffix. The panel has no archive or restore buttons.
+Archived teammates appear in a default-collapsed group below the other members, with muted names, a gray archive icon, and an Archived status. Their rows still open the original conversation. A task card whose owner is archived shows "(archived)" after the owner name. The panel has no archive or restore buttons.
 
 ### Inspect the task board
 

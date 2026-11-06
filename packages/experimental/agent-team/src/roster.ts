@@ -48,7 +48,7 @@ export function resolveActiveMember(
   if (name === 'lead') return { id: root.id, name }
   const member = state.members.find(candidate => candidate.name === name)
   if (member?.phase === 'archived') {
-    throw new TeamError(`teammate "${name}" is archived; ask the Team Lead to send it a message first`, 'TEAM_MEMBER_ARCHIVED')
+    throw new TeamError(`teammate "${name}" is archived; it cannot own tasks until a Lead message restores it`, 'TEAM_MEMBER_ARCHIVED')
   }
   if (member === undefined || member.phase !== 'active') {
     throw new TeamError(`active teammate "${name}" not found`, 'TEAM_MEMBER_NOT_FOUND')
@@ -266,7 +266,7 @@ export class TeamRoster {
       const member = state.members.find(candidate => candidate.name === targetName.trim())
       if (member?.phase !== 'archived') return false
       if (membership.role !== 'lead') {
-        throw new TeamError(`teammate "${member.name}" is archived; ask the Team Lead to restore it`, 'TEAM_MEMBER_ARCHIVED')
+        throw new TeamError(`teammate "${member.name}" is archived; only the Team Lead can restore it by sending it a message`, 'TEAM_MEMBER_ARCHIVED')
       }
       this.assertCapacity(state)
       await this.journal.appendAndFlush(root, 'team/member', {

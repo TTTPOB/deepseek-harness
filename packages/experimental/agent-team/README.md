@@ -29,7 +29,7 @@ Add this package when one agent needs named helpers in a shared working director
 
 ### When to choose it
 
-Choose it for cooperation in one shared workspace with durable roster and task state. Separate working directories and coordination across processes are unsupported. Task ownership is released automatically only when its teammate is archived. Durable session storage is required.
+Choose it for cooperation in one shared workspace with durable roster and task state. Separate working directories and coordination across processes are unsupported. Archiving a teammate releases its in-progress tasks; nothing else releases a task owner automatically. Durable session storage is required.
 
 ### Smallest working setup
 

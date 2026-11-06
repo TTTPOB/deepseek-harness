@@ -33,7 +33,7 @@ kind: "package-reference"
 
 Roster 行展示持久名称与阶段。provisioning 和 running 成员使用共享 ongoing loading，inactive 成员使用人物图标，failed 成员使用 error 红点。实时 Session 状态提供运行活动；共享 `modelSelection` 投影在可用时提供模型。当前会话带有“当前会话”标签且不可选择。在 teammate 会话中选择 Lead 会直接打开 Lead Session。选择 active 或 archived teammate 会打开其普通 continuable 子会话地址。Host 在打开历史时校验 parent、child 与 mode；后续人类提示词使用同一 addressed-subagent 会话。
 
-已归档队员放在其他成员下方默认折叠的分组中，名称变淡，显示灰色归档图标与“已归档”状态，行仍可打开原会话。已完成任务保留 owner，已归档 owner 名称附加“（已归档）”。面板不提供归档或恢复按钮。
+已归档队员放在其他成员下方默认折叠的分组中，名称变淡，显示灰色归档图标与“已归档”状态，行仍可打开原会话。任务卡片的 owner 已归档时，名字后显示“（已归档）”。面板不提供归档或恢复按钮。
 
 ### 查看任务板
 
