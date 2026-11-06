@@ -38,7 +38,7 @@ export interface Config {
   /** Continuable-subagent provider used for fresh teammates. */
   readonly freshProvider?: string
   /** Child defaults for fresh teammates; fork teammates inherit the Lead's route. */
-  readonly freshAgentOptions?: AgentOptions
+  readonly freshAgentOptions?: AgentOptions | undefined
   /** Continuable-subagent provider used for completed-prefix fork teammates. */
   readonly forkProvider?: string
   /**
@@ -318,13 +318,19 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
           )
         }
         exec.signal.throwIfAborted()
+        const { reasoningEffort, ...requestedRouteOptions } = requestedChildAgentOptions ?? {}
         const result = await ctx.agentTeams.spawnTeammate(agent, {
           name: args.name,
           description: args.description,
           prompt: [{ type: 'text', text: args.prompt }],
           context,
           provider: executionProvider,
-          ...requestedChildAgentOptions === undefined ? {} : { agentOptions: requestedChildAgentOptions },
+          ...requestedChildAgentOptions === undefined ? {} : {
+            agentOptions: {
+              ...requestedRouteOptions,
+              ...reasoningEffort === undefined ? {} : { reasoningEffort },
+            },
+          },
           signal: exec.signal,
         })
         return { member: modelMember(result.member) }
