@@ -512,7 +512,8 @@ export class TeamRoster {
       if (current === undefined) {
         throw new TeamError(`provisioned teammate "${terminal.id}" disappeared`, 'TEAM_PROVISIONING_CONFLICT')
       }
-      if (current.phase !== 'provisioning') return current.phase
+      // Recovery can settle provisioning first; archiving requires a settled spawn.
+      if (current.phase !== 'provisioning') return current.phase as 'active' | 'failed'
       await this.journal.appendAndFlush(root, 'team/member', {
         version: 2,
         teamId: TeamId(root.id),

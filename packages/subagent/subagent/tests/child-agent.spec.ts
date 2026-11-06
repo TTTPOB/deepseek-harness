@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { resolveChildAgentOptions, resolveChildDepth } from '../src/child-agent.ts'
 
-function parentAgent(): Agent {
+function parentAgent(selection?: ModelSelection): Agent {
   const id = SessionId('parent')
   return {
     id,
@@ -15,6 +15,7 @@ function parentAgent(): Agent {
       maxTokens: 512,
     },
     session: Session.create(id),
+    model: { current: () => selection },
   } as Agent
 }
 
@@ -52,24 +53,17 @@ describe('child Agent options', () => {
     })
   })
 
-  it('inherits the latest logged request selection over creation-time values', () => {
-    const parent = parentAgent()
-    parent.session.append('request/header', {
-      header: {
-        config: {
-          provider: 'current-provider',
-          model: 'current-model',
-          reasoningEffort: ReasoningEffortId('low'),
-        },
-      },
-      reason: 'initial',
-    })
-
-    expect(resolveChildAgentOptions(parent, undefined, 1)).toEqual({
+  it('inherits the current retained selection before any request over creation-time values', () => {
+    const selection: ModelSelection = {
       provider: 'current-provider',
       model: 'current-model',
-      reasoningEffort: 'low',
-      maxTokens: 512,
+      reasoningEffort: ReasoningEffortId('low'),
+    }
+    const parent = parentAgent(selection)
+    expect(parent.session.snapshotEvents()).toHaveLength(0)
+    expect(resolveChildAgentOptions(parent, undefined, 1)).toEqual({
+      ...selection,
+      maxTokens: parent.options.maxTokens,
       subagentDepth: 1,
     })
   })

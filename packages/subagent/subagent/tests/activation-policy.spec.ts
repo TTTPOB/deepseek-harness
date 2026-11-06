@@ -37,7 +37,11 @@ afterEach(async () => {
   await rm(workspace, { recursive: true, force: true })
 })
 
-async function setupWalled(script: Script): Promise<{ ctx: Context; parent: Agent }> {
+async function setupWalled(script: Script): Promise<{
+  ctx: Context
+  parent: Agent
+  publishedEvents: () => readonly SessionEvent[]
+}> {
   const ctx = new Context()
   contexts.push(ctx)
   await mountAgentLoopTestDependencies(ctx)
@@ -54,7 +58,9 @@ async function setupWalled(script: Script): Promise<{ ctx: Context; parent: Agen
     { provider: 'mock', model: 'mock' },
     { cwd: workspace },
   )
-  return { ctx, parent }
+  let published: readonly SessionEvent[] = []
+  ctx.on('agent/created', ({ agent }) => { published = agent.session.snapshotEvents() })
+  return { ctx, parent, publishedEvents: () => published }
 }
 
 function spawnRequest(parent: Agent) {
@@ -80,7 +86,7 @@ describe('in-process policy inheritance', () => {
   it.each(['auto', 'danger-full-access'] as const)(
     'records the parent %s identity before publishing a DSH in-process child',
     async (preset) => {
-      const { ctx, parent } = await setupWalled([textResponse('child done')])
+      const { ctx, parent, publishedEvents } = await setupWalled([textResponse('child done')])
       parent.session.append('permission/preset', { preset })
       setSandboxMode(parent.session, 'danger-full-access')
       ctx.provide('permissionPresets', {
@@ -90,11 +96,14 @@ describe('in-process policy inheritance', () => {
       const run = await startPreparedActivation(spawnRequest(parent), {})
       try {
         await run.result
-        const child = run.localAgent
-        expect(child.session.snapshotEvents().slice(1, 4)).toMatchObject([
-          { type: 'sandbox/mode', seq: 1, data: { mode: 'danger-full-access', source: 'delegation' } },
-          { type: 'approval/policy', seq: 2, data: { policy: 'never', source: 'delegation' } },
-          { type: 'permission/preset', seq: 3, data: { preset } },
+        expect(publishedEvents().filter(event => event.type === 'sandbox/mode'
+          || event.type === 'approval/policy' || event.type === 'permission/preset')).toMatchObject([
+          { type: 'sandbox/mode', data: { mode: 'danger-full-access', source: 'delegation' } },
+          { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
+          { type: 'permission/preset', data: { preset } },
+        ])
+        expect(publishedEvents().filter(event => event.type === 'model/selection')).toMatchObject([
+          { data: parent.model.current() },
         ])
       } finally {
         await run.dispose()
@@ -134,7 +143,7 @@ describe('in-process policy inheritance', () => {
 
   it('records the parent sandbox override and the approval pin before publishing a spawn child', async () => {
     const script: Script = []
-    const { ctx, parent } = await setupWalled(script)
+    const { ctx, parent, publishedEvents } = await setupWalled(script)
     const blocked = join(workspace, 'spawn-blocked.txt')
     setSandboxMode(parent.session, 'read-only')
     // No parent approval override: the child pin must not depend on one.
@@ -153,9 +162,10 @@ describe('in-process policy inheritance', () => {
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       expect(toolResultTexts(child).join('\n')).toContain(READ_ONLY_DENIAL)
       expect(result.stopReason).toBe('completed')
-      expect(child.session.snapshotEvents().slice(1, 3)).toMatchObject([
-        { type: 'sandbox/mode', seq: 1, data: { mode: 'read-only', source: 'delegation' } },
-        { type: 'approval/policy', seq: 2, data: { policy: 'never', source: 'delegation' } },
+      expect(publishedEvents().filter(event => event.type === 'sandbox/mode'
+        || event.type === 'approval/policy')).toMatchObject([
+        { type: 'sandbox/mode', data: { mode: 'read-only', source: 'delegation' } },
+        { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
       ])
       expect(child.session.firstLiveSeq).toBe(0)
       expect(child.session.header.isSeeded).toBe(false)
@@ -218,13 +228,15 @@ describe('in-process policy inheritance', () => {
       const child = run.localAgent
 
       expect(child.session.header.isSeeded).toBe(true)
-      expect(child.session.inheritedEventCount).toBe(1)
+      expect(child.session.inheritedEventCount).toBe(seed.length)
       expect(child.session.firstLiveSeq).toBe(seed.length)
-      // seq 1 is the constructor's end-seed marker.
-      expect(child.session.snapshotEvents().filter(event => event.type === 'sandbox/mode')).toMatchObject([
-        { seq: 0, data: { mode: 'workspace-write' } },
-        { seq: 3, data: { mode: 'read-only', source: 'delegation' } },
+      const modes = child.session.snapshotEvents().filter(event => event.type === 'sandbox/mode')
+      expect(modes).toMatchObject([
+        { data: { mode: 'workspace-write' } },
+        { data: { mode: 'read-only', source: 'delegation' } },
       ])
+      expect(modes[0]?.seq).toBeLessThan(child.session.firstLiveSeq)
+      expect(modes[1]?.seq).toBeGreaterThanOrEqual(child.session.firstLiveSeq)
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('read-only')
 
@@ -255,7 +267,7 @@ describe('in-process policy inheritance', () => {
 
   it('leaves an unswitched sandbox on the deployment default while still pinning approval', async () => {
     const script: Script = []
-    const { parent } = await setupWalled(script)
+    const { parent, publishedEvents } = await setupWalled(script)
     const allowed = join(workspace, 'default-allowed.txt')
     script.push(
       toolCallResponse('write', 'write', { file_path: allowed, content: 'fine' }),
@@ -268,8 +280,8 @@ describe('in-process policy inheritance', () => {
       const child = run.localAgent
       expect(await readFile(allowed, 'utf8')).toBe('fine')
       expect(child.session.snapshotEvents().some(event => event.type === 'sandbox/mode')).toBe(false)
-      expect(child.session.snapshotEvents().filter(event => event.type === 'approval/policy')).toMatchObject([
-        { seq: 1, data: { policy: 'never', source: 'delegation' } },
+      expect(publishedEvents().filter(event => event.type === 'approval/policy')).toMatchObject([
+        { data: { policy: 'never', source: 'delegation' } },
       ])
       expect(child.session.firstLiveSeq).toBe(0)
     } finally {
