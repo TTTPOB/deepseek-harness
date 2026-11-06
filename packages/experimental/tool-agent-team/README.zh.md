@@ -1,5 +1,5 @@
 ---
-description: "九个让模型创建、发消息与协调 teammate 的工具（可选第十个模型发现工具），供挂载实验性 Team 插件的组合使用。"
+description: "让模型创建、发消息与协调 teammate 的工具（可选模型发现工具），供挂载实验性 Team 插件的组合使用。"
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-本包让模型创建具名 teammate、向它们发送消息、查看可用状态、等待进展、中断卡住的工作，并通过共享任务板协调。每个团队成员都会获得相同的九个协调工具，以及在共享工作区协调的指引；当组合启用子模型选择时，成员还会获得 `list_agent_models`，且 `spawn_teammate` 接受可选的 LLM 路由。它会取代同名的旧版 subagent 控件，因此同时需要两者的组合必须禁用旧定义。本包以实验性名称公开发布，但不提供稳定性保证。
+本包让模型创建具名 teammate、向它们发送消息、查看可用状态、等待进展、中断卡住的工作，并通过共享任务板协调。每个团队成员都会获得相同的协调工具，以及在共享工作区协调的指引；当组合启用子模型选择时，成员还会获得 `list_agent_models`，且 `spawn_teammate` 接受可选的 LLM 路由。它会取代同名的旧版 subagent 控件，因此同时需要两者的组合必须禁用旧定义。本包以实验性名称公开发布，但不提供稳定性保证。
 
 ## 目录
 
@@ -57,16 +57,17 @@ kind: "package-reference"
 
 ### 模型能做什么
 
-九个工具分为四类能力：
+工具覆盖以下协作能力：
 
 - **创建 teammate**——`spawn_teammate` 接收名字、描述与初始任务；只有 Lead 可以调用它。
 - **发送消息**——`send_message` 在最近的步骤边界对运行中的成员进行 steering（中途引导）、启动或恢复非活动成员。
 - **查看与等待**——`list_agents` 返回各成员的 `target` 与可用状态；`wait_agent` 等待下一次团队变化；`interrupt_agent` 停止 teammate 的当前轮次（仅限 Lead）。
+- **归档已完成工作的队员**——仅 Lead 可用 `archive_teammate` 释放名额与进行中任务，不删除会话。`list_agents` 默认隐藏归档成员，`include_archived: true` 才包含；`wait_agent` 不把他们视为可能推进工作的成员。名额充足时 Lead 发消息自动恢复归档目标，并返回 `unarchived: true` 和说明；满员或队员发送方不能恢复。没有 `unarchive_teammate` 工具。
 - **管理任务板**——`team_task_create`、`team_task_list`、`team_task_get` 与 `team_task_update` 添加、浏览、读取与更新共享任务。
 
 当 Session 启用模型选择时，`spawn_teammate` 还会接受 `provider`、`model` 与 `reasoning_effort`，并由 `list_agent_models` 发现该 Session 可选的精确路由。roster 的 `provider` 始终是执行提供方（`spawn` 或 `fork`），绝不是子 LLM 提供方。
 
-创建和列表结果使用 `target` 标识成员，不包含成员 Session ID。可将该值用于消息和中断调用，或任务工具的 `owner` 参数；任务的 `ownerName` 使用相同值。`inactive` 表示没有轮次在执行，包括已加载和需要恢复的成员；它不表示任务完成或结果。`provisioning` 与 `failed` 描述成员创建状态。任何成员都可以给任何其他成员发消息并使用任务板；只有 Lead 可以创建与中断 teammate。任务更新保留领域的 owner 与 revision 校验，因此过期的编辑会被拒绝，而不是覆盖更新的成果。
+创建和列表结果使用 `target` 标识成员，不包含成员 Session ID。可将该值用于消息和中断调用，或任务工具的 `owner` 参数；任务的 `ownerName` 使用相同值。`inactive` 表示没有轮次在执行，包括已加载和需要恢复的成员；它不表示任务完成或结果。`provisioning` 与 `failed` 描述成员创建状态。任何成员都可以给任何其他成员发消息并使用任务板；只有 Lead 可以创建、归档与中断 teammate。已归档同伴需要先由 Lead 发消息恢复，才能再次接收工作。任务更新保留领域的 owner 与 revision 校验，因此过期的编辑会被拒绝，而不是覆盖更新的成果。
 
 ### 选择 teammate 模型
 
@@ -105,11 +106,11 @@ kind: "package-reference"
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | 插件入口：配置、固定策略文本、九个协调工具注册与可选的模型选择定义 |
+| [`src/index.ts`](src/index.ts) | 插件入口：配置、固定策略文本、协调工具注册与可选的模型选择定义 |
 
 ### 策略与工具
 
-member scope 上的一个 `team:policy` 段落说明共享的协作规则；固定文本与九个工具注册都声明在 [`src/index.ts`](src/index.ts)。九个工具 schema 注册在发布时被识别为 Team member 的 scope 中。与旧全局 continuable-subagent 控件同名的 scoped 注册只会为团队成员覆盖这些全局控件。
+member scope 上的一个 `team:policy` 段落说明共享的协作规则；固定文本与工具注册都声明在 [`src/index.ts`](src/index.ts)。工具 schema 注册在发布时被识别为 Team member 的 scope 中。与旧全局 continuable-subagent 控件同名的 scoped 注册只会为团队成员覆盖这些全局控件。
 
 启用 `modelSelectionSettings` 时，适配器保留共享 `subagentModelSelectionPolicy` 投影的句柄，并读取 Host 设置服务在 Agent 创建期间记录的策略。它只为已授权 Session 添加 `list_agent_models` 与路由字段。授权、LLM preflight 与发现使用共享 subagent 函数；Team 适配器拥有工具 schema、执行检查与 fresh 子智能体默认项。
 
@@ -140,7 +141,7 @@ member scope 上的一个 `team:policy` 段落说明共享的协作规则；固�
 
 #### 模型看到什么
 
-共享系统 policy 覆盖 Team 可用性、共享 cwd 安全、任务协调、Steer 投递、inbox 接收和 Lead 等待责任。Lead 与 teammate 使用相同的九个 schema；执行时落实 Lead-only 操作。必需的 runtime context 声明 `You are the Team Lead named "lead".`，或 `You are teammate "<name>".` 与 `Your Team Lead is named "lead".`，并提供 roster 和消息操作说明。身份来自当前 Team membership，关闭可选 context 时仍保留，压缩移除快照后会恢复。从 teammate 创建的普通 fork 会收到当前 Lead 身份。
+共享系统 policy 覆盖 Team 可用性、共享 cwd 安全、任务协调、Steer 投递、inbox 接收和 Lead 等待责任。Lead 与 teammate 使用相同的 schema；执行时落实 Lead-only 操作。必需的 runtime context 声明 `You are the Team Lead named "lead".`，或 `You are teammate "<name>".` 与 `Your Team Lead is named "lead".`，并提供 roster 和消息操作说明。身份来自当前 Team membership，关闭可选 context 时仍保留，压缩移除快照后会恢复。从 teammate 创建的普通 fork 会收到当前 Lead 身份。
 
 #### Token 影响
 

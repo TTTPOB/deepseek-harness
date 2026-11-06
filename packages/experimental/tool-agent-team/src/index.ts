@@ -75,7 +75,7 @@ The Team Lead and all teammates share the same working directory and filesystem.
 
 Prefer read/edit/write for file changes. If a file operation returns FS_STALE_VERSION, read the current file, rebase your intended change onto the new content, and retry. Bash, formatters, code generators, and scripts are not fully protected by the filesystem version guard; coordinate them explicitly and have the Lead review the final diff and run tests.
 
-Use the target returned by spawn_teammate or list_agents for send_message${interrupt ? ' and interrupt_agent' : ''}, or as owner when assigning or filtering shared tasks. send_message steers a running target at its nearest step boundary and starts or resumes an inactive target. inactive means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents. provisioning means member creation is in progress; failed means member creation failed. A peer message starts with its sender name. A successful send does not mean the recipient has processed it. Shared-task workflow is list, get, claim with the current revision, perform the work, then complete. Task readiness never starts an owner. Before wait_agent, use list_agents and make sure another required member is running or provisioning; use send_message first when the required member is inactive. wait_agent observes only changes after that call starts, never wakes a member, and returns noProgress immediately when no other member can produce a change. Re-list after wakeup or timeout. The Lead must wait for required teammates before giving the final answer.`
+Use the target returned by spawn_teammate or list_agents for send_message${interrupt ? ' and interrupt_agent' : ''}, or as owner when assigning or filtering shared tasks. send_message steers a running target at its nearest step boundary and starts or resumes an inactive target. inactive means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents. provisioning means member creation is in progress; failed means member creation failed. A peer message starts with its sender name. A successful send does not mean the recipient has processed it. Shared-task workflow is list, get, claim with the current revision, perform the work, then complete. Task readiness never starts an owner. Before wait_agent, use list_agents and make sure another required member is running or provisioning; use send_message first when the required member is inactive. wait_agent observes only changes after that call starts, never wakes a member, and returns noProgress immediately when no other member can produce a change. Re-list after wakeup or timeout. The Lead must wait for required teammates before giving the final answer. Archive teammates whose work is complete and who are no longer needed with archive_teammate. A Lead message to an archived teammate automatically restores it and counts it toward the member limit; teammates must ask the Lead to restore archived peers.`
     + (modelSelection
       ? '\n\nspawn_teammate can select the child LLM route with provider, model, and reasoning_effort. Use the optional provider and model together after list_agent_models inspects authorized routes; the execution provider reported by list_agents is a different provider.'
       : '')
@@ -95,7 +95,7 @@ const MEMBER_VIEW_SCHEMA = {
   properties: {
     target: { type: 'string', required: true },
     role: { type: 'string', required: true, enum: ['lead', 'teammate'] },
-    status: { type: 'string', required: true, enum: ['running', 'inactive', 'provisioning', 'failed'] },
+    status: { type: 'string', required: true, enum: ['running', 'inactive', 'provisioning', 'failed', 'archived'] },
     description: { type: 'string' },
     provider: { type: 'string' },
     context: { type: 'string', enum: ['fresh', 'fork'] },
@@ -143,6 +143,8 @@ const SEND_VALUE_SCHEMA = {
   additionalProperties: false,
   properties: {
     sent: { type: 'boolean', required: true, const: true },
+    unarchived: { type: 'boolean', const: true },
+    message: { type: 'string' },
   },
 } as const
 
@@ -369,22 +371,27 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
       },
       output: jsonOutput(SEND_VALUE_SCHEMA),
       async execute(args, exec) {
-        await ctx.agentTeams.sendMessage(callingAgent(exec.agent, 'send_message'), {
+        const result = await ctx.agentTeams.sendMessage(callingAgent(exec.agent, 'send_message'), {
           target: args.target,
           content: [{ type: 'text', text: args.message }],
           signal: exec.signal,
         })
-        return { sent: true }
+        return {
+          sent: true,
+          ...result.unarchived ? { unarchived: result.unarchived, message: result.message } : {},
+        }
       },
     })))
 
     register(scoped.tools.register(defineTool({
       name: 'list_agents',
-      description: 'List the Lead and every durable teammate with an addressable target and current availability. inactive means no turn is executing, not a task result. provisioning and failed describe member creation.',
-      parameters: {},
+      description: 'List the Lead and non-archived teammates with an addressable target and current availability. inactive means no turn is executing, not a task result. provisioning and failed describe member creation. Set include_archived to include archived teammates.',
+      parameters: {
+        include_archived: { type: 'boolean', description: 'Include archived teammates. Defaults to false.' },
+      },
       output: jsonOutput(MEMBER_LIST_VALUE_SCHEMA),
-      execute(_args, exec) {
-        return Promise.resolve(ctx.agentTeams.listMembers(callingAgent(exec.agent, 'list_agents')).map(modelMember))
+      execute(args, exec) {
+        return Promise.resolve(ctx.agentTeams.listMembers(callingAgent(exec.agent, 'list_agents'), args.include_archived).map(modelMember))
       },
     })))
 
@@ -420,6 +427,19 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
           }
         }
         return await ctx.agentTeams.waitForChange(caller, timeoutMs, exec.signal)
+      },
+    })))
+
+    register(scoped.tools.register(defineTool({
+      name: 'archive_teammate',
+      description: 'Archive a teammate that is no longer needed, freeing its member slot and releasing its in-progress tasks. Only the Team Lead may call this tool. A later Lead message automatically restores the same conversation if capacity allows.',
+      parameters: {
+        target: { type: 'string', required: true, description: 'Durable teammate name to archive.' },
+      },
+      output: jsonOutput(SPAWN_VALUE_SCHEMA),
+      async execute(args, exec) {
+        const member = await ctx.agentTeams.archiveTeammate(callingAgent(exec.agent, 'archive_teammate'), args.target)
+        return { member: modelMember(member) }
       },
     })))
 

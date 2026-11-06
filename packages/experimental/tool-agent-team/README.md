@@ -1,5 +1,5 @@
 ---
-description: "Nine tools that let the model create, message, and coordinate teammates, for compositions mounting the experimental Team plugins."
+description: "Tools that let the model create, message, and coordinate teammates, for compositions mounting the experimental Team plugins."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package lets the model create named teammates, send them messages, inspect availability, wait for progress, interrupt stuck work, and coordinate through a shared task board. Every team member receives the same nine coordination tools and guidance for coordinating in a shared workspace. When the composition enables child model selection, members also receive `list_agent_models` and `spawn_teammate` accepts an optional LLM route. It replaces legacy subagent controls with the same tool names, so compositions that need both must disable the legacy definitions. The package is published under its experimental name and provides no stability guarantee.
+This package lets the model create named teammates, send them messages, inspect availability, wait for progress, interrupt stuck work, and coordinate through a shared task board. Every team member receives the same coordination tools and guidance for coordinating in a shared workspace. When the composition enables child model selection, members also receive `list_agent_models` and `spawn_teammate` accepts an optional LLM route. It replaces legacy subagent controls with the same tool names, so compositions that need both must disable the legacy definitions. The package is published under its experimental name and provides no stability guarantee.
 
 ## Table of Contents
 
@@ -57,16 +57,17 @@ Try it by asking the Lead model: "create a teammate named reviewer to check the 
 
 ### What the model can do
 
-The nine tools group into four capabilities:
+The tools cover these coordination capabilities:
 
 - **Create a teammate** — `spawn_teammate` takes a name, a description, and the initial task; only the Lead can call it.
 - **Send messages** — `send_message` steers a running member at its nearest step boundary, starts or resumes an inactive member.
 - **See and wait** — `list_agents` returns each member’s `target` and availability; `wait_agent` waits for the next team change; `interrupt_agent` stops a teammate's current turn (Lead only).
+- **Archive finished teammates** — Lead-only `archive_teammate` frees capacity and releases in-progress tasks without deleting the conversation. `list_agents` hides archived members unless `include_archived: true`; `wait_agent` does not count them as possible progress. A Lead message restores an archived target automatically when capacity permits, returning `unarchived: true` and an explanation; full capacity or a teammate sender rejects restoration. No `unarchive_teammate` tool is provided.
 - **Manage the task board** — `team_task_create`, `team_task_list`, `team_task_get`, and `team_task_update` add, browse, read, and update shared tasks.
 
 When model selection is enabled for the Session, `spawn_teammate` also accepts `provider`, `model`, and `reasoning_effort`, and `list_agent_models` discovers the routes that Session may select. The roster `provider` stays the execution provider (`spawn` or `fork`), never the child LLM provider.
 
-Creation and listing results identify members by `target`, with no member Session ID. Use that value in message and interrupt calls or the task tools’ `owner` parameter; task `ownerName` uses the same value. `inactive` means no turn is executing, whether the member is loaded or must be resumed; it does not describe task completion or outcome. `provisioning` and `failed` describe member creation. Any member can message any other member and use the task board; only the Lead creates and interrupts teammates. Task updates keep the domain's owner and revision checks, so an outdated edit is rejected instead of overwriting newer work.
+Creation and listing results identify members by `target`, with no member Session ID. Use that value in message and interrupt calls or the task tools’ `owner` parameter; task `ownerName` uses the same value. `inactive` means no turn is executing, whether the member is loaded or must be resumed; it does not describe task completion or outcome. `provisioning` and `failed` describe member creation. Any member can message any other member and use the task board; only the Lead creates, archives, and interrupts teammates. Archived peers require a Lead message before they can receive work. Task updates keep the domain's owner and revision checks, so an outdated edit is rejected instead of overwriting newer work.
 
 ### Select a teammate model
 
@@ -105,11 +106,11 @@ The [Agent Teams Agent Note](../../../.agents/notes/implemented/feature/2026-08-
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | Plugin entry: config, the fixed policy text, the nine coordination tool registrations, and the optional model-selection definition |
+| [`src/index.ts`](src/index.ts) | Plugin entry: config, the fixed policy text, the coordination tool registrations, and the optional model-selection definition |
 
 ### Policy and tools
 
-One `team:policy` section on the member scope states the shared coordination rules; the fixed text and the nine tool registrations are declared in [`src/index.ts`](src/index.ts). The nine tool schemas are registered in scopes recognized as Team members at publication. Scoped registrations with the same names as the legacy global continuable-subagent controls shadow those globals for team members only.
+One `team:policy` section on the member scope states the shared coordination rules; the fixed text and the tool registrations are declared in [`src/index.ts`](src/index.ts). The tool schemas are registered in scopes recognized as Team members at publication. Scoped registrations with the same names as the legacy global continuable-subagent controls shadow those globals for team members only.
 
 With `modelSelectionSettings`, the adapter retains a handle to the shared `subagentModelSelectionPolicy` projection and reads the policy recorded by the Host settings service during Agent creation. It adds `list_agent_models` and route fields only for an authorized Session. Authorization, LLM preflight, and discovery use shared subagent functions; the Team adapter owns tool schemas, execution checks, and fresh-child defaults.
 
@@ -140,7 +141,7 @@ Read these pages when the package-level contract is not enough. They move from t
 
 #### What the model sees
 
-One shared system policy covers Team availability, shared-cwd safety, task coordination, Steer delivery, inbox acceptance, and the Lead’s duty to wait. All nine schemas are identical for Leads and teammates; execution enforces Lead-only operations. Required runtime context states `You are the Team Lead named "lead".` or `You are teammate "<name>".` with `Your Team Lead is named "lead".`, plus roster and messaging instructions. Identity comes from current Team membership, survives optional-context suppression, and is restored when compaction removes its snapshot. An ordinary fork from a teammate receives its current Lead identity.
+One shared system policy covers Team availability, shared-cwd safety, task coordination, Steer delivery, inbox acceptance, and the Lead’s duty to wait. All schemas are identical for Leads and teammates; execution enforces Lead-only operations. Required runtime context states `You are the Team Lead named "lead".` or `You are teammate "<name>".` with `Your Team Lead is named "lead".`, plus roster and messaging instructions. Identity comes from current Team membership, survives optional-context suppression, and is restored when compaction removes its snapshot. An ordinary fork from a teammate receives its current Lead identity.
 
 #### Token effect
 

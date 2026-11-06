@@ -41,6 +41,7 @@ function runtimeContextText(request: GenerateOptions) {
 
 const SIGNAL = new AbortController().signal
 const TOOL_NAMES = [
+  'archive_teammate',
   'spawn_teammate',
   'send_message',
   'list_agents',
@@ -146,6 +147,59 @@ async function waitNoAgent(ctx: Context, id: SessionId): Promise<void> {
 }
 
 describe('dsh-tool-team', () => {
+  it('automatically restores archived conversations with their context, selected route, and executable Team tools', async () => {
+    const secret = 'Context marker: violet-orbit-42'
+    const { ctx, lead, adapter } = await setup([
+      'hang',
+      toolCallResponse('restored-list', 'list_agents', {}),
+      toolCallResponse('restored-task', 'team_task_create', { subject: 'remembered work', description: secret }),
+      textResponse('Context retained and shared work created'),
+      textResponse('Another task acknowledged'),
+    ])
+    const started = await execute(ctx, lead, 'spawn_teammate', { name: 'historian', description: 'retain context', prompt: secret })
+    expect(started.isError, text(started)).toBe(false)
+    const id = spawnedChildId(ctx, lead, started)
+    const original = await waitRunning(ctx, id)
+    const selectedRoute = { provider: 'mock', model: 'retained-worker-route' }
+    original.model.select(selectedRoute)
+    const task = await ctx.agentTeams.createTask(lead, { subject: 'available', description: 'must stay unowned after archival' })
+    await ctx.agentTeams.updateTask(lead, {
+      taskId: task.id, expectedRevision: task.revision, action: 'reassign', owner: 'historian',
+    })
+    const archived = await execute(ctx, lead, 'archive_teammate', { target: 'historian' })
+    expect(archived.isError, text(archived)).toBe(false)
+    expect(JSON.parse(text(archived))).toMatchObject({ member: { target: 'historian', status: 'archived' } })
+    expect(ctx.agents.get(id)).toBeUndefined()
+    const released = ctx.agentTeams.getTask(lead, task.id)
+    expect(released).toMatchObject({ status: 'pending', ready: true })
+    expect(released).not.toHaveProperty('ownerName')
+    const hidden = JSON.parse(text(await execute(ctx, lead, 'list_agents', {}))) as { target: string }[]
+    expect(hidden.map((row: { target: string }) => row.target)).toEqual(['lead'])
+    const listed: unknown = JSON.parse(text(await execute(ctx, lead, 'list_agents', { include_archived: true })))
+    expect(listed).toContainEqual(expect.objectContaining({ target: 'historian', status: 'archived' }))
+    const waiting = await execute(ctx, lead, 'wait_agent', {})
+    expect(JSON.parse(text(waiting))).toMatchObject({ noProgress: { reason: 'no-active-peer' } })
+    lead.model.select({ provider: 'mock', model: 'new-lead-route' })
+    const restored = await execute(ctx, lead, 'send_message', { target: 'historian', message: 'Recall your marker and create a shared task.' })
+    expect(restored.isError, text(restored)).toBe(false)
+    expect(JSON.parse(text(restored))).toEqual({
+      sent: true, unarchived: true,
+      message: 'teammate "historian" was archived and has been unarchived automatically; it now counts toward the member limit.',
+    })
+    await vi.waitFor(() => {
+      expect(ctx.agentTeams.listTasks(lead)).toContainEqual(expect.objectContaining({ subject: 'remembered work', description: secret }))
+    })
+    await waitNoAgent(ctx, id)
+    const resumedRequests = adapter.requests.filter(request => request.sessionId === id).slice(1)
+    expect(resumedRequests.length).toBeGreaterThan(0)
+    expect(resumedRequests.every(request => request.model === selectedRoute.model)).toBe(true)
+    expect(JSON.stringify(resumedRequests[0]!.messages)).toContain(secret)
+    expect(resumedRequests[0]!.tools?.map(tool => tool.name)).toContain('team_task_create')
+    expect(ctx.agentTeams.getTask(lead, task.id)).toEqual(released)
+    const secondSend = await execute(ctx, lead, 'send_message', { target: 'historian', message: 'another task' })
+    expect(JSON.parse(text(secondSend))).not.toHaveProperty('unarchived')
+  })
+
   it('isolates Team and ordinary control presets and reconciles blank-session switches', async () => {
     const { ctx, fiber } = await setup([])
     await fiber.dispose()
@@ -214,7 +268,7 @@ describe('dsh-tool-team', () => {
         expect(schema?.properties).toHaveProperty('target')
         expect(schema?.properties).not.toHaveProperty('id')
         expect(schema?.properties).not.toHaveProperty('name')
-        expect(schema?.properties?.status?.enum).toEqual(['running', 'inactive', 'provisioning', 'failed'])
+        expect(schema?.properties?.status?.enum).toContain(status)
       }
       expect(ctx.agentTeams.listMembers(lead)).toEqual([member])
     },
@@ -743,7 +797,7 @@ describe('dsh-tool-team', () => {
   it('resolves direct-apply defaults without Loader schema normalization', async () => {
     const { ctx, lead, fiber, adapter } = await setup([textResponse('ordinary child')])
     await fiber.dispose()
-    toolTeam.apply(ctx, {})
+    await toolTeam.apply(ctx, {})
     expect((await assembly(ctx, lead)).tools.map(schema => schema.name).filter(name => TOOL_NAMES.includes(name)).sort())
       .toEqual(TOOL_NAMES)
     const ordinary = await ctx.subagents.startActivation({

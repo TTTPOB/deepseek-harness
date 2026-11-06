@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/experimental/tool-agent-team/README.md
 /:
-  en: 770d44b09466af9a
-  zh: 7f5954d72a9ee59b
+  en: d85270cf7c1a7c9b
+  zh: 17aaa8ea1666cb53
 /deepseek-ai-dsh-experimental-tool-agent-team:
   en: 0b01a243291821bc
   zh: 0dadd38d709ae9bd
 /deepseek-ai-dsh-experimental-tool-agent-team/summary:
-  en: 49cefbe7cdb8be62
-  zh: 7bb009aa9a3565a6
+  en: 52e734216e652d01
+  zh: 0d03c6db4177b6cd
 /deepseek-ai-dsh-experimental-tool-agent-team/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -24,8 +24,8 @@
   en: 9d56e810addc574d
   zh: 28c43099a70360e2
 /deepseek-ai-dsh-experimental-tool-agent-team/use-this-package/what-the-model-can-do:
-  en: 9971c515175b59d1
-  zh: 8e5537f73a5c9a4e
+  en: 9f939c1e1b940851
+  zh: 7e2db4dec0f1acfe
 /deepseek-ai-dsh-experimental-tool-agent-team/use-this-package/select-a-teammate-model:
   en: a3aac2ae475f49a5
   zh: 5a3eb94136d4a2c0
@@ -39,11 +39,11 @@
   en: 54fe79610c76d28c
   zh: 616e94ee14826fd5
 /deepseek-ai-dsh-experimental-tool-agent-team/understand-the-implementation/source-map:
-  en: 06431ad342926ab4
-  zh: 4982f676407479a3
+  en: 85bffbc37f61b601
+  zh: aee9140b9e1175d5
 /deepseek-ai-dsh-experimental-tool-agent-team/understand-the-implementation/policy-and-tools:
-  en: 7754f199d132ffbc
-  zh: 0bc215beede77ca4
+  en: ddcaa83aadab5291
+  zh: 2391801a47d123c5
 /deepseek-ai-dsh-experimental-tool-agent-team/understand-the-implementation/scoped-registration-and-teardown:
   en: 5689960e8d6b4659
   zh: be45a320ab2976b7
@@ -57,8 +57,8 @@
   en: 8e1e365ff3b0dfb2
   zh: c6c91fbf1e1df934
 /deepseek-ai-dsh-experimental-tool-agent-team/model-experience/team-policy-and-tools/what-the-model-sees:
-  en: e8687e69bcdf411d
-  zh: 84480d4dd33cf339
+  en: 068e485264538dc3
+  zh: 6b3081d1379a4e2a
 /deepseek-ai-dsh-experimental-tool-agent-team/model-experience/team-policy-and-tools/token-effect:
   en: 3f49674f937a8ca3
   zh: 79d34d605732abb1
