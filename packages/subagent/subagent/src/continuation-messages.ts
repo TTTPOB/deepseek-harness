@@ -72,7 +72,7 @@ export function createAgentMessage(
 }
 
 /**
- * Append adjacent-Agent return guidance to a continuable child's initial task.
+ * Append parent-messaging guidance without tool-call syntax to a continuable child's initial task.
  * @param parentId - durable parent session id named in the guidance.
  * @param prompt - initial model-visible task blocks.
  * @returns task blocks followed by the continuable return guidance.
@@ -86,11 +86,10 @@ export function withContinuableReturnGuidance(
     ...prompt,
     {
       type: 'text',
-      text: `Your parent agent id is ${encodedParentId}. Before you finish, send your result to that agent with `
-        + `send_message({ agent_id: ${encodedParentId}, message: "<self-contained result>" }). The parent shares `
-        + 'your workspace but does not automatically receive your transcript, tool output, or reasoning. Send '
-        + 'earlier messages as well when a finding changes what the parent should do next; sending a message '
-        + 'does not end your turn.',
+      text: `Your parent agent id is ${encodedParentId}. When you have a result, send it to that agent as a message `
+        + `with the send_message tool (agent_id ${encodedParentId}). Make it self-contained: the parent shares your `
+        + 'workspace but does not automatically receive your transcript, tool output, or reasoning. Message earlier '
+        + 'too when a finding changes what the parent should do next; sending does not end your turn.',
     },
   ]
 }

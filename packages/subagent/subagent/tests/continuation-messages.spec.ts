@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import { ToolCallId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createSettlementMessage } from '../src/continuation-messages.ts'
+import { createSettlementMessage, withContinuableReturnGuidance } from '../src/continuation-messages.ts'
+
+describe('continuable return guidance', () => {
+  it.each(['parent', 'parent "quoted"\\line\nnext'])('appends guidance without changing task blocks for %j', (id) => {
+    const prompt: ContentBlock[] = [{ type: 'text', text: '  task\n' }, { type: 'text', text: 'second task block' }]
+    const original = structuredClone(prompt)
+    const content = withContinuableReturnGuidance(SessionId(id), prompt)
+
+    expect(prompt).toEqual(original)
+    expect(content.slice(0, -1)).toEqual(prompt)
+    expect(content).toHaveLength(prompt.length + 1)
+    expect(content.at(-1)).toMatchObject({ type: 'text' })
+    const guidance = content.at(-1)!
+    if (guidance.type !== 'text') throw new Error('expected text guidance')
+    expect(guidance.text.split(JSON.stringify(id))).toHaveLength(3)
+    expect(guidance.text).not.toMatch(/\bsend_message\s*\(/)
+  })
+})
 
 const childId = SessionId('settled-child')
 const summary = { type: 'text', text: `Background subagent ${childId} finished and will do no further work unless you send it more.` }
