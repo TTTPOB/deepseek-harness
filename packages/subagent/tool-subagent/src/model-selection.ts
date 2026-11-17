@@ -19,7 +19,7 @@ export const AllowedModelRouteSchema: z<AllowedModelRoute> = z.object({
   model: z.string().min(1).required(),
 })
 
-/** Exact routes authorized for one Session. */
+/** Exact routes authorized by the current Host setting. */
 export interface ModelSelectionPolicy {
   /** Exact provider/model routes authorized for explicit selection. */
   readonly routes: readonly AllowedModelRoute[]
@@ -87,14 +87,14 @@ function assertNonEmpty(value: string | undefined, field: keyof DelegationModelR
 }
 
 /**
- * Validate explicit selection against the Session policy and merge it over child defaults.
+ * Validate explicit selection against the current Host setting and merge it over child defaults.
  * Explicit selection requires both provider and model; an omitted effort then
  * uses the selected model's default, even when the route is unchanged.
  * @param configured - Tool-instance child defaults.
  * @param request - Model-facing route override.
  * @param enabled - Whether this tool instance permits model-facing selection.
- * @param policy - Session allowlist; omission permits only the current parent route.
- * @param parentOptions - Current parent route used when no policy is recorded.
+ * @param policy - Current Host allowlist; omission permits only the current parent route.
+ * @param parentOptions - Current parent route used when the Host setting is disabled or absent.
  * @returns Child Agent options, preserving omission when no layer contributes one.
  */
 export function requestedAgentOptions(
@@ -128,9 +128,9 @@ export function requestedAgentOptions(
 }
 
 /**
- * Enforce Session authorization for a complete, explicitly selected child route.
- * @param policy - Session allowlist; omission permits only the current parent route.
- * @param parentOptions - Current parent route used when no policy is recorded.
+ * Enforce Host authorization for a complete, explicitly selected child route.
+ * @param policy - Current Host allowlist; omission permits only the current parent route.
+ * @param parentOptions - Current parent route used when the Host setting is disabled or absent.
  * @param route - Validated provider/model pair from the tool call.
  */
 export function assertAllowedModelSelection(
@@ -145,7 +145,7 @@ export function assertAllowedModelSelection(
   if (allowed) return
   throw new Error(`child LLM route "${provider}/${model}" is not allowed for this Session`
     + (policy === undefined
-      ? '; without a recorded model-selection policy, explicit selection is limited to the parent route'
+      ? '; while subagent model selection is disabled, explicit selection is limited to the parent route'
       : ''))
 }
 
