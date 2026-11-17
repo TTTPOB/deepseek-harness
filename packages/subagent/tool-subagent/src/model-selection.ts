@@ -1,5 +1,6 @@
 /** Child LLM route selection for the subagent tool. */
 
+import { SubagentError } from '@deepseek-ai/dsh-subagent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
@@ -35,13 +36,14 @@ export function modelRouteKey(route: AllowedModelRoute): string {
 }
 
 /**
- * Reject malformed or duplicate route policy entries at a durable or configuration boundary.
+ * Reject malformed or duplicate route policy entries from the Host setting.
  * @param routes - Candidate exact routes to validate.
  * @returns an assertion that the candidate is a validated exact-route array.
+ * @throws {SubagentError} INVALID_MODEL_SELECTION_SETTINGS for malformed or repeated routes.
  */
 export function assertAllowedModelRoutes(routes: unknown): asserts routes is readonly AllowedModelRoute[] {
   if (!Array.isArray(routes)) {
-    throw new Error('subagent model selection requires an array of routes')
+    throw new SubagentError('subagent model selection requires an array of routes', 'INVALID_MODEL_SELECTION_SETTINGS')
   }
   const seen = new Set<string>()
   const candidates: readonly unknown[] = routes
@@ -50,12 +52,12 @@ export function assertAllowedModelRoutes(routes: unknown): asserts routes is rea
       || !('provider' in candidate) || typeof candidate.provider !== 'string'
       || !('model' in candidate) || typeof candidate.model !== 'string'
       || candidate.provider.length === 0 || candidate.model.length === 0) {
-      throw new Error('subagent model selection requires non-empty provider and model ids')
+      throw new SubagentError('subagent model selection requires non-empty provider and model ids', 'INVALID_MODEL_SELECTION_SETTINGS')
     }
     const route = { provider: candidate.provider, model: candidate.model }
     const key = modelRouteKey(route)
     if (seen.has(key)) {
-      throw new Error(`subagent model selection repeats route "${route.provider}/${route.model}"`)
+      throw new SubagentError(`subagent model selection repeats route "${route.provider}/${route.model}"`, 'INVALID_MODEL_SELECTION_SETTINGS')
     }
     seen.add(key)
   }
@@ -106,7 +108,7 @@ export function requestedAgentOptions(
 ): AgentOptions | undefined {
   if (!hasDelegationModelRequest(request)) return configured
   if (!enabled) {
-    throw new Error('child model selection is disabled for this tool instance')
+    throw new SubagentError('child model selection is disabled for this tool instance', 'MODEL_SELECTION_DISABLED')
   }
   assertNonEmpty(request.provider, 'provider')
   assertNonEmpty(request.model, 'model')
@@ -143,10 +145,10 @@ export function assertAllowedModelSelection(
     ? provider === parentOptions.provider && model === parentOptions.model
     : policy.routes.some(route => route.provider === provider && route.model === model)
   if (allowed) return
-  throw new Error(`child LLM route "${provider}/${model}" is not allowed for this Session`
+  throw new SubagentError(`child LLM route "${provider}/${model}" is not allowed by the current subagent model selection setting`
     + (policy === undefined
       ? '; while subagent model selection is disabled, explicit selection is limited to the parent route'
-      : ''))
+      : ''), 'MODEL_ROUTE_NOT_ALLOWED')
 }
 
 /**

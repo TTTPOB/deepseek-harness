@@ -260,7 +260,7 @@ describe('list_subagent_models', () => {
 
     const denied = await call(ctx, { provider: 'alpha', model: 'plain' })
     expect(denied.isError).toBe(true)
-    expect(text(denied)).toContain('is not allowed for this Session')
+    expect(text(denied)).toContain('is not allowed by the current subagent model selection setting')
   })
 
   it('rejects an unauthorized provider before calling its adapter catalog', async () => {
@@ -272,7 +272,7 @@ describe('list_subagent_models', () => {
     const result = await call(ctx, { provider: 'secret' })
 
     expect(result.isError).toBe(true)
-    expect(text(result)).toContain('provider "secret" is not allowed for this Session')
+    expect(text(result)).toContain('provider "secret" is not allowed by the current subagent model selection setting')
     expect(listModels).not.toHaveBeenCalled()
   })
 
@@ -380,7 +380,7 @@ describe('list_subagent_models', () => {
   it.each([
     { args: { model: 'fast' }, expected: '`model` requires `provider`' },
     { args: { provider: '' }, expected: '`provider` must be non-empty' },
-    { args: { provider: 'missing' }, expected: 'is not allowed for this Session' },
+    { args: { provider: 'missing' }, expected: 'is not allowed by the current subagent model selection setting' },
   ])('rejects incomplete or unavailable provider requests', async ({ args, expected }) => {
     const ctx = await setupListTool()
     const result = await call(ctx, args)

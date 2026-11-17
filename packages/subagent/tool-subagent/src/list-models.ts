@@ -1,5 +1,6 @@
 /** Model-facing discovery of LLM routes available to child Agents. */
 
+import { SubagentError } from '@deepseek-ai/dsh-subagent'
 import type { Context } from '@deepseek-ai/cordis'
 import type LlmRuntime from '@deepseek-ai/dsh-llm'
 import type { LlmProviderInfo } from '@deepseek-ai/dsh-llm'
@@ -71,7 +72,7 @@ async function listSubagentModels(
   const allowedRoutes = policy.routes.filter(route => route.provider === request.provider)
   const [firstRoute] = allowedRoutes
   if (firstRoute === undefined) {
-    throw new Error(`LLM provider "${request.provider}" is not allowed for this Session`)
+    throw new SubagentError(`LLM provider "${request.provider}" is not allowed by the current subagent model selection setting`,'MODEL_ROUTE_NOT_ALLOWED')
   }
   const provider = registeredProvider(llm, policy, request.provider)
   if (request.model === undefined) {
@@ -85,7 +86,7 @@ async function listSubagentModels(
   }
   if (request.model.length === 0) throw new Error('`model` must be non-empty')
   if (!allowedRoutes.some(route => route.model === request.model)) {
-    throw new Error(`child LLM route "${provider.id}/${request.model}" is not allowed for this Session`)
+    throw new SubagentError(`child LLM route "${provider.id}/${request.model}" is not allowed by the current subagent model selection setting`,'MODEL_ROUTE_NOT_ALLOWED')
   }
   const model = await llm.resolveModelInfo(provider.id, request.model, signal)
   const efforts = model.reasoning?.efforts.map(effort => (
