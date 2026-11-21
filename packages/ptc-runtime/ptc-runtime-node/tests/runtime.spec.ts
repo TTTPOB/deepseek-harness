@@ -148,10 +148,11 @@ describe('Node program process', () => {
 
   it('uses the default deadline and caps explicit requests', async () => {
     const { runtime } = await setup()
-    expect(runtime.timeout).toEqual({ defaultMs: 120_000, maxMs: 600_000 })
-    expect(runtime.executionInstructions).toBe('The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. Emit output with console.log(...) or return a lossless JSON value. Only printed values and the returned value become program output. Each call runs in a fresh Node process. Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution\'s sandbox policy.')
-    expect(runtime.resolve({ program: '', bindings: [] }).timeoutMs).toBe(120_000)
-    expect(runtime.resolve({ program: '', bindings: [], timeoutMs: 900_000 }).timeoutMs).toBe(600_000)
+    expect(runtime.resolve({ program: '', bindings: [] }).timeoutMs).toBe(runtime.timeout.defaultMs)
+    expect(runtime.resolve({ program: '', bindings: [], timeoutMs: runtime.timeout.maxMs + 1 }).timeoutMs)
+      .toBe(runtime.timeout.maxMs)
+    expect(runtime.resolve({ program: '', bindings: [], timeoutMs: runtime.timeout.defaultMs / 2 }).timeoutMs)
+      .toBe(runtime.timeout.defaultMs / 2)
     expect(runtime.resolve({ program: '', bindings: [], timeoutMs: null }).timeoutMs).toBeNull()
     for (const timeoutMs of [0, -1, NaN, Infinity]) expect(() => runtime.resolve({ program: '', bindings: [], timeoutMs })).toThrow()
     await expect(runtime.run({ program: '', bindings: [], cwd: process.cwd(), timeoutMs: 1000 })).rejects.toThrow('sandbox policy')

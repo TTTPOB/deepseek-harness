@@ -15,6 +15,17 @@ import { CodeResetFailedError } from './errors.ts'
 
 const PTC_ONLY_INSTRUCTION = `\`${RUN_CODE_NAME}\` is the only tool you can call directly — a tool call naming any other tool fails. Reach every tool the SDK declares below from inside the program.`
 
+/**
+ * Name the direct-call surface for this step's visible exceptions.
+ * @param exceptions - visible native exception names, in definition order.
+ * @returns the PTC-only rule matching what the executor accepts.
+ */
+function ptcOnlyInstruction(exceptions: readonly string[]): string {
+  if (exceptions.length === 0) return PTC_ONLY_INSTRUCTION
+  const names = [RUN_CODE_NAME, ...exceptions].map(name => '`' + name + '`').join(', ')
+  return `${names} are the only tools you can call directly — a tool call naming any other tool fails. Reach every tool the SDK declares below from inside the program; the native exceptions are also available there.`
+}
+
 const SDK_RENDERERS = {
   typescript: renderToolsSdk,
   python: renderToolsSdkPy,
@@ -25,27 +36,37 @@ export class PtcExecutor implements ToolExecutor {
   readonly sections: readonly ToolPromptSection[]
   private readonly pipeline: ToolExecutionPipeline
   private readonly config: Config
+  private readonly ptcNativeTools: ReadonlySet<string>
   private ptcTransport: ToolDefinition | undefined
   private readonly calls: PtcCalls
 
   constructor(private readonly ctx: Context, config: Partial<Config> = {}, private readonly maxParallel: () => number = () => 10) {
     this.config = Config(config)
+    this.ptcNativeTools = new Set(this.config.ptcNativeTools)
     this.calls = new PtcCalls(ctx)
     const tools = ctx.tools
     this.sections = [
-      { name: 'tools:ptc-only', order: ctx.systemPrompt.getSectionOrder('PTC_ONLY'), text: PTC_ONLY_INSTRUCTION, interpolate: false },
+      { name: 'tools:ptc-only', order: ctx.systemPrompt.getSectionOrder('PTC_ONLY'), text: tools => ptcOnlyInstruction(this.exceptionsIn(tools).map(definition => definition.name)), interpolate: false },
       { name: 'tools:sdk', order: ctx.systemPrompt.getSectionOrder('TOOLS_SDK'), text: tools => this.renderSdk(tools), interpolate: false },
     ]
     this.pipeline = new ToolExecutionPipeline(ctx, {
       get: (name, scope, toolSet) => name === RUN_CODE_NAME ? this.requirePtcTransport() : tools.executable(name, scope, toolSet),
-      reject: (name, nested) => !nested && name !== RUN_CODE_NAME
-        ? new ToolNotFoundError(name, `only \`${RUN_CODE_NAME}\` is callable directly — call \`${name}\` from inside a \`${RUN_CODE_NAME}\` program instead`)
+      reject: (name, nested) => !nested && name !== RUN_CODE_NAME && !this.ptcNativeTools.has(name)
+        ? new ToolNotFoundError(name, (this.ptcNativeTools.size === 0 ? `only \`${RUN_CODE_NAME}\` is callable directly — ` : '')
+          + `call \`${name}\` from inside a \`${RUN_CODE_NAME}\` program instead`)
         : undefined,
     })
   }
 
-  describe(_tools: readonly ToolDefinition[]): ToolModelInput {
-    return { schemas: [projectToolSchema(this.requirePtcTransport(), false)], knownNames: [RUN_CODE_NAME] }
+  describe(tools: readonly ToolDefinition[]): ToolModelInput {
+    return {
+      schemas: [this.requirePtcTransport(), ...this.exceptionsIn(tools)].map(definition => projectToolSchema(definition, false)),
+      knownNames: [RUN_CODE_NAME, ...[...this.ptcNativeTools].filter(name => name !== RUN_CODE_NAME)],
+    }
+  }
+
+  private exceptionsIn(tools: readonly ToolDefinition[]): ToolDefinition[] {
+    return tools.filter(definition => definition.name !== RUN_CODE_NAME && this.ptcNativeTools.has(definition.name))
   }
 
   private renderSdk(tools: readonly ToolDefinition[]): string {

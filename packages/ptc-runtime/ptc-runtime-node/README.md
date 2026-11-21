@@ -80,6 +80,23 @@ Set `executionMode: vm-script` to evaluate erasable TypeScript through `node:vm`
     scriptPersistence: true
 ```
 
+<a id="raw-text-literals"></a>
+### Raw text literals
+
+All three execution modes accept `@` immediately followed by N backticks (N ≥ 2), closed by the next maximal run of exactly N backticks. Shorter or longer runs are content; choose a wider delimiter when the text contains an equal-length run. Quotes, backslashes and `${...}` remain literal text, without escapes or interpolation.
+
+````text
+const command = @``
+printf '%s\n' "$HOME"
+``;
+````
+
+Exactly one LF or CRLF immediately after the opening delimiter is omitted. No indentation is removed; trailing newlines remain. The preprocessor emits an ordinary template, escaping backslashes, backticks and `${`. The omitted opening newline becomes a backslash line continuation inside that template, preserving source lines without introducing ASI-sensitive newlines around expressions. Content CR characters become `\r` escapes so CRLF values remain exact; LF characters remain real source newlines.
+
+Acorn with its TypeScript plugin recognizes raw literals only where code expects tokens. Ordinary strings, comments, regex literals and template text keep the sequence unchanged; expressions inside `${...}` can contain raw literals. `@identifier` decorators remain unchanged. An unterminated literal reports its opening line and column and required delimiter width.
+
+If Acorn fails for another reason, the runtime falls back to outer-first conversion and lets Node's type stripper decide acceptance. This compatibility path recognizes openers even inside other JavaScript tokens. Successful Acorn parsing replaces only recorded raw ranges; all remaining source bytes stay unchanged.
+
 <a id="persistent-repl"></a>
 ### In-memory modes
 
@@ -108,6 +125,8 @@ The PTC consumer exposes per-call timeout and approved sandbox choices as descri
 Omitting `timeoutMs` uses the configured elapsed default; numeric requests are validated and capped. Service callers can explicitly pass `timeoutMs: null` to omit the elapsed timer, as the workflow adapter does; `run_code` continues to accept only positive numeric overrides. An enabled deadline covers runtime setup and execution, including time awaiting nested tools or approval. It is not a CPU meter. Timeout results retain captured output and report `execution timed out before code started` until the program is submitted to the ready process, or `execution timed out during execution` afterward. Timeout or cancellation during retained execution requests cooperative revocation. Captured output produced after the stop request is discarded, including output from `catch` and `finally` handlers. Acknowledgment preserves the VM and variables, including earlier mutations. If the execution thread cannot acknowledge within `stopGraceMs`, or the acknowledgment fails, the host terminates the managed process range and waits for cleanup. The result remains `timeout` or `abort` and reports whether variables were preserved or cleared; timeout messages also report the elapsed budget. After confirmed termination, the next call creates an empty environment. Cleanup failure returns `worker-exit` and blocks reuse until host release succeeds. Startup timeouts, temporary execution stops and successful per-call completion terminate the managed process range immediately. The timer stops when an outcome is selected, before cleanup, so the returned call can take longer than its execution deadline while cleanup settles.
 
 ### Failures
+
+When type stripping fails and Acorn locates an error, the message starts with `SyntaxError at L:C: <strip message>` and includes the original source line and a caret. Both coordinates are 1-based and refer to the model-written program in all modes, including TypeScript annotations. Acorn's own message is omitted. If Acorn accepts a program that stripping rejects, only the strip message is returned. Unterminated raw literals use the same source frame and report the exact closing width. Diagnostics do not execute model code or include writing advice.
 
 Program parse errors and thrown exceptions are `exception`; deadline expiry is `timeout`; cancellation is `abort`; unparsable or oversized control traffic and invalid program messages are `protocol`; unavailable confinement is `sandbox-unavailable`; early process exit, lost control transport or failed managed cleanup is `worker-exit`. Control I/O failures retain the transport diagnostic alongside the observed process exit status. The substrate-independent failure name remains `worker-exit` for process providers. Lossy completions are `invalid-output`, and an oversized outer result is `output-limit`, retaining the fitting log prefix. Invalid or unsupported options and calls after disposal reject as caller misuse.
 
@@ -202,7 +221,7 @@ Read the service contract before using the provider directly; the decisions expl
 <a id="model-experience"></a>
 ## Model Experience
 
-Indirectly, through `dsh-tool-executor-ptc` and `dsh-workflow-ptc`, which present program outcomes through their own tool results. Intermediate binding traffic stays outside model history; the outer result follows the ordinary tool spill policy.
+Indirectly, through PTC mode in `dsh-tool-executor-ptc` and `dsh-workflow-ptc`, which present program outcomes through their own tool results. Intermediate binding traffic stays outside model history; the outer result follows the ordinary tool spill policy. Raw literals reduce escaping for embedded scripts and file content without altering raw-looking ordinary strings. Parse failures add `SyntaxError at L:C:` and an original-source frame when a position is available, without duplicating parser messages or adding advice. Execution instructions describe raw literal syntax; parse failures add only the diagnostic to output and token usage.
 
 #### KV Cache effect
 
