@@ -1,3 +1,4 @@
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 /**
  * Tests for the mcp-client plugin's `apply` lifecycle entry point.
  * Isolated file so vi.mock of the MCP SDK doesn't pollute other test suites.
@@ -145,6 +146,20 @@ describe('mcp-client plugin module exports', () => {
     expect(resolved.serverName).toBe('github-prod_1')
   })
 
+  it('preserves the SDK default when no stdio buffer size is configured', () => {
+    expect(ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo' } as never))
+      .not.toHaveProperty('maxBufferSize')
+  })
+
+  it('accepts a positive integer stdio buffer size and rejects invalid limits', () => {
+    expect(ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo', maxBufferSize: 67_108_864 } as never))
+      .toHaveProperty('maxBufferSize', 67_108_864)
+    for (const maxBufferSize of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo', maxBufferSize } as never))
+        .toThrow()
+    }
+  })
+
   it('Config schema materializes reconnect defaults and merges partial overrides', () => {
     const omitted = ConfigSchema({
       transport: 'stdio',
@@ -216,8 +231,14 @@ describe('apply (plugin lifecycle)', () => {
     expect(mockConnect).toHaveBeenCalled()
     expect(mockListTools).toHaveBeenCalled()
     expect(mockSetNotificationHandler).toHaveBeenCalled()
+    expect(vi.mocked(StdioClientTransport).mock.calls.at(-1)?.[0]).not.toHaveProperty('maxBufferSize')
     expect(ctx.tools.get('mcp__srv__remote')).toBeDefined()
     expect(ctx.tools.get('remote')).toBeUndefined()
+  })
+
+  it('passes the configured byte limit to the SDK stdio transport', async () => {
+    await apply(ctx, { ...stdioConfig, serverName: 'large', maxBufferSize: 67_108_864 })
+    expect(StdioClientTransport).toHaveBeenCalledWith(expect.objectContaining({ maxBufferSize: 67_108_864 }))
   })
 
   it('keeps the Cordis plugin loading until initial discovery publishes its tools', async () => {

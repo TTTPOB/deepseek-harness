@@ -104,6 +104,7 @@ describe('fixture server — controlled scenarios', () => {
     serverName: 'fixture',
     command: process.execPath,
     args: [fixtureServerPath],
+    maxBufferSize: 16 * 1024 * 1024,
     env: {},
     cwd: packageDir,
     toolCallTimeoutMs: 15_000,
@@ -165,6 +166,19 @@ describe('fixture server — controlled scenarios', () => {
     })
     expect(result.isError).toBe(false)
     expect(result.content[0]).toEqual({ type: 'text', text: 'Hello, World!' })
+  })
+
+  it('receives a stdio response larger than the SDK default buffer', async () => {
+    const callId = nextCallId()
+    const batch = await ctx.tools.execute({
+      signal: testToolSignal,
+      calls: [{ type: 'tool-call', id: callId, name: 'mcp__fixture__large', arguments: '{}' }],
+    })
+    expect(batch.results).toHaveLength(1)
+    const outcome = batch.results[0]!
+    expect(outcome.callId).toBe(callId)
+    expect(outcome.result.isError).toBe(false)
+    expect(textOf(outcome.result.content[0])).toHaveLength(11 * 1024 * 1024)
   })
 
   it('executes fail() → isError result', async () => {

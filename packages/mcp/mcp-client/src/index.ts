@@ -88,6 +88,8 @@ export interface StdioConfig {
   env: Record<string, string>
   /** Working directory for the child process. */
   cwd: string
+  /** Maximum stdio read buffer in bytes; omission preserves the SDK default. */
+  maxBufferSize?: number
   /** Timeout per tool call or resource request in milliseconds. */
   toolCallTimeoutMs: number
   /** Optional budget for one connection attempt plus its initial tool sync, in milliseconds. */
@@ -166,6 +168,7 @@ export const Config = z.union([
     args: z.array(String).default([]),
     env: z.dict(String).default({}),
     cwd: z.string().default(''),
+    maxBufferSize: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     startupTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
     closeTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_CLOSE_TIMEOUT_MS),
