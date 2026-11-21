@@ -1318,6 +1318,16 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     expect(output).not.toContain('Result cap reached')
   })
 
+  it('lets the model retry an index that is still warming without exposing provider diagnostics', async () => {
+    const mounted = await mount()
+    const secret = '/private/session-index'
+    FakeQuery.sessionSearch = () => Promise.reject(new SessionQueryError(secret, 'SESSION_QUERY_INDEX_WARMING'))
+    const result = await mounted.call('session_search', { query: 'needle' })
+    expect(errorCode(result)).toBe('SESSION_QUERY_INDEX_WARMING')
+    expect(text(result)).toContain('retry')
+    expect(JSON.stringify(result)).not.toContain(secret)
+  })
+
   it.each([
     {
       toolName: 'session_search',

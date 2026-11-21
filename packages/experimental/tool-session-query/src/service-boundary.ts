@@ -35,6 +35,10 @@ const SAFE_SESSION_QUERY_FAILURES = {
     code: 'SESSION_QUERY_INDEX_FAILED',
     message: 'session search index is unavailable',
   },
+  SESSION_QUERY_INDEX_WARMING: {
+    code: 'SESSION_QUERY_INDEX_WARMING',
+    message: 'session search index is warming; retry shortly',
+  },
   SESSION_QUERY_INVALID_CONFIG: {
     code: 'SESSION_QUERY_TOOL_FAILED',
     message: 'session query operation failed',
