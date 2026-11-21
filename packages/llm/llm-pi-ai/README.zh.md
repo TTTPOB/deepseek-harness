@@ -35,6 +35,8 @@ kind: "package-reference"
 
 ### 配置提供方路由
 
+每个 profile 可以设置 `errorCodeRules`，把终止错误文本映射成失败码。规则按顺序先于内置分类器执行，首个命中者胜，因此部署可以替换内置判断；`after: true` 只在内置分类器回落到 `PI_AI_ERROR` 时才执行。失败码限定为本适配器会报告的那些，保证 profile 的重试策略仍然匹配。正则只看到提供方返回的错误文本。
+
 每个 profile 都可以设置 `retryPolicy`；省略时使用 normal mode、最多重试五次。`apiKeyEnv` 是按请求经 harness 凭据 seam 解析的凭据引用，因此配置文件绝不包含密钥；解析为空的引用会让请求以 `MISSING_CREDENTIAL` 失败。省略它会让路由保持已配置但无密钥（configured-but-keyless）状态，对已安装目录路由而言即交由 pi-ai 提供方原生的环境发现。
 
 ```yaml
@@ -53,6 +55,9 @@ kind: "package-reference"
         retryPolicy:
           mode: normal
           maxRetries: 3
+        errorCodeRules:
+          - match: '^upstream_error:'
+            code: SERVER
       anthropic:
         apiKeyEnv: ANTHROPIC_API_KEY
         models:
@@ -91,6 +96,7 @@ kind: "package-reference"
 | `maxRequestImages` | `50` | 保留请求图片数量上限，保留图片超过时请求以 `IMAGE_OFFLOAD_REQUIRED` 失败。默认值取 Azure OpenAI 的 50 张上限；提供方接受更多图片的路由应调高 |
 | `imageOffloadCountQuantum` | `10`，不超过 `maxRequestImages` | 每次数量超限时省略的最老图片数 |
 | `retryPolicy` | normal，5 次重试 | 由 `dsh-llm-retry` 执行的提供方自有重试策略 |
+| `errorCodeRules` | 无 | 先于内置分类器执行的文本到失败码规则；`after: true` 只兜底 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-llm-pi-ai)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -108,7 +114,9 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 确切模型元数据将 `reasoning.efforts` 按可选强度从低到高排列。配置函数可从该列表中选择，再由 `prepareCall()` 校验具体强度。适配器只接收解析后的控制项。选择 `off` 不保证禁用推理：以省略推理字段表达该值的协议会沿用网关默认行为。所选等级下产生的推理 token 都计入该请求的输出上限。
 
-对于自托管 Chat Completions 端点，`thinkingTokenBudgetField` 选择推理预算参数，`vllmPriority` 在服务端启用优先级调度时设置整数调度优先级。模板参数接受 `$var: thinking.budget`。`openai-responses` 网关可设置 `supportsMaxOutputTokens: false` 来省略 `max_output_tokens`；Azure 与 Codex 传输会忽略这个共享兼容字段。这些控制均需显式启用；目录拥有的 Anthropic effort 和回退能力不是可配置开关。
+对于自托管 Chat Completions 端点，`thinkingTokenBudgetField` 选择推理预算参数，`vllmPriority` 在服务端启用优先级调度时设置整数调度优先级。模板参数接受 `$var: thinking.budget`。`openai-responses` 网关可设置 `supportsMaxOutputTokens: false` 来省略 `max_output_tokens`；Azure 与 Codex 传输会忽略这个共享兼容字段。Responses 路由还支持通过 pi-ai fork 设置 `systemPromptFormat: instructions`；默认 `input` 将首条系统提示词保留在输入记录中。`supportsAdditionalTools` 与 `supportsToolSearch` 配置 Responses 工具追加。这些控制均需显式启用；目录拥有的 Anthropic effort 和回退能力不是可配置开关。
+
+Responses 的 `compat.maxConsecutiveWhitespaceChars` 与 `compat.maxRepeatedPatternChars` 按输出项设置客户端流检测阈值，单位为 UTF-16 code unit。两项只接受非负整数，在 pi-ai 中默认均为 32768，0 关闭对应检测；仅适用于 `openai-responses`、`azure-openai-responses` 和 `openai-codex-responses`，需要 pi-ai fork3 或更高版本，并允许逐模型覆盖。连续空白跨 delta 累计，遇到非空白清零；重复模式的周期上限固定为 100。纯空白也是周期为 1 的重复模式，因此仅关闭空白检测不会关闭重复模式检测。
 
 ### 运行时更改配置
 

@@ -51,21 +51,94 @@ describe('pi-ai gateway compatibility declarations', () => {
   })
 
   it.each([
-    'supportsMidConvoEffort', 'allowedFallbackModels', 'supportsMidConvoSystemMessages',
-    'supportsMidConvoToolAdditions', 'supportsMidConvoToolChanges', 'sessionAffinityFormat',
+    'supportsMidConvoEffort', 'allowedFallbackModels', 'sessionAffinityFormat',
   ])('withholds catalog-owned %s', (field) => {
     expect(() => resolved({ [field]: true }, 'anthropic-messages'))
       .toThrow(/which is not configurable here/)
   })
 
-  it('withholds Mistral conversation capabilities', () => {
-    expect(() => resolveProfiles({
-      mistral: { compat: { supportsMidConvoSystemMessages: true } as never },
-    }))
-      .toThrow(/which is not configurable here/)
+  it.each(['openai-completions', 'anthropic-messages', 'openai-responses'])(
+    'preserves explicit system update capability for %s', (api) => {
+      expect(resolved({ supportsMidConvoSystemMessages: true }, api))
+        .toMatchObject({ supportsMidConvoSystemMessages: true })
+    })
+
+  it('preserves catalog protocol system update capability', () => {
+    const route = resolveProfiles({ mistral: { compat: { supportsMidConvoSystemMessages: true } } }).get('mistral')
+    expect(route?.piProvider?.getModels()[0]?.compat).toMatchObject({ supportsMidConvoSystemMessages: true })
+  })
+
+  it('preserves protocol-specific tool update capabilities', () => {
+    expect(resolved({ supportsMidConvoToolAdditions: true }))
+      .toMatchObject({ supportsMidConvoToolAdditions: true })
+    expect(resolved({ supportsMidConvoToolChanges: true }, 'anthropic-messages'))
+      .toMatchObject({ supportsMidConvoToolChanges: true })
+  })
+
+  it.each(['input', 'instructions'])('preserves Responses system prompt format %s', (systemPromptFormat) => {
+    expect(resolved({ systemPromptFormat }, 'openai-responses')).toMatchObject({ systemPromptFormat })
+  })
+
+  it.each(['supportsAdditionalTools', 'supportsToolSearch'])('preserves Responses %s', (field) => {
+    expect(resolved({ [field]: true }, 'openai-responses')).toMatchObject({ [field]: true })
+    expect(() => resolved({ [field]: true })).toThrow(/compat/)
   })
 
   it('keeps generic additions absent unless configured', () => {
     expect(resolved({})).toBeUndefined()
+  })
+})
+describe('Responses degenerate-output limit declarations', () => {
+  const fields = ['maxConsecutiveWhitespaceChars', 'maxRepeatedPatternChars']
+  const responsesProviders = ['openai', 'azure', 'openai-codex']
+
+  it.each(responsesProviders)('passes provider limits to catalog models on %s', (provider) => {
+    for (const limit of [0, 5000]) {
+      const compat = { maxConsecutiveWhitespaceChars: limit, maxRepeatedPatternChars: limit }
+      const route = resolveProfiles({ [provider]: { compat } }).get(provider)
+      expect(route?.piProvider?.getModels()[0]?.compat).toMatchObject(compat)
+    }
+  })
+
+  it('passes hand-declared provider limits to Responses models', () => {
+    const compat = { maxConsecutiveWhitespaceChars: 5000, maxRepeatedPatternChars: 5000 }
+    expect(resolved(compat, 'openai-responses')).toMatchObject(compat)
+  })
+
+  it.each(fields)('rejects negative and fractional %s in the configuration schema', (field) => {
+    for (const value of [-1, 0.5]) {
+      expect(() => configured({ [field]: value }, 'openai-responses')).toThrow()
+      expect(() => Config({ providers: { gateway: {
+        api: 'openai-responses', baseURL: 'https://gateway.test/v1',
+        models: [{ id: 'model', compat: { [field]: value } }],
+      } } })).toThrow()
+    }
+  })
+
+  it.each(['openai-completions', 'anthropic-messages'])('rejects Responses-only limits on %s', (api) => {
+    for (const field of fields) {
+      expect(() => resolved({ [field]: 5000 }, api)).toThrow(/compat/)
+    }
+  })
+
+  it.each(['amazon-bedrock', 'mistral', 'google', 'google-vertex'])('rejects Responses-only limits on catalog %s', (provider) => {
+    for (const field of fields) {
+      expect(() => resolveProfiles({ [provider]: { compat: { [field]: 5000 } } })).toThrow(/compat/)
+    }
+  })
+
+  it('keeps both limits absent unless configured', () => {
+    expect(resolved({}, 'openai-responses')).toBeUndefined()
+  })
+
+  it('lets a model override one provider limit without losing the other', () => {
+    const route = resolveProfiles({ gateway: {
+      api: 'openai-responses', baseURL: 'https://gateway.test/v1',
+      compat: { maxConsecutiveWhitespaceChars: 5000, maxRepeatedPatternChars: 5000 },
+      models: [{ id: 'model', compat: { maxConsecutiveWhitespaceChars: 0 } }],
+    } }).get('gateway')
+    expect(route?.piProvider?.getModels()[0]?.compat).toMatchObject({
+      maxConsecutiveWhitespaceChars: 0, maxRepeatedPatternChars: 5000,
+    })
   })
 })

@@ -107,3 +107,27 @@ describe('request image policy bounds', () => {
     }).toThrow(message)
   })
 })
+
+describe('error-code rule configuration', () => {
+  const profile = {
+    api: 'openai-completions' as const,
+    baseURL: 'https://acme.test',
+    models: [{ id: 'm' }],
+  }
+
+  it('defaults to no rules and compiles configured patterns', () => {
+    const resolved = resolveProfiles({
+      'acme-gateway': { ...profile, errorCodeRules: [{ match: '^upstream_error:', code: 'SERVER' }] },
+    })
+    expect(resolved.get('acme-gateway')?.errorCodeRules).toMatchObject([{ code: 'SERVER', after: false }])
+    expect(resolved.get('acme-gateway')?.errorCodeRules[0]?.pattern).toBeInstanceOf(RegExp)
+    expect(resolveProfiles({ 'acme-gateway': profile }).get('acme-gateway')?.errorCodeRules).toEqual([])
+  })
+
+  it('rejects an unknown code at the schema and an invalid pattern at resolution', () => {
+    expect(routeWith({ errorCodeRules: [{ match: 'x', code: 'NOPE' }] })).toThrow(/expected/)
+    expect(() => resolveProfiles({
+      'acme-gateway': { ...profile, errorCodeRules: [{ match: '(', code: 'SERVER' }] },
+    })).toThrow(/valid regular expression/)
+  })
+})

@@ -35,6 +35,8 @@ Choose this adapter when the same composition serves several providers, when a r
 
 ### Configure provider routes
 
+Each profile may set `errorCodeRules` to map terminal error text to a failure code. Rules run in order before the built-in classifier and the first match wins, so a deployment can replace a built-in decision; `after: true` runs only when the built-in classifier falls through to `PI_AI_ERROR`. Codes are limited to the ones this adapter can report, so the profile's retry policy keeps matching. Patterns see only the provider's error text.
+
 Each profile may set a `retryPolicy`; omission uses normal mode with five retries. `apiKeyEnv` is a credential reference resolved per request through the harness credential seam, so no secret enters the configuration file; a reference that resolves to nothing fails the request with `MISSING_CREDENTIAL`. Omitting it leaves the route configured-but-keyless, which for an installed catalog route defers to pi-ai's provider-native ambient discovery.
 
 ```yaml
@@ -53,6 +55,9 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
         retryPolicy:
           mode: normal
           maxRetries: 3
+        errorCodeRules:
+          - match: '^upstream_error:'
+            code: SERVER
       anthropic:
         apiKeyEnv: ANTHROPIC_API_KEY
         models:
@@ -91,6 +96,7 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 | `maxRequestImages` | `50` | Retained request-image count bound; a request whose retained images exceed it fails with `IMAGE_OFFLOAD_REQUIRED`. The default follows Azure OpenAI's 50-image limit; raise it on routes whose provider accepts more images |
 | `imageOffloadCountQuantum` | `10`, capped at `maxRequestImages` | Oldest images offloaded per count overflow |
 | `retryPolicy` | normal, 5 retries | Provider-owned retry policy executed by `dsh-llm-retry` |
+| `errorCodeRules` | none | Ordered text-to-code rules evaluated before built-ins; `after: true` only fills the fallback |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-llm-pi-ai) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -108,7 +114,9 @@ A profile's `models` list replaces the route's installed catalog rather than ext
 
 Exact-model metadata lists `reasoning.efforts` from least to greatest selectable effort. A configuration function can select from that list before `prepareCall()` validates the concrete effort. The adapter receives only the resolved controls. Selecting `off` does not guarantee disabled reasoning: a protocol that expresses it by omitting the reasoning field leaves the gateway's default in effect. Reasoning tokens at any selected level count toward the request's output cap.
 
-For self-hosted Chat Completions endpoints, `thinkingTokenBudgetField` selects the reasoning-budget parameter, and `vllmPriority` sets an integer scheduler priority when the server enables priority scheduling. Template arguments accept `$var: thinking.budget`. `openai-responses` gateways can set `supportsMaxOutputTokens: false` to omit `max_output_tokens`; Azure and Codex transports ignore this shared compatibility field. These controls are opt-in; catalog-owned Anthropic effort and fallback capabilities are not configurable switches.
+For self-hosted Chat Completions endpoints, `thinkingTokenBudgetField` selects the reasoning-budget parameter, and `vllmPriority` sets an integer scheduler priority when the server enables priority scheduling. Template arguments accept `$var: thinking.budget`. `openai-responses` gateways can set `supportsMaxOutputTokens: false` to omit `max_output_tokens`; Azure and Codex transports ignore this shared compatibility field. Responses routes also accept `systemPromptFormat: instructions` with the pi-ai fork; the default `input` keeps the initial system prompt in the input transcript. `supportsAdditionalTools` and `supportsToolSearch` configure Responses tool additions. These controls are opt-in; catalog-owned Anthropic effort and fallback capabilities are not configurable switches.
+
+Responses `compat.maxConsecutiveWhitespaceChars` and `compat.maxRepeatedPatternChars` set client-side per-output-item stream limits in UTF-16 code units. Both accept non-negative integers, default to 32768 in pi-ai, and use 0 to disable the corresponding check. They apply only to `openai-responses`, `azure-openai-responses`, and `openai-codex-responses`, require pi-ai fork3 or later, and may be overridden per model. Whitespace counts accumulate across deltas and reset on non-whitespace; repeated patterns have a fixed maximum period of 100. Pure whitespace is also a period-1 pattern, so disabling only whitespace detection does not disable repeated-pattern detection.
 
 ### Change configuration at runtime
 

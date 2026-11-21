@@ -395,6 +395,49 @@ describe('PiAiAdapter provider routing', () => {
   })
 
   it.each([
+    [
+      { type: 'error', code: 'upstream_http2_stream_error', message: 'Upstream HTTP/2 stream failed' },
+      'TRANSPORT',
+    ],
+    [
+      { type: 'response.failed', response: {
+        status: 'failed', error: { code: 'server_error', message: 'An error occurred while processing your request.' },
+      } },
+      'SERVER',
+    ],
+  ])('classifies Responses stream failure %j as %s', async (event, code) => {
+    const server = await mockServer([{ events: [JSON.stringify(event)] }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: { openai: { apiKeyEnv: 'PI_TEST_KEY', baseURL: `${server.url}/v1` } },
+    })
+    const result = await assemble(ctx, { provider: 'openai', model: 'gpt-4.1', messages: [] })
+    expect(result.finish).toMatchObject({ kind: 'error', failure: { code } })
+    expect(server.paths).toEqual(['/v1/responses'])
+  })
+
+  it('applies a configured error-code rule to a Responses stream failure', async () => {
+    const server = await mockServer([{ events: [JSON.stringify({
+      type: 'response.failed',
+      response: { status: 'failed', error: { code: 'upstream_error', message: 'Upstream service temporarily unavailable' } },
+    })] }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        openai: {
+          apiKeyEnv: 'PI_TEST_KEY',
+          baseURL: `${server.url}/v1`,
+          errorCodeRules: [{ match: '^upstream_error:', code: 'SERVER' }],
+        },
+      },
+    })
+    const result = await assemble(ctx, { provider: 'openai', model: 'gpt-4.1', messages: [] })
+    expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
+  })
+
+  it.each([
     { name: 'the default count bound rejects', profile: {}, failure: { code: 'IMAGE_OFFLOAD_REQUIRED', offloadImages: DEFAULT_IMAGE_OFFLOAD_COUNT_QUANTUM }, requests: 0 },
     { name: 'a raised count bound dispatches', profile: { maxRequestImages: 60 }, failure: { code: 'AUTH' }, requests: 1 },
   ])('$name a request carrying 51 retained images', async ({ profile, failure, requests }) => {
