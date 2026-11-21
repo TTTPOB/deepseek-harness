@@ -98,10 +98,10 @@ export function apply(ctx: Context, config: Config = {}): void {
             + `The root agent of your collaboration tree is ${JSON.stringify(ROOT_AGENT_NAME)}.`
         const guidance: string[] = []
         if (ctx.tools.get(sendMessage.name, scope, toolSet) === sendMessage) {
-          guidance.push('To message other agents, use send_message({ agent: "<agent-name>", message: "..." }).')
+          guidance.push('To message other agents, use the send_message tool with the agent and message parameters.')
         }
         if (ctx.tools.get(listAgents.name, scope, toolSet) === listAgents) {
-          guidance.push('Use list_agents({}) to find your collaborator agents and their names.')
+          guidance.push('Use list_agents to find your collaborator agents and their names.')
         }
         if (guidance.length > 0) identity += '\n\n' + guidance.join('\n')
         return identity

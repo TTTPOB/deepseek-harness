@@ -145,8 +145,8 @@ it('pins Messages Files offload and inline fallback in assembled requests', asyn
       + 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.\n\n'
       + 'Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`).\n\n'
       + 'You are the root agent. Your name is "lead".\n\n'
-      + 'To message other agents, use send_message({ agent: "<agent-name>", message: "..." }).\n'
-      + 'Use list_agents({}) to find your collaborator agents and their names.\n</system-reminder>'
+      + 'To message other agents, use the send_message tool with the agent and message parameters.\n'
+      + 'Use list_agents to find your collaborator agents and their names.\n</system-reminder>'
     const messages = requests[0]?.messages as { content?: unknown }[] | undefined
     const offloaded = messages?.find(message => JSON.stringify(message.content).includes('[image omitted'))
     expect(offloaded?.content).toEqual([
