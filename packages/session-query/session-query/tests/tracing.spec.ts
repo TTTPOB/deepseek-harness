@@ -2,7 +2,7 @@ import { createUserMessage, createMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { foldSurface, SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { Session, SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import SessionPersistence, {
@@ -18,6 +18,8 @@ import type {
 } from '@deepseek-ai/dsh-session-persistence'
 import { type SessionQueryErrorCode } from '@deepseek-ai/dsh-session-query'
 import { TestSessionQueryEngine } from './test-service.ts'
+import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-format-catalog/message-projections'
+import { EventLogAnalysis } from '../src/tracing.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -87,6 +89,8 @@ class TracePersistence extends SessionPersistence {
   static listCalls = 0
   static readCalls = 0
   static listFailure: Error | undefined
+  static statFailure: Error | undefined
+  static afterStat: (() => void) | undefined
   static readFailure: Error | undefined
   static afterList: (() => void) | undefined
 
@@ -95,6 +99,8 @@ class TracePersistence extends SessionPersistence {
     this.listCalls = 0
     this.readCalls = 0
     this.listFailure = undefined
+    this.statFailure = undefined
+    this.afterStat = undefined
     this.readFailure = undefined
     this.afterList = undefined
   }
@@ -114,12 +120,15 @@ class TracePersistence extends SessionPersistence {
   }
 
   stat(id: SessionIdType): Promise<SessionPersistenceSnapshot | undefined> {
+    if (TracePersistence.statFailure !== undefined) return Promise.reject(TracePersistence.statFailure)
     const entry = TracePersistence.entries.get(id)
     if (entry === undefined) return Promise.resolve(undefined)
-    return Promise.resolve({
+    const snapshot = {
       header: structuredClone(entry.meta),
       revision: SessionPersistenceRevision(`events:${entry.events.length}`),
-    })
+    }
+    TracePersistence.afterStat?.()
+    return Promise.resolve(snapshot)
   }
 
   list(): Promise<readonly SessionPersistenceSnapshot[]> {
@@ -138,7 +147,7 @@ async function queryContext(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
-  await ctx.plugin(TestSessionQueryEngine)
+  await ctx.plugin(TestSessionQueryEngine, { metadataCacheTtlMs: 0 })
   return ctx
 }
 
@@ -308,6 +317,61 @@ describe('session lineage tracing', () => {
 })
 
 describe('session event tracing', () => {
+  it('matches full folding at every prefix while copying only requested output', async () => {
+    const ctx = await queryContext()
+    for (const definition of currentSessionMessageProjections) ctx.sessions.registerMessageProjection(definition)
+    const session = ctx.sessions.create(SessionId('incremental-prefixes'))
+    appendTraceEvents(session)
+    const image = session.append('user/message', createUserMessage({ source: { kind: 'user' }, content: [{
+      type: 'image', attachment: {
+        attachmentId: 'sha256:' + 'a'.repeat(64) as never,
+        mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+      },
+    }] }), { surfaceOp: 'append' })
+    session.append('image/offload', { targets: [{ seq: image.seq, imageIndexes: [0] }] })
+    session.append('user/message', createUserMessage({ source: { kind: 'user' }, content: [] }), {
+      surfaceOp: 'append', sourceEventSeqs: [SessionSeq(8), SessionSeq(2)],
+    })
+    using observed = await ctx.sessionQuery.observeSession(session.id, { projectionMode: 'none' })
+    const events = observed.events
+    const analysis = new EventLogAnalysis(session.id)
+    for (let cut = 1; cut <= events.length; cut += 1) {
+      analysis.append(events.slice(cut - 1, cut))
+      expect(analysis.processed).toBe(cut)
+      const prefix = events.slice(0, cut)
+      const complete = foldSurface(prefix, currentSessionMessageProjections)
+      const replacedBy = new Map(complete.replacements.flatMap(item => item.shadowedSeqs.map(seq => [seq, item.seq] as const)))
+      const records = prefix.map(event => ({
+        sessionId: session.id, seq: event.seq, type: event.type, time: event.time,
+        surface: complete.nodes.includes(event.seq) ? 'current' : replacedBy.has(event.seq) ? 'shadowed' : 'log-only',
+      }))
+      expect(analysis.records()).toEqual(records)
+      expect(analysis.surfaceEvents()).toEqual(complete.nodes.map(seq => prefix[seq]))
+      for (const event of prefix) {
+        const chain = []
+        for (let replacement = replacedBy.get(event.seq); replacement !== undefined; replacement = replacedBy.get(replacement)) {
+          chain.push(replacement)
+        }
+        const next = replacedBy.get(event.seq)
+        expect(analysis.trace(event.seq)).toEqual({
+          target: records[event.seq], ...next === undefined ? {} : { replacedBy: next },
+          replacementChain: chain,
+          replacedEventSeqs: complete.replacements.find(item => item.seq === event.seq)?.shadowedSeqs ?? [],
+          sourceEventSeqs: event.sourceEventSeqs ?? [],
+          derivedEventSeqs: prefix.filter(item => item.seq > event.seq && item.sourceEventSeqs?.includes(event.seq)).map(item => item.seq),
+        })
+      }
+    }
+    const surface = analysis.surfaceEvents()
+    expect(surface.at(-1)).toMatchObject({ data: { content: [] } })
+    expect(surface.find(event => event.seq === image.seq)).toEqual(image)
+    expect(surface.find(event => event.seq === image.seq)).not.toBe(image)
+    const trace = analysis.trace(SessionSeq(2))
+    trace.derivedEventSeqs.length = 0
+    expect(analysis.trace(SessionSeq(2)).derivedEventSeqs).toEqual([3, 4, 8, 11])
+    await ctx.fiber.dispose()
+  })
+
   it('returns direct replacement and cited source-event links in their contract order', async () => {
     const ctx = await queryContext()
     const session = ctx.sessions.create(SessionId('trace'))
@@ -378,7 +442,7 @@ describe('session event tracing', () => {
 
     await expect(ctx.sessionQuery.traceEvent({ sessionId: durable.id, seq: SessionSeq(0) }))
       .resolves.toMatchObject({ target: { type: 'user/message', surface: 'current' } })
-    expect([TracePersistence.listCalls, TracePersistence.readCalls]).toEqual([1, 1])
+    expect([TracePersistence.listCalls, TracePersistence.readCalls]).toEqual([0, 1])
 
     const live = ctx.sessions.create(durable.id, { meta: { createdAt: 1, cwd: '/same' } })
     live.append('turn/start', { turn: 1 })
@@ -389,24 +453,24 @@ describe('session event tracing', () => {
       }),
       { surfaceOp: 'append' },
     )
-    TracePersistence.listFailure = new Error('list unavailable')
+    TracePersistence.statFailure = new Error('stat unavailable')
     TracePersistence.readFailure = new Error('inspect unavailable')
     await expect(ctx.sessionQuery.traceEvent({ sessionId: durable.id, seq: SessionSeq(1) }))
       .resolves.toMatchObject({ target: { type: 'user/message' } })
-    expect([TracePersistence.listCalls, TracePersistence.readCalls]).toEqual([1, 1])
+    expect([TracePersistence.listCalls, TracePersistence.readCalls]).toEqual([0, 1])
 
     TracePersistence.reset([{ meta: durable, events: [appendEvent(0)] }])
     const failedCtx = await queryContext()
     await failedCtx.plugin(TracePersistence)
-    TracePersistence.listFailure = new Error('list unavailable')
+    TracePersistence.statFailure = new Error('stat unavailable')
     await expect(failedCtx.sessionQuery.traceEvent({ sessionId: durable.id, seq: SessionSeq(0) }))
       .rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
-    TracePersistence.listFailure = undefined
+    TracePersistence.statFailure = undefined
     TracePersistence.readFailure = new Error('inspect unavailable')
     await expect(failedCtx.sessionQuery.traceEvent({ sessionId: durable.id, seq: SessionSeq(0) }))
       .rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
     TracePersistence.readFailure = undefined
-    TracePersistence.afterList = () => {
+    TracePersistence.afterStat = () => {
       mutableHeader(TracePersistence.entries.get(durable.id)!.meta).cwd = '/changed'
     }
     await expect(failedCtx.sessionQuery.traceEvent({ sessionId: durable.id, seq: SessionSeq(0) }))

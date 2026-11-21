@@ -445,6 +445,12 @@ interface SurfaceFoldResult {
 }
 ```
 
+<a id="surface-folding"></a>
+
+### Surface folding
+
+`SurfaceFoldAccumulator` from `dsh-session/surface` incrementally folds one contiguous immutable event prefix starting at seq 0. Append each event at `nextSeq` with the caller-owned history indexed from seq 0; validation failure leaves `nextSeq` unchanged. Its `nodes` and `projectedMessages` are borrowed views that advance on later appends, so copy retained results. Replacement metadata is detached and remains stable; the caller owns any replacement history. Removing a used message-projection definition blocks further reads and appends.
+
 ## `Session` public API
 
 ### `SessionEventInput` — one proposed event

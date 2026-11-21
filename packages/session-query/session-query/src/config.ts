@@ -23,6 +23,12 @@ export interface Config {
    * against this bound until released. Defaults to 5.
    */
   preparedSessionCacheSize?: number
+  /** Persisted metadata catalog freshness window in milliseconds; 0 disables reuse. Defaults to 5000. */
+  metadataCacheTtlMs?: number
+  /** Session listing snapshot lifetime in milliseconds. Defaults to 60000. */
+  sessionPageSnapshotTtlMs?: number
+  /** Maximum retained session listing snapshots. Defaults to 8. */
+  sessionPageSnapshotCapacity?: number
 }
 
 /** Stable machine-routable failure taxonomy for session reads, traces, and search. */

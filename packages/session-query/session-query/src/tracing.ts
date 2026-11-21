@@ -1,10 +1,11 @@
-/** One-shot session-lineage and event-relationship tracing helpers. */
+/** Canonical incremental event analysis and one-shot session-lineage tracing. */
 
 import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-format-catalog/message-projections'
-import { foldSurface, isSurfaceEvent, snapshotSessionEvent } from '@deepseek-ai/dsh-session'
+import { SurfaceFoldAccumulator, isSurfaceEvent, snapshotSessionEvent } from '@deepseek-ai/dsh-session'
 import type {
   SessionEvent,
   SessionId,
+  SessionMessageProjection,
   SessionSeq,
   SurfaceEvent,
 } from '@deepseek-ai/dsh-session'
@@ -17,97 +18,170 @@ import type {
   SessionRecord,
 } from './types.ts'
 
-interface EventLogAnalysis {
-  records: SessionEventRecord[]
-  replacedBy: Map<SessionSeq, SessionSeq>
-  replacedEventSeqs: Map<SessionSeq, SessionSeq[]>
-  currentSeqs: SessionSeq[]
+/**
+ * Analysis owned by one Session object or prepared revision. Event payloads are
+ * borrowed from that owner; retained state consists of event references, sequences,
+ * and interpreted messages, with no payload copies.
+ * Results own their metadata and arrays and survive subsequent appends.
+ */
+export class EventLogAnalysis {
+  private readonly events: SessionEvent[] = []
+  private readonly fold: SurfaceFoldAccumulator
+  private readonly current = new Set<SessionSeq>()
+  private readonly replacedBy = new Map<SessionSeq, SessionSeq>()
+  private readonly replacedEventSeqs = new Map<SessionSeq, readonly SessionSeq[]>()
+  private readonly derived = new Map<SessionSeq, SessionSeq[]>()
+
+  /**
+   * @param sessionId - owner used in records and diagnostics.
+   * @param projections - borrowed canonical message interpreters.
+   */
+  constructor(
+    private readonly sessionId: SessionId,
+    projections: readonly SessionMessageProjection[] = currentSessionMessageProjections,
+  ) {
+    this.fold = new SurfaceFoldAccumulator(projections)
+  }
+
+  /** Number of successfully processed events, including ordinary source citations. */
+  get processed(): number { return this.fold.nextSeq }
+
+  /**
+   * Process only the next contiguous range of borrowed immutable events.
+   * @param events - events starting at processed, from the same owner and revision.
+   * @throws when canonical surface interpretation fails.
+   */
+  append(events: readonly SessionEvent[]): void {
+    try {
+      for (const event of events) {
+        const replacement = this.fold.append(event, this.events)
+        this.events.push(event)
+        if (replacement !== undefined) {
+          this.replacedEventSeqs.set(event.seq, replacement.shadowedSeqs)
+          for (const removed of replacement.shadowedSeqs) {
+            this.current.delete(removed)
+            this.replacedBy.set(removed, event.seq)
+          }
+        }
+        if (isSurfaceEvent(event)) this.current.add(event.seq)
+        for (const source of eventSources(event)) {
+          // Unknown ignorable metadata may cite non-earlier events; traces only
+          // report later direct citations, just like the complete-log reader.
+          if (source >= event.seq) continue
+          const derived = this.derived.get(source) ?? []
+          if (derived.at(-1) !== event.seq) derived.push(event.seq)
+          this.derived.set(source, derived)
+        }
+      }
+      void this.fold.nodes
+    } catch (error: unknown) {
+      throw invalidSurface(error)
+    }
+  }
+
+  /**
+   * Copy only current original surface events, including empty messages.
+   * @returns detached events in canonical node-position order, not interpreted messages.
+   */
+  surfaceEvents(): SurfaceEvent[] {
+    return this.nodes().map(seq => snapshotSessionEvent(this.events[seq] as SurfaceEvent))
+  }
+
+  /**
+   * Materialize the complete record list for consumers that need every event.
+   * @returns detached metadata in ascending log order.
+   */
+  records(): SessionEventRecord[] {
+    this.nodes()
+    return this.events.map(event => this.record(event))
+  }
+
+  /**
+   * Trace one target without materializing records for the rest of the log.
+   * @param seq - target sequence in the processed prefix.
+   * @returns detached direct sources, later citations, and actual replacement chain.
+   */
+  trace(seq: SessionSeq): SessionEventTrace {
+    const target = requireEvent(this.sessionId, this.events, seq)
+    this.nodes()
+    const replacementChain: SessionSeq[] = []
+    let replacement = this.replacedBy.get(seq)
+    while (replacement !== undefined) {
+      replacementChain.push(replacement)
+      replacement = this.replacedBy.get(replacement)
+    }
+    const replacedBy = this.replacedBy.get(seq)
+    return {
+      target: this.record(target),
+      ...replacedBy === undefined ? {} : { replacedBy },
+      replacementChain,
+      replacedEventSeqs: [...this.replacedEventSeqs.get(seq) ?? []],
+      sourceEventSeqs: [...eventSources(target)],
+      derivedEventSeqs: [...this.derived.get(seq) ?? []],
+    }
+  }
+
+  private nodes(): readonly SessionSeq[] {
+    try { return this.fold.nodes } catch (error: unknown) { throw invalidSurface(error) }
+  }
+
+  private record(event: SessionEvent): SessionEventRecord {
+    return {
+      sessionId: this.sessionId, seq: event.seq, type: event.type, time: event.time,
+      surface: this.current.has(event.seq)
+        ? 'current' : this.replacedBy.has(event.seq) ? 'shadowed' : 'log-only',
+    }
+  }
 }
 
 /**
- * Classify a raw event log with one canonical surface fold.
+ * Classify a complete raw event log with the canonical surface interpreter.
  * @param sessionId - owner of the event log.
- * @param events - detached raw event log.
+ * @param events - borrowed complete raw event log.
  * @returns lightweight records in ascending log order.
  */
-export function eventRecords(
-  sessionId: SessionId,
-  events: readonly SessionEvent[],
-): SessionEventRecord[] {
-  return analyzeEventLog(sessionId, events).records
+export function eventRecords(sessionId: SessionId, events: readonly SessionEvent[]): SessionEventRecord[] {
+  return analyzeEventLog(sessionId, events).records()
 }
 
 /**
- * Fold and return the current model surface after validating the whole log.
+ * Fold and copy only current original surface events.
  * @param sessionId - owner used in query diagnostics.
- * @param events - detached raw event log from one corpus observation.
- * @returns detached current surface events in folded order.
+ * @param events - borrowed complete raw event log.
+ * @returns detached surface events in folded order.
  */
-export function currentSurfaceEvents(
-  sessionId: SessionId,
-  events: readonly SessionEvent[],
-): SurfaceEvent[] {
-  const analysis = analyzeEventLog(sessionId, events)
-  return analysis.currentSeqs.map((seq) => {
-    const event = events[seq]
-    /* v8 ignore next 6 -- analyzeEventLog validated contiguous seqs and foldSurface returned only surface-event seqs. */
-    if (event === undefined || event.seq !== seq || !isSurfaceEvent(event)) {
-      throw new SessionQueryError(
-        `invalid session surface: current node ${seq} is not a surface event`,
-        'SESSION_QUERY_INVALID_SURFACE',
-      )
-    }
-    return snapshotSessionEvent(event)
-  })
+export function currentSurfaceEvents(sessionId: SessionId, events: readonly SessionEvent[]): SurfaceEvent[] {
+  return analyzeEventLog(sessionId, events).surfaceEvents()
 }
 
 /**
- * Trace one target after one canonical surface fold and whole-log validation.
+ * Trace one target after checking existence and validating the canonical fold.
  * @param sessionId - owner of the event log.
- * @param events - detached raw event log.
+ * @param events - borrowed complete raw event log.
  * @param seq - target event seq.
- * @returns direct surface replacements and relationships to cited source events.
+ * @returns detached direct replacements and cited-source relationships.
  */
-export function traceEvent(
-  sessionId: SessionId,
-  events: readonly SessionEvent[],
-  seq: SessionSeq,
-): SessionEventTrace {
+export function traceEvent(sessionId: SessionId, events: readonly SessionEvent[], seq: SessionSeq): SessionEventTrace {
+  requireEvent(sessionId, events, seq)
+  return analyzeEventLog(sessionId, events).trace(seq)
+}
+
+/**
+ * Check target existence before canonical folding or Session preparation.
+ * @param sessionId - owner used in diagnostics.
+ * @param events - selected raw prefix.
+ * @param seq - requested target.
+ * @returns the borrowed target event.
+ */
+export function requireEvent(sessionId: SessionId, events: readonly SessionEvent[], seq: SessionSeq): SessionEvent {
   const target = events[seq]
   if (target === undefined || target.seq !== seq) {
     throw new SessionQueryError(
-      `session "${sessionId}" has no event at seq ${seq}`,
+      'session "' + sessionId + '" has no event at seq ' + seq,
       'SESSION_QUERY_EVENT_NOT_FOUND',
     )
   }
-
-  const analysis = analyzeEventLog(sessionId, events)
-
-  const replacementChain: SessionSeq[] = []
-  let replacement = analysis.replacedBy.get(seq)
-  while (replacement !== undefined) {
-    replacementChain.push(replacement)
-    replacement = analysis.replacedBy.get(replacement)
-  }
-
-  const derivedEventSeqs: SessionSeq[] = []
-  for (const event of events) {
-    if (event.seq <= seq) continue
-    if (eventSources(event).includes(seq)) derivedEventSeqs.push(event.seq)
-  }
-
-  // The target check above proves the parallel record exists at this index.
-  // oxlint-disable-next-line typescript/no-non-null-assertion
-  const targetRecord = analysis.records[seq]!
-  const replacedBy = analysis.replacedBy.get(seq)
-  return {
-    target: targetRecord,
-    ...replacedBy === undefined ? {} : { replacedBy },
-    replacementChain,
-    replacedEventSeqs: analysis.replacedEventSeqs.get(seq) ?? [],
-    sourceEventSeqs: [...eventSources(target)],
-    derivedEventSeqs,
-  }
+  return target
 }
 
 /**
@@ -178,45 +252,18 @@ export function traceSession(
   }
 }
 
-function analyzeEventLog(
-  sessionId: SessionId,
-  events: readonly SessionEvent[],
-): EventLogAnalysis {
-  let folded: ReturnType<typeof foldSurface>
-  try {
-    folded = foldSurface(events, currentSessionMessageProjections)
-  } catch (error: unknown) {
-    throw new SessionQueryError(
-      /* v8 ignore next -- foldSurface throws Error instances */
-      `invalid session surface: ${error instanceof Error ? error.message : 'unknown error'}`,
-      'SESSION_QUERY_INVALID_SURFACE',
-      { cause: error },
-    )
-  }
-  const current = new Set(folded.nodes)
-  const replacedBy = new Map<SessionSeq, SessionSeq>()
-  const replacedEventSeqs = new Map<SessionSeq, SessionSeq[]>()
-  for (const replacement of folded.replacements) {
-    const removed = replacement.shadowedSeqs
-    replacedEventSeqs.set(replacement.seq, removed)
-    for (const removedSeq of removed) {
-      replacedBy.set(removedSeq, replacement.seq)
-    }
-  }
-  return {
-    records: events.map(event => ({
-      sessionId,
-      seq: event.seq,
-      type: event.type,
-      time: event.time,
-      surface: current.has(event.seq)
-        ? 'current'
-        : replacedBy.has(event.seq) ? 'shadowed' : 'log-only',
-    })),
-    replacedBy,
-    replacedEventSeqs,
-    currentSeqs: [...folded.nodes],
-  }
+function analyzeEventLog(sessionId: SessionId, events: readonly SessionEvent[]): EventLogAnalysis {
+  const analysis = new EventLogAnalysis(sessionId)
+  analysis.append(events)
+  return analysis
+}
+
+function invalidSurface(error: unknown): SessionQueryError {
+  return new SessionQueryError(
+    'invalid session surface: ' + (error instanceof Error ? error.message : 'unknown error'),
+    'SESSION_QUERY_INVALID_SURFACE',
+    { cause: error },
+  )
 }
 
 function eventSources(event: SessionEvent): readonly SessionSeq[] {
