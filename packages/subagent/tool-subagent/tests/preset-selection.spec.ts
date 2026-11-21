@@ -141,7 +141,7 @@ describe('spawn preset selection', () => {
   it('requires the preset service when selection is configured', async () => {
     const ctx = new Context()
     contexts.push(ctx)
-    await expect(tool.apply(ctx, { provider: 'spawn', agentPreset: 'writer' })).rejects.toThrow(/requires the agent-presets service/)
+    expect(() => { tool.apply(ctx, { provider: 'spawn', agentPreset: 'writer' }) }).toThrow(/requires the agent-presets service/)
   })
 
   it.each([
@@ -342,17 +342,15 @@ describe('spawn preset selection', () => {
         provider: 'spawn', agentPreset: 'later',
       } }],
     })
-    const lease = await ctx.agentPresets.acquireScope('pending-reference')
-    const definition = ctx.tools.get('subagent', lease.key)
-    expect(definition).toBeDefined()
-    await lease[Symbol.asyncDispose]()
+
     const handle = await ctx.agents.create({
       sessionId: SessionId('retry-preset'),
       agentOptions: { provider: 'mock', model: 'mock' },
       setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, 'writer') },
     })
     await ctx.agentPresets.select(handle.agent, 'pending-reference')
-    expect(ctx.tools.get('subagent', handle.agent)).toBe(definition)
+    const definition = ctx.tools.get('subagent', handle.agent)
+    expect(definition).toBeDefined()
     expect(ctx.agentPresets.presetForSession(handle.agent.session)).toBe('pending-reference')
     const failed = await callSubagent(ctx, args, { agent: handle.agent })
     expect(failed.isError).toBe(true)

@@ -6,7 +6,10 @@
 
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 
-/** Typed failure for the subagent seam. */
+/**
+ * Typed failure for the subagent seam.
+ * `INVALID_MODEL_SELECTION_SETTINGS` indicates an invalid enabled Host route setting.
+ */
 export class SubagentError extends HarnessError {
   constructor(message: string, code: string, options?: ErrorOptions) {
     super(message, code, options)

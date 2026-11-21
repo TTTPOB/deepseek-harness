@@ -249,8 +249,8 @@ describe('dsh-tool-subagent-control', () => {
       const built = await ctx.systemPrompt.assemble({ agent, scope: agent })
       expect(built.contexts.find(context => context.name === 'subagent:identity')?.text).toBe(
         'You are the root agent. Your name is "lead".\n\n'
-        + 'To message other agents, use send_message({ agent: "<agent-name>", message: "..." }).\n'
-        + 'Use list_agents({}) to find your collaborator agents and their names.',
+        + 'To message other agents, use the send_message tool with the agent and message parameters.\n'
+        + 'Use list_agents to find your collaborator agents and their names.',
       )
     }
     expect(renderContextSnapshot(await ctx.systemPrompt.assemble({}))).not.toContain('To message other agents')
