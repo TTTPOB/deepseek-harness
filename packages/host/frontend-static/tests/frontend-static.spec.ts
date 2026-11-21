@@ -10,7 +10,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
@@ -93,14 +93,43 @@ async function request(
 ): Promise<{ status: number; type: string | null; body: string }> {
   if (port === undefined) throw new Error('frontend-static test: the listener has not bound a port')
   const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, init)
+  const type = response.headers.get('content-type')
+  const index = new URL(path, 'http://test.invalid').pathname
+  expect(response.headers.get('cache-control')).toBe(response.status === 401 || (response.status === 200 && (index === '/' || index === '/index.html'))
+    ? 'no-store' : response.status === 200 ? 'no-cache' : null)
   return {
     status: response.status,
-    type: response.headers.get('content-type'),
+    type,
     body: await response.text(),
   }
 }
 
 describe('real Loader composition', () => {
+  it('awaits HTTP index admission and preserves a delayed refusal without authenticating assets or admitted readers', { timeout: 60_000 }, async () => {
+    const loaded = await loadComposition()
+    const base = `http://127.0.0.1:${String(loaded.webServer.port)}`
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => { finish = resolve })
+    const authorize = vi.spyOn(loaded.connection, 'authorizeIndexAsync').mockImplementation(async (_request, response) => {
+      await pending
+      response.writeHead(403, { 'cache-control': 'no-store', 'x-admission': 'refused' })
+      response.end('Access rejected')
+      return false
+    })
+    const http = fetch(`${base}/`)
+    await vi.waitFor(() => { expect(authorize).toHaveBeenCalledTimes(1) })
+    const reader = { principal: { kind: 'owner' } } as Connection.PeerScope
+    const index = await loaded.webServer.readResource(new Request(`${base}/`), reader)
+    expect(await index.text()).toContain('shell')
+    expect((await fetch(`${base}/app.js`)).status).toBe(200)
+    expect(authorize).toHaveBeenCalledTimes(1)
+    finish()
+    const refused = await http
+    expect(refused.status).toBe(403)
+    expect(refused.headers.get('x-admission')).toBe('refused')
+    expect(await refused.text()).toBe('Access rejected')
+    authorize.mockRestore()
+  })
   it('serves explicit index entries and files while preserving HTTP error semantics', { timeout: 60_000 }, async () => {
     const loaded = await loadComposition()
     const unloaded = [...loaded.loader.entries()]
@@ -294,12 +323,12 @@ describe('real Loader composition', () => {
     expect(rebuilt.headers.get('etag')).not.toBe(etag)
     expect(await rebuilt.text()).toBe('export const rebuilt = true')
 
-    // Only the rendered index carries no cache headers; another HTML file revalidates.
+    // Only the rendered index forbids caching; another HTML file revalidates.
     const html = await fetch(`${base}/preview.html`)
     expect([html.status, html.headers.get('cache-control')]).toEqual([200, 'no-cache'])
     expect(html.headers.get('etag')).toMatch(/^W\//)
     expect(await html.text()).toBe('<body>preview</body>')
     const index = await loaded.webServer.readResource(new Request(`${base}/`), reader)
-    expect([index.status, index.headers.get('cache-control'), index.headers.get('etag')]).toEqual([200, null, null])
+    expect([index.status, index.headers.get('cache-control'), index.headers.get('etag')]).toEqual([200, 'no-store', null])
   })
 })

@@ -13,7 +13,7 @@
  */
 
 import { isLoopbackHostname } from './loopback-hostname.ts'
-import type { ConnectionTrustRequest } from './rpc.ts'
+import type { ConnectionIndexRequest, ConnectionTrustRequest } from './rpc.ts'
 
 function header(headers: ConnectionTrustRequest['headers'], name: string): string | undefined {
   if (headers instanceof Headers) return headers.get(name) ?? undefined
@@ -173,4 +173,25 @@ function isSameAuthorityOrigin(origin: string, host: string): boolean {
   if (scheme === undefined) return false
   const hostUrl = parseAuthority(host, scheme)
   return hostUrl !== undefined && originUrl.host === hostUrl.host
+}
+
+/**
+ * Admit read-only Access document navigation without relaxing API or upgrade checks.
+ * @param request - root or configured-index request owned by frontend-static.
+ * @param trustedHosts - configured remote authorities.
+ * @param bindHost - listener bind address.
+ * @param protocol - listener protocol.
+ * @returns whether the authority and either API markers or GET document navigation are trusted.
+ */
+export function isTrustedIndexRequest(
+  request: ConnectionIndexRequest,
+  trustedHosts: readonly string[],
+  bindHost?: string,
+  protocol: 'http:' | 'https:' = 'http:',
+): boolean {
+  if (isTrustedApiRequest(request, trustedHosts, bindHost, protocol)) return true
+  if (request.method !== 'GET' || header(request.headers, 'sec-fetch-mode') !== 'navigate'
+    || header(request.headers, 'sec-fetch-dest') !== 'document') return false
+  const host = header(request.headers, 'host')
+  return host !== undefined && isTrustedApiRequest({ headers: { host } }, trustedHosts, bindHost, protocol)
 }

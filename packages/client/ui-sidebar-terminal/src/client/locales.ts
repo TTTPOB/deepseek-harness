@@ -10,6 +10,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Simplified Chinese terminal copy. */
 export const zh = {
   'shortcut.noSession': '请先选择会话',
+  keys: '终端按键', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   recoveryFailed: '恢复终端失败：{message}', retryRecovery: '重试恢复终端',
   shell: '选择 Shell', shellLoading: '正在读取 Shell…', shellEmpty: '没有可用的 Shell', description: '在会话工作区运行命令',
   title: '终端', new: '新建终端', loading: '正在读取终端环境…', creating: '正在启动…',
@@ -32,6 +34,8 @@ export const zh = {
 /** English terminal copy. */
 export const en = {
   'shortcut.noSession': 'Select a session first',
+  keys: 'Terminal keys', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   recoveryFailed: 'Terminal recovery failed: {message}', retryRecovery: 'Retry terminal recovery',
   shell: 'Choose shell', shellLoading: 'Loading shells…', shellEmpty: 'No shells available', description: 'Run commands in the Session workspace',
   title: 'Terminal', new: 'New terminal', loading: 'Reading terminal environment…', creating: 'Starting…',
@@ -53,6 +57,8 @@ export const en = {
 
 /** Japanese copy, checked against the English keys. */
 export const ja = {
+  keys: 'ターミナルキー', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   'shortcut.noSession': '先にセッションを選択してください',
   'recoveryFailed': 'ターミナルの復元に失敗しました: {message}',
   'retryRecovery': 'ターミナルの復元を再試行',
@@ -90,6 +96,8 @@ export const ja = {
 
 /** Spanish dictionary, checked against the English keys. */
 export const es = {
+  keys: 'Teclas del terminal', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   'shortcut.noSession': 'Seleccione una sesión primero',
   recoveryFailed: 'Falló la recuperación del terminal: {message}', retryRecovery: 'Reintentar la recuperación del terminal',
   shell: 'Elige concha', shellLoading: 'Cargando proyectiles…', shellEmpty: 'No hay conchas disponibles', description: 'Ejecutar comandos en el espacio de trabajo de sesión',
@@ -112,6 +120,8 @@ export const es = {
 
 /** French dictionary, checked against the English keys. */
 export const fr = {
+  keys: 'Touches du terminal', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   'shortcut.noSession': "Sélectionnez d'abord une session",
   recoveryFailed: 'Échec de la récupération du terminal : {message}', retryRecovery: 'Réessayez la récupération du terminal',
   shell: 'Choisissez la coque', shellLoading: 'Chargement des obus…', shellEmpty: 'Aucune coquille disponible', description: 'Exécuter des commandes dans l’espace de travail de la session',
@@ -134,6 +144,8 @@ export const fr = {
 
 /** German dictionary, checked against the English keys. */
 export const de = {
+  keys: 'Terminaltasten', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   'shortcut.noSession': 'Wählen Sie zunächst eine Sitzung aus',
   recoveryFailed: 'Terminalwiederherstellung fehlgeschlagen: {message}', retryRecovery: 'Versuchen Sie die Terminalwiederherstellung erneut',
   shell: 'Wählen Sie Shell', shellLoading: 'Granaten werden geladen…', shellEmpty: 'Keine Muscheln verfügbar', description: 'Führen Sie Befehle im Sitzungsarbeitsbereich aus',
@@ -156,6 +168,8 @@ export const de = {
 
 /** Russian dictionary, checked against the English keys. */
 export const ru = {
+  keys: 'Клавиши терминала', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   'shortcut.noSession': 'Сначала выберите сеанс',
   recoveryFailed: 'Восстановление терминала не удалось: {message}', retryRecovery: 'Повторить попытку восстановления терминала',
   shell: 'Выбрать оболочку', shellLoading: 'Загрузка снарядов…', shellEmpty: 'Нет доступных ракушек', description: 'Запуск команд в рабочей области сеанса',
@@ -178,6 +192,8 @@ export const ru = {
 
 /** Portuguese dictionary, checked against the English keys. */
 export const pt = {
+  keys: 'Teclas do terminal', keyCtrl: 'Ctrl', keyAlt: 'Alt', keyInterrupt: 'Ctrl+C', keyEof: 'Ctrl+D',
+  keyEscape: 'Esc', keyTab: 'Tab', keyLeft: '←', keyDown: '↓', keyUp: '↑', keyRight: '→',
   'shortcut.noSession': 'Selecione uma sessão primeiro',
   recoveryFailed: 'Falha na recuperação do terminal: {message}', retryRecovery: 'Tentar novamente a recuperação do terminal',
   shell: 'Escolha a concha', shellLoading: 'Carregando conchas…', shellEmpty: 'Não há conchas disponíveis', description: 'Execute comandos no espaço de trabalho Sessão',

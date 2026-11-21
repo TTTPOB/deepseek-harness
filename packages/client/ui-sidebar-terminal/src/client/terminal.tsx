@@ -1,5 +1,5 @@
 /** Sidebar terminal screen and connection recovery. */
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button, IconPlusOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -12,6 +12,8 @@ import '@xterm/xterm/css/xterm.css'
 import css from './terminal.module.css'
 import { TerminalTheme } from './terminal-theme.ts'
 import { observeTerminalCursor } from './terminal-cursor.ts'
+import { MobileTerminalInput, type TerminalExtraKey } from './mobile-input.ts'
+import { observeTerminalViewport } from './mobile-viewport.ts'
 
 /** Standard sidebar owner share plus terminal model and localized copy. */
 export type TerminalBodyProps = PropsRuntime<'sidebar.right.pane.tab'> & PropsLocale<'sidebarTerminal'> & InjectFace<TerminalBodyInjected>
@@ -22,7 +24,7 @@ export type TerminalBodyProps = PropsRuntime<'sidebar.right.pane.tab'> & PropsLo
  * @returns the terminal screen and any pending or exceptional state.
  */
 export function TerminalBody({ useTabInfo, useTerminal, useTheme, view, t }: TerminalBodyProps): ReactNode {
-  const { tab } = useTabInfo()
+  const { tab, sidebar } = useTabInfo()
   const theme = useTheme(value => value)
   const model = view(tab.id)
   const state = useTerminal(tab.id)
@@ -63,7 +65,7 @@ export function TerminalBody({ useTabInfo, useTerminal, useTheme, view, t }: Ter
           : <Button variant="outline" size="sm" onClick={() => { model.connect() }}>{t('reconnect')}</Button>)}
         {ended && newTerminal}
       </div>}
-      {state.info !== undefined && <TerminalScreen state={state} model={model} visible={tab.visible} label={t('title')} theme={theme} />}
+      {state.info !== undefined && <TerminalScreen state={state} model={model} visible={tab.visible} fullscreen={sidebar.fullscreen} t={t} label={t('title')} theme={theme} />}
       {error !== undefined && <p className={css.error} role="alert">{t('failed', { message: error })}</p>}
     </section>
   )
@@ -75,27 +77,33 @@ export function TerminalBody({ useTabInfo, useTerminal, useTheme, view, t }: Ter
  * not a gesture: xterm turns the wheel into arrow keys on the alternate screen, and reading must not take over.
  */
 const TYPED_INPUT_WINDOW_MS = 250
-const INPUT_GESTURES = ['keydown', 'beforeinput', 'paste', 'compositionend', 'drop', 'mousedown', 'touchstart'] as const
+const INPUT_GESTURES = ['keydown', 'beforeinput', 'input', 'paste', 'compositionend', 'drop', 'mousedown', 'touchstart'] as const
 /** Focus-in and focus-out reports (DECSET 1004) that xterm.js sends when a click focuses the screen. */
 const FOCUS_REPORTS = new Set(['\x1b[I', '\x1b[O'])
 
 /* oxlint-disable typescript/no-non-null-assertion -- React sets the DOM ref, then these effects initialize and use the emulator. */
-function TerminalScreen({ state, model, visible, label, theme }: {
+function TerminalScreen({ state, model, visible, fullscreen, t, label, theme }: {
   state: TerminalViewState
   model: TerminalView
   visible: boolean
+  fullscreen: boolean
+  t: TerminalBodyProps['t']
   label: string
   theme: ThemeSnapshot
 }): ReactNode {
+  const surface = useRef<HTMLDivElement>(null)
   const element = useRef<HTMLDivElement>(null)
+  const inputController = useRef<MobileTerminalInput>()
+  const viewportSizing = useRef<ReturnType<typeof observeTerminalViewport>>()
+  const [keys, setKeys] = useState({ ctrl: false, alt: false, composing: false })
   const terminal = useRef<Terminal>()
   const fit = useRef<FitAddon>()
   const colors = useRef<TerminalTheme>()
   const lastRevision = useRef(0)
   const fontFamily = terminalFontFamily(theme.fontFamilies.terminal)
   const fontSize = theme.fontSizes.terminal
-  const current = useRef({ state, visible, fontFamily, fontSize })
-  current.current = { state, visible, fontFamily, fontSize }
+  const current = useRef({ state, visible, fullscreen, fontFamily, fontSize })
+  current.current = { state, visible, fullscreen, fontFamily, fontSize }
 
   useLayoutEffect(() => {
     const node = element.current!
@@ -116,10 +124,20 @@ function TerminalScreen({ state, model, visible, label, theme }: {
     let gestureAt = Number.NEGATIVE_INFINITY
     const gesture = (): void => { gestureAt = performance.now() }
     for (const type of INPUT_GESTURES) node.addEventListener(type, gesture, { capture: true, passive: true })
+    const keyboard = new MobileTerminalInput(node, xterm.textarea!, (data) => { model.write(data, true) },
+      (modifiers, composing) => { setKeys({ ...modifiers, composing }) })
+    inputController.current = keyboard
+    setKeys({ ctrl: false, alt: false, composing: false })
+    const sizing = observeTerminalViewport(surface.current!, () => current.current.visible && current.current.fullscreen,
+      (phone) => { keyboard.enable(phone && current.current.visible && current.current.fullscreen
+        && current.current.state.writable && current.current.state.phase === 'connected') })
+    viewportSizing.current = sizing
     const input = xterm.onData((data) => {
-      model.write(data, performance.now() - gestureAt < TYPED_INPUT_WINDOW_MS && !FOCUS_REPORTS.has(data))
+      if (performance.now() - gestureAt < TYPED_INPUT_WINDOW_MS && !FOCUS_REPORTS.has(data)) keyboard.input(data)
+      else model.write(data, false)
     })
     const measure = (): void => {
+      sizing.sync()
       if (!current.current.visible || !current.current.state.writable || node.clientWidth === 0 || node.clientHeight === 0) return
       fitScreen(xterm, addon, current.current.state, model)
     }
@@ -129,6 +147,10 @@ function TerminalScreen({ state, model, visible, label, theme }: {
       observer.disconnect()
       for (const type of INPUT_GESTURES) node.removeEventListener(type, gesture, { capture: true })
       input.dispose()
+      keyboard.dispose()
+      sizing.dispose()
+      inputController.current = undefined
+      viewportSizing.current = undefined
       cursor.dispose()
       palette.dispose()
       xterm.dispose()
@@ -168,16 +190,34 @@ function TerminalScreen({ state, model, visible, label, theme }: {
 
   useLayoutEffect(() => {
     const xterm = terminal.current!
+    inputController.current!.enable(visible && fullscreen && state.writable && state.phase === 'connected')
+    viewportSizing.current!.sync()
     xterm.options.disableStdin = !state.writable
     if (visible && state.writable && element.current?.clientWidth && element.current.clientHeight) {
       fitScreen(xterm, fit.current!, state, model)
     } else if (state.info !== undefined && !state.writable) xterm.resize(state.info.cols, state.info.rows)
-  }, [visible, state.writable, state.info?.cols, state.info?.rows, model])
+  }, [visible, fullscreen, state.phase, state.writable, state.info?.cols, state.info?.rows, model])
   useEffect(() => {
     terminal.current!.textarea?.setAttribute('aria-label', label)
   }, [label])
-  useEffect(() => { if (visible && state.writable) terminal.current!.focus() }, [visible, state.writable])
-  return <div className={css.screen} ref={element} />
+  useEffect(() => { if (visible && state.writable) terminal.current!.focus() }, [visible, state.writable, model])
+  const disabled = !visible || !state.writable || state.phase !== 'connected' || keys.composing
+  const extraKeys: [TerminalExtraKey, keyof typeof import('./locales.ts').en][] = [
+    ['interrupt', 'keyInterrupt'], ['escape', 'keyEscape'], ['tab', 'keyTab'], ['left', 'keyLeft'],
+    ['down', 'keyDown'], ['up', 'keyUp'], ['right', 'keyRight'], ['eof', 'keyEof'],
+  ]
+  return <div className={css.surface} ref={surface}>
+    {fullscreen && visible && <div className={css.keys} role="toolbar" aria-label={t('keys')}
+      onPointerDown={(event) => { event.preventDefault() }}>
+      <Button variant="outline" className={css.key} disabled={disabled} aria-pressed={keys.ctrl}
+        onClick={() => { inputController.current!.toggle('ctrl') }}>{t('keyCtrl')}</Button>
+      <Button variant="outline" className={css.key} disabled={disabled} aria-pressed={keys.alt}
+        onClick={() => { inputController.current!.toggle('alt') }}>{t('keyAlt')}</Button>
+      {extraKeys.map(([key, copy]) => <Button key={key} variant="outline" className={css.key} disabled={disabled}
+        onClick={() => { inputController.current!.key(key, terminal.current!.modes.applicationCursorKeysMode) }}>{t(copy)}</Button>)}
+    </div>}
+    <div className={css.screen} ref={element} />
+  </div>
 }
 /* oxlint-enable typescript/no-non-null-assertion */
 

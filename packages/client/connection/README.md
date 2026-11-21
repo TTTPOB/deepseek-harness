@@ -64,6 +64,12 @@ An ended `$events` stream, a Remote stream error, a non-ready opening item, or a
 Set the Host Connection row's `config.recovery` to override retry caps, the growth factor, or handshake warning and cancellation times; the [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-client-connection) lists accepted fields. The Host validates these values and injects them into each served page. The Client validates the bootstrap data before providing Connection and uses those defaults when Gateway starts its loop; explicit `start()` timing overrides take precedence. The growth factor must be finite and at least one. Readiness, failure, cancellation, or a hard deadline that occurs before the warning cancels that warning. Reload the page after changing Host recovery configuration.
 
 
+### Fork behavior
+
+Optional `cloudflareAccess: { issuer: "https://team.cloudflareaccess.com", audience: "application-aud-tag" }` requires an RS256 assertion from that official HTTPS team issuer on every non-loopback HTTP request, `/connect` exchange, and WebSocket upgrade. `jose` verifies its signature, issuer, audience, and mandatory expiry using the issuer’s `/cdn-cgi/access/certs` JWKS. Cookies and launch tokens cannot bypass Access. Use the awaited `admitAsync`, `admitConnectionAsync`, and `authorizeIndexAsync` entry points; synchronous admission refuses Access ingress. API credentials retain their upstream Peer identity, socket lease, and Remote access checks. Verified browser ingress uses the existing owner browser Peer. Gateway closes Access sockets at assertion expiry.
+
+Only a trusted GET index document navigation (`sec-fetch-mode: navigate`, `sec-fetch-dest: document`) may carry a cross-site or opaque Origin; APIs, `/connect`, and upgrades retain the full Origin/Fetch-Metadata checks. Verified indexes render without issuing a second DSH cookie; root token queries redirect to clean `./`. Keep public authorities in `trustedHosts` and serve the proxy through HTTPS. No settings-persistence permission global is injected.
+
 <a id="model-experience"></a>
 ## Model Experience
 

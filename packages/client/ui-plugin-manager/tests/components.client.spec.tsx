@@ -168,6 +168,8 @@ function renderTab(
     useStore: bindSnapshotSelector(navigation), actions: navigation.actions,
     ...standard,
     t,
+    renderFactorySlot: () => null,
+    useFactorySlot: () => { throw new Error('The manager declares no local Factory positions') },
     resolveText,
     ...actions,
     usePluginManager: bindSnapshotSelector(store),
@@ -258,12 +260,12 @@ describe('PluginManagerPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discover update' }))
     expect(actions.openGitUpdate).toHaveBeenCalledWith({ packageName: 'dsh-a', version: '1.1.0', spec: 'git+https://git.example/o/a.git#bbbbbbb' })
     fireEvent.click(screen.getByRole('button', { name: 'Discover open' }))
-    expect(navigation.getSnapshot()).toEqual({ tab: 'installed', view: { kind: 'package', name: 'dsh-better-sidebar', returnTab: 'discover' } })
+    expect(navigation.getSnapshot()).toEqual({ modalOpen: false, tab: 'installed', view: { kind: 'package', name: 'dsh-better-sidebar', returnTab: 'discover' } })
     expect(document.querySelector('[data-plugin-detail="dsh-better-sidebar"]')).not.toBeNull()
     // A detail page hides the tabs; its back button returns to the tab that opened it.
     expect(screen.queryByRole('tablist')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: en.backToList }))
-    expect(navigation.getSnapshot()).toEqual({ tab: 'discover', view: { kind: 'list' } })
+    expect(navigation.getSnapshot()).toEqual({ modalOpen: false, tab: 'discover', view: { kind: 'list' } })
     expect(screen.getByRole('tab', { name: 'Discover' }).getAttribute('aria-selected')).toBe('true')
     // A contributed tab that leaves the ledger falls back to Installed.
     act(() => { navigation.actions.setView({ kind: 'list' }); navigation.actions.setTab('discover') })
@@ -323,7 +325,7 @@ describe('PluginManagerPage', () => {
     expect(document.querySelector(`[data-plugin-detail="${inspector}"]`)).not.toBeNull()
     // An official plugin of the More list opened from Discover returns to Discover, not to the More list.
     fireEvent.click(screen.getByRole('button', { name: en.backToList }))
-    expect(navigation.getSnapshot()).toEqual({ tab: 'discover', view: { kind: 'list' } })
+    expect(navigation.getSnapshot()).toEqual({ modalOpen: false, tab: 'discover', view: { kind: 'list' } })
     fireEvent.click(screen.getByRole('tab', { name: en.installedTab }))
     act(() => { navigation.actions.setView({ kind: 'more' }) })
     fireEvent.click(screen.getByRole('button', { name: en.openDetail.replace('{name}', inspector) }))
@@ -345,7 +347,7 @@ describe('PluginManagerPage', () => {
     fireEvent.click(screen.getByRole('button', { name: en.backToPackage.replace('{name}', 'dsh-better-sidebar') }))
     expect(navigation.getSnapshot().view).toEqual({ kind: 'package', name: 'dsh-better-sidebar', returnTab: 'discover' })
     fireEvent.click(screen.getByRole('button', { name: en.backToList }))
-    expect(navigation.getSnapshot()).toEqual({ tab: 'discover', view: { kind: 'list' } })
+    expect(navigation.getSnapshot()).toEqual({ modalOpen: false, tab: 'discover', view: { kind: 'list' } })
     // A calling tab that left the ledger while the page was open falls back to Installed.
     fireEvent.click(screen.getByRole('button', { name: 'Discover open' }))
     setTabs([])
@@ -1467,7 +1469,7 @@ describe('PluginManagerPage', () => {
     it('starts on the main list when the navigation store is recreated', () => {
       const first = createNavigationStore().create()
       first.actions.setView({ kind: 'more' })
-      expect(createNavigationStore().create().getSnapshot()).toEqual({ tab: 'installed', view: { kind: 'list' } })
+      expect(createNavigationStore().create().getSnapshot()).toEqual({ modalOpen: false, tab: 'installed', view: { kind: 'list' } })
     })
 
     it('counts an official plugin as content: the empty line waits for a page with nothing at all', () => {

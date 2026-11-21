@@ -382,6 +382,28 @@ export class BrowserAuth {
     return payload
   }
 
+  /**
+   * Serve a server-verified Access index without requiring or minting a DSH cookie.
+   * Root token links redirect once to the clean directory-relative URL.
+   * @param req - index request already verified by Connection.
+   * @param res - response owned when a token-cleaning redirect is required.
+   * @returns true when the caller may serve the Access-authenticated index.
+   */
+  authorizeAccessIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse): boolean {
+    /* v8 ignore next -- node:http always supplies url on server requests. */
+    const url = new URL(req.url ?? '/', 'http://dsh.invalid')
+    if (req.method === 'GET' && url.pathname === '/' && url.searchParams.has(TOKEN_QUERY)) {
+      res.writeHead(303, {
+        'cache-control': 'no-store',
+        'location': './',
+        'referrer-policy': 'no-referrer',
+      })
+      res.end()
+      return false
+    }
+    return true
+  }
+
   private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {
     res.writeHead(401, {
       'cache-control': 'no-store',
