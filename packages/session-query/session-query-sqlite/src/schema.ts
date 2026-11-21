@@ -11,7 +11,7 @@ export const SESSION_QUERY_SQLITE_SCHEMA_VERSION = 8
 export const SESSION_QUERY_SQLITE_APPLICATION_ID = 0x44534851
 
 /** Current document-key sidecar schema version. Incompatible versions rebuild in place. */
-export const SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION = 1
+export const SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION = 2
 
 /** SQLite application id of the document-key sidecar, distinct from the main index. */
 export const SESSION_QUERY_SQLITE_KEYS_APPLICATION_ID = 0x4453484b
@@ -20,6 +20,9 @@ const DOCUMENT_KEY_TABLES = new Set(['persisted_doc_keys', 'key_state'])
 
 /** Supported SQLite journal modes. */
 export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
+
+/** SQLite commit synchronization; NORMAL is used only for WAL. */
+export type Synchronous = 'full' | 'normal'
 
 const DERIVED_USER_TABLES = new Set([
   'search_state',
@@ -47,15 +50,17 @@ async function createDatabaseFile(path: string): Promise<void> {
 
 /**
  * Open, validate, and initialize persistent and connection-local schemas.
- * The document-key sidecar is attached as schema `keys` and resynchronized
- * from the main index whenever its recorded generation differs, so the main
- * file keeps the upstream schema unchanged.
+ * The document-key sidecar is attached as schema `keys`. The caller must
+ * complete its incremental rebuild before reading or updating the index.
  * @param path - dedicated derived-index path or `:memory:`; missing filesystem paths are created owner-only.
  * @param journalMode - validated SQLite journal mode.
  * @param keysPath - dedicated document-key sidecar path or `:memory:`; must differ from `path`.
- * @returns initialized database handle owned by the search service.
+ * @param synchronous - validated synchronization mode; non-WAL modes always use FULL.
+ * @returns initialized database handle owned by the search worker.
  */
-export async function openSearchDatabase(path: string, journalMode: JournalMode, keysPath: string): Promise<DatabaseSync> {
+export async function openSearchDatabase(
+  path: string, journalMode: JournalMode, keysPath: string, synchronous: Synchronous = 'full',
+): Promise<DatabaseSync> {
   const actual = path === ':memory:' ? path : resolve(path)
   const keys = keysPath === ':memory:' ? keysPath : resolve(keysPath)
   if (actual !== ':memory:' && keys === actual) {
@@ -101,15 +106,18 @@ export async function openSearchDatabase(path: string, journalMode: JournalMode,
       if (unknownTables.length > 0) {
         throw new Error(`session-search document-key database at "${keys}" has unrecognized user tables: ${unknownTables.join(', ')}`)
       }
-      if (keysVersion !== SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION) resetDerivedSchema(db, keyTables, 'keys')
+      if (keysVersion !== 1 && keysVersion !== SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION) {
+        resetDerivedSchema(db, keyTables, 'keys')
+      }
     }
     // Apply mutating pragmas only after refusing foreign or canonical files.
     // journalMode is a validated closed union, not caller-controlled SQL.
     db.exec(`PRAGMA journal_mode = ${journalMode.toUpperCase()}`)
     db.exec(`PRAGMA keys.journal_mode = ${journalMode.toUpperCase()}`)
+    const sync = journalMode === 'wal' && synchronous === 'normal' ? 'NORMAL' : 'FULL'
+    db.exec(`PRAGMA synchronous = ${sync}; PRAGMA keys.synchronous = ${sync}`)
     ensurePersistentSchema(db)
-    ensureDocumentKeySchema(db)
-    syncDocumentKeys(db, reset)
+    ensureDocumentKeySchema(db, keysVersion === 1, reset)
     ensureTemporarySchema(db)
     return db
   } catch (error: unknown) {
@@ -179,52 +187,79 @@ function ensurePersistentSchema(db: DatabaseSync): void {
   db.exec(`PRAGMA user_version = ${SESSION_QUERY_SQLITE_SCHEMA_VERSION}`)
 }
 
-function ensureDocumentKeySchema(db: DatabaseSync): void {
-  db.exec(`PRAGMA keys.application_id = ${SESSION_QUERY_SQLITE_KEYS_APPLICATION_ID}`)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS keys.persisted_doc_keys (
-      doc_rowid  INTEGER PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      seq        INTEGER NOT NULL
-    ) STRICT
-  `)
-  db.exec('CREATE INDEX IF NOT EXISTS keys.persisted_doc_keys_session ON persisted_doc_keys(session_id)')
-  // A NULL generation means the sidecar has never matched the main index.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS keys.key_state (
-      singleton       INTEGER PRIMARY KEY CHECK (singleton = 1),
-      main_generation INTEGER
-    ) STRICT
-  `)
-  db.exec('INSERT OR IGNORE INTO keys.key_state (singleton, main_generation) VALUES (1, NULL)')
-  db.exec(`PRAGMA keys.user_version = ${SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION}`)
-}
-
-/**
- * Rebuild the sidecar from the main FTS table when it does not record the
- * main generation. Writers that update both files can be interrupted between
- * the two commits, and other index owners write only the main file; both
- * leave a generation mismatch that this single scan repairs.
- */
-function syncDocumentKeys(db: DatabaseSync, force: boolean): void {
-  const { global_generation: main } = db.prepare(
-    'SELECT global_generation FROM main.search_state WHERE singleton = 1',
-  ).get() as { global_generation: number }
-  const { main_generation: recorded } = db.prepare(
-    'SELECT main_generation FROM keys.key_state WHERE singleton = 1',
-  ).get() as { main_generation: number | null }
-  if (!force && recorded === main) return
+function ensureDocumentKeySchema(db: DatabaseSync, migrate: boolean, reset: boolean): void {
   db.exec('BEGIN IMMEDIATE')
   try {
-    db.exec('DELETE FROM keys.persisted_doc_keys')
-    db.exec(`INSERT INTO keys.persisted_doc_keys (doc_rowid, session_id, seq)
-      SELECT rowid, session_id, CAST(seq AS INTEGER) FROM main.persisted_docs`)
-    db.prepare('UPDATE keys.key_state SET main_generation = ? WHERE singleton = 1').run(main)
+    db.exec(`PRAGMA keys.application_id = ${SESSION_QUERY_SQLITE_KEYS_APPLICATION_ID}`)
+    db.exec(`CREATE TABLE IF NOT EXISTS keys.persisted_doc_keys (
+      doc_rowid INTEGER PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      seq INTEGER NOT NULL
+    ) STRICT`)
+    db.exec('CREATE INDEX IF NOT EXISTS keys.persisted_doc_keys_session ON persisted_doc_keys(session_id)')
+    db.exec(`CREATE TABLE IF NOT EXISTS keys.key_state (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      main_generation INTEGER,
+      rebuild_generation INTEGER,
+      rebuild_cursor INTEGER
+    ) STRICT`)
+    if (migrate) db.exec(`
+      ALTER TABLE keys.key_state ADD COLUMN rebuild_generation INTEGER;
+      ALTER TABLE keys.key_state ADD COLUMN rebuild_cursor INTEGER;
+    `)
+    db.exec('INSERT OR IGNORE INTO keys.key_state (singleton) VALUES (1)')
+    if (reset) db.exec('UPDATE keys.key_state SET main_generation = NULL, rebuild_generation = NULL, rebuild_cursor = NULL')
+    db.exec(`PRAGMA keys.user_version = ${SESSION_QUERY_SQLITE_KEYS_SCHEMA_VERSION}`)
     db.exec('COMMIT')
   } catch (error: unknown) {
     db.exec('ROLLBACK')
     throw error
   }
+}
+
+// The purge stage has a NULL cursor. The copy stage atomically records the
+// highest copied rowid with that batch. A changed main generation restarts it.
+const KEYS_BATCH_SIZE = 1024
+
+/**
+ * Advance at most one document-key rebuild transaction. No search may use the
+ * sidecar before this returns true. Each committed batch survives interruption.
+ * @param db - worker-owned main and attached keys connection.
+ * @returns whether the keys now match the main generation.
+ */
+export function rebuildDocumentKeysBatch(db: DatabaseSync): boolean {
+  const { global_generation: main } = db.prepare('SELECT global_generation FROM main.search_state WHERE singleton = 1')
+    .get() as { global_generation: number }
+  const { main_generation, rebuild_generation, rebuild_cursor } = db.prepare('SELECT * FROM keys.key_state WHERE singleton = 1')
+    .get() as { main_generation: number | null; rebuild_generation: number | null; rebuild_cursor: number | null }
+  if (main_generation === main && rebuild_generation === null) return true
+  db.exec('BEGIN IMMEDIATE')
+  let ready = false
+  try {
+    if (rebuild_generation !== main || rebuild_cursor === null) {
+      const { changes } = db.prepare(`DELETE FROM keys.persisted_doc_keys WHERE doc_rowid IN (
+        SELECT doc_rowid FROM keys.persisted_doc_keys ORDER BY doc_rowid LIMIT ?
+      )`).run(KEYS_BATCH_SIZE)
+      ready = changes < KEYS_BATCH_SIZE && db.prepare('SELECT rowid FROM main.persisted_docs LIMIT 1').get() === undefined
+      db.prepare(`UPDATE keys.key_state SET main_generation = ?, rebuild_generation = ?, rebuild_cursor = ?
+        WHERE singleton = 1`).run(ready ? main : null, ready ? null : main,
+        !ready && changes < KEYS_BATCH_SIZE ? 0 : null)
+    } else {
+      const { changes } = db.prepare(`INSERT INTO keys.persisted_doc_keys (doc_rowid, session_id, seq)
+        SELECT rowid, session_id, CAST(seq AS INTEGER) FROM main.persisted_docs
+        WHERE rowid > ? ORDER BY rowid LIMIT ?`).run(rebuild_cursor, KEYS_BATCH_SIZE)
+      ready = changes < KEYS_BATCH_SIZE
+      if (ready) db.prepare(`UPDATE keys.key_state SET main_generation = ?, rebuild_generation = NULL, rebuild_cursor = NULL
+        WHERE singleton = 1`).run(main)
+      else db.exec(`UPDATE keys.key_state SET rebuild_cursor = (SELECT max(doc_rowid) FROM keys.persisted_doc_keys)
+        WHERE singleton = 1`)
+    }
+    db.exec('COMMIT')
+  } catch (error: unknown) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return ready
 }
 
 function ensureTemporarySchema(db: DatabaseSync): void {
