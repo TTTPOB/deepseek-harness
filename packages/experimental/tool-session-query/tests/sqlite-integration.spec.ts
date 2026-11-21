@@ -96,6 +96,10 @@ describe('tool-session-query with the real SQLite provider', () => {
       agent: fakeAgent(caller),
     })
 
+    await expect.poll(async () => {
+      const result = await execute('session_search', { query: 'persisted integration needle' })
+      return result.isError ? result.error?.info.code : 'ready'
+    }, { timeout: 10_000 }).toBe('ready')
     const sessions = await execute('session_search', { query: 'persisted integration needle' })
     expect(sessions.isError).toBe(false)
     expect(sessions.content.map(block => block.type === 'text' ? block.text : '').join('\n'))
