@@ -598,9 +598,9 @@ Registry of YAML-declared presets and the revisions live Agents retain.
  */
 presetForSession(session: Session): string | null
 
-/** Register and eagerly load a definition; activation failure remains visible in the roster.
- * @param definition Parsed configuration supplied by the declaring plugin.
- * @returns Definition disposer after activation or its diagnostic settles; the declaring plugin owns it.
+/** Register a declaration; mount it on first Agent or cold inspection use.
+ * @param definition - preset identity, metadata and child plugin declarations.
+ * @returns an asynchronous disposer that unregisters the declaration and collects unused mounts.
  */
 async register(definition: PresetDefinition): Promise<() => Promise<void>>
 
@@ -631,6 +631,12 @@ async resolve(id?: string): Promise<AgentPreset>
  * @returns The declared composition beside its published metadata.
  */
 @Remote('read') readDocument(agentPreset: string): Promise<AgentPresetDocument>
+
+/** Transfer a workspace lease into the Agent scope before caller setup.
+ * @param ctx - scoped Agent context that owns the transferred lease.
+ * @param placement - retained workspace placement to release with the Agent scope.
+ */
+place(ctx: Context, placement: PresetPlacement): void
 
 /** Bind an unpublished Agent to the current preset revision.
  * @param ctx Agent context from its setup callback.
@@ -697,7 +703,7 @@ Source: [`packages/preset/agent-preset-registry/src/index.ts`](../../packages/pr
 
 Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by whichever plugin implements the AgentFactory (`@deepseek-ai/dsh-agent-loop`), registered via setFactory.
 
-Initiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.
+Initiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain. Inherited resources share a slot cleared when the operation settles, so they do not retain its Agent after completion.
 
 ```ts cordis-catalog
 /**
@@ -713,8 +719,9 @@ turnBoundaryOf(session: Session): TurnBoundaryProjection
  * that also supports agentless calls. When a parent creates a child, setup
  * reports the causal parent while the setup callback's Agent parameter
  * identifies the child.
- * @returns the inherited Agent, or `undefined` outside an initiator boundary
- *   and inside an explicit clearing boundary.
+ * @returns the inherited Agent while its operation is in flight, including
+ *   before registration; `undefined` outside a boundary, inside a clearing
+ *   boundary, or in inherited callbacks after the operation settles.
  * @throws when this service instance has been disposed.
  */
 currentInitiator(): Agent | undefined
@@ -736,6 +743,9 @@ requireInitiator(): Agent
  * lifetime.
  * A queue or wire receiver may establish this boundary only after validating
  * explicit identity and resolving the exact live Agent; this method does neither.
+ * Inherited callbacks lose attribution when the operation returns a non-Promise
+ * value, throws, or its returned Promise settles. A Promise whose species prevents settlement
+ * observation retains attribution and is excluded from teardown draining.
  * Detached work remains owned by the subsystem that starts it.
  * @param agent - initiating Agent to inherit; presence is neither liveness proof nor authorization.
  * @param operation - synchronous or asynchronous operation to invoke.
@@ -770,6 +780,13 @@ withoutInitiator<T>(operation: () => T): T
  *   yield it directly — exact identity nests the teardown in order.
  */
 setFactory(factory: AgentFactory): () => void
+
+/**
+ * Register setup run before each create/resume caller setup.
+ * @param setup - contribution composed into unpublished Agent setup.
+ * @returns disposer owned by the registering plugin fiber.
+ */
+registerSetup(setup: AgentSetup): () => void
 
 /**
  * Create and publish a new agent through the registered factory.

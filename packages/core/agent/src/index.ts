@@ -220,6 +220,11 @@ interface AgentEntry {
   detachRequested: boolean
 }
 
+/** Shared with inherited resources; settlement releases the Agent independently of resource lifetime. */
+interface InitiatorSlot {
+  agent: Agent | undefined
+}
+
 /** One tracked boundary plus its inherited nesting chain. */
 interface InitiatorRun {
   active: boolean
@@ -242,6 +247,8 @@ interface FactorySlot {
  * remain explicit, as does identity at worker, process, persistence, and wire
  * boundaries. Returned Promise boundaries drain during teardown, except a
  * nested lineage that starts an owning-fiber unload is excluded from its own drain.
+ * Inherited resources share a slot cleared when the operation settles, so they
+ * do not retain its Agent after completion.
  */
 export class AgentRegistry extends Service {
   static inject = ['sessionProjections']
@@ -249,7 +256,8 @@ export class AgentRegistry extends Service {
   private turnBoundaryProjectionHandle!: ProjectionHandle<TurnBoundaryProjection>
   private store = new Map<SessionId, AgentEntry>()
   private factory: FactorySlot | undefined
-  private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
+  private readonly setups = new Set<AgentSetup>()
+  private readonly initiators = new AsyncLocalStorage<InitiatorSlot>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
   private activeInitiatorRuns = 0
@@ -307,13 +315,14 @@ export class AgentRegistry extends Service {
    * that also supports agentless calls. When a parent creates a child, setup
    * reports the causal parent while the setup callback's Agent parameter
    * identifies the child.
-   * @returns the inherited Agent, or `undefined` outside an initiator boundary
-   *   and inside an explicit clearing boundary.
+   * @returns the inherited Agent while its operation is in flight, including
+   *   before registration; `undefined` outside a boundary, inside a clearing
+   *   boundary, or in inherited callbacks after the operation settles.
    * @throws when this service instance has been disposed.
    */
   currentInitiator(): Agent | undefined {
     this.assertInitiatorsReadable()
-    return this.initiators.getStore()
+    return this.initiators.getStore()?.agent
   }
 
   /**
@@ -337,6 +346,9 @@ export class AgentRegistry extends Service {
    * lifetime.
    * A queue or wire receiver may establish this boundary only after validating
    * explicit identity and resolving the exact live Agent; this method does neither.
+   * Inherited callbacks lose attribution when the operation returns a non-Promise
+   * value, throws, or its returned Promise settles. A Promise whose species prevents settlement
+   * observation retains attribution and is excluded from teardown draining.
    * Detached work remains owned by the subsystem that starts it.
    * @param agent - initiating Agent to inherit; presence is neither liveness proof nor authorization.
    * @param operation - synchronous or asynchronous operation to invoke.
@@ -399,6 +411,32 @@ export class AgentRegistry extends Service {
   }
 
   /**
+   * Register setup run before each create/resume caller setup.
+   * @param setup - contribution composed into unpublished Agent setup.
+   * @returns disposer owned by the registering plugin fiber.
+   */
+  registerSetup(setup: AgentSetup): () => void {
+    if (this.setups.has(setup)) throw new Error('Agent setup is already registered')
+    this.setups.add(setup)
+    return this.ctx.effect(() => () => { this.setups.delete(setup) }, 'agents.setup()')
+  }
+
+  private composeSetup(caller: AgentSetup | undefined): AgentSetup | undefined {
+    const contributions = [...this.setups]
+    if (contributions.length === 0) return caller
+    return async (agentCtx, agent) => {
+      const commits: AgentSetupCommit[] = []
+      for (const setup of contributions) {
+        const commit = await setup(agentCtx, agent)
+        if (commit) commits.push(commit)
+      }
+      const commit = await caller?.(agentCtx, agent)
+      if (commit) commits.push(commit)
+      return { commit: () => { for (const item of commits) item.commit() } }
+    }
+  }
+
+  /**
    * Create and publish a new agent through the registered factory.
    * Distinct from {@link register} (which records an already-constructed
    * agent): this constructs the agent and its session. Rejects if no factory is
@@ -409,6 +447,8 @@ export class AgentRegistry extends Service {
    */
   async create(options: CreateAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
+    const composed = this.composeSetup(options.setup)
+    if (composed) options = { ...options, setup: composed }
     // Re-trace a Service-backed factory through the accessing context
     // explicitly. This preserves AgentLoop's dependency origin while binding
     // its effects to ownerCtx; plain factories receive ownerCtx as an explicit
@@ -428,6 +468,8 @@ export class AgentRegistry extends Service {
    */
   async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
+    const composed = this.composeSetup(options.setup)
+    if (composed) options = { ...options, setup: composed }
     const { target } = this.requireFactory()
     const receiver = getTraceable(ownerCtx, target)
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
@@ -616,28 +658,34 @@ export class AgentRegistry extends Service {
       active: true,
       parent: this.initiatorRuns.getStore(),
     }
+    const slot: InitiatorSlot = { agent }
+    const settle = (): void => {
+      slot.agent = undefined
+      this.releaseInitiatorRun(run)
+    }
     this.activeInitiatorRuns += 1
     let result: T
     try {
-      result = this.initiatorRuns.run(run, () => this.initiators.run(agent, operation))
+      result = this.initiatorRuns.run(run, () => this.initiators.run(slot, operation))
     } catch (error: unknown) {
-      this.releaseInitiatorRun(run)
+      settle()
       throw error
     }
     if (isPromise(result)) {
       try {
         void Promise.prototype.then.call(
           result,
-          () => { this.releaseInitiatorRun(run) },
-          () => { this.releaseInitiatorRun(run) },
+          settle,
+          settle,
         )
       } catch {
         // A branded Promise may expose a failing @@species. Observer setup did
-        // not attach, so preserve the exact return without leaking the run.
+        // not attach: keep attribution for the unobserved operation, but release
+        // its drain count to preserve return identity and teardown behavior.
         this.releaseInitiatorRun(run)
       }
     } else {
-      this.releaseInitiatorRun(run)
+      settle()
     }
     return result
   }
