@@ -46,6 +46,7 @@ Choose it when you want full-text recall over prior sessions with ranking and pa
 | `keysPath` | `<path>.keys.db` | Dedicated document-key sidecar path, or `:memory:` (the default when `path` is `:memory:`); must differ from `path` |
 | `openAt` | `startup` | `startup` opens at activation; `first-search` defers the SQLite module until the first search; `never` disables full-text search while inherited reads stay available |
 | `journalMode` | `wal` | `wal`, `delete`, `truncate`, or `persist` |
+| `synchronous` | `full` | `normal` is honored only with WAL, for both index files |
 | `defaultLimit` | `20` | Page size when a request omits `limit` |
 | `maxLimit` | `100` | Largest accepted request page size |
 | `snippetChars` | `240` | Maximum snippet length in Unicode code points |
@@ -61,6 +62,8 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 ### Search behavior
 
+With `openAt: startup`, the service starts background warmup at activation. With `openAt: first-search`, the first request starts the same service-owned operation. Cross-session search returns retryable `SESSION_QUERY_INDEX_WARMING` until history is ready; do not treat this as an empty page. Once document keys are ready, `searchEvents` can search its target without waiting for the full history. Aborting a request cancels only its own wait.
+
 `searchSessions` searches the whole corpus and groups results by each session's strongest matching event; `searchEvents` searches one logical session. Queries are literal phrases: they are trimmed and whitespace-normalized, and FTS5 syntax such as quotes, `OR`, `NEAR`, and `*` is treated as data, never as executable query syntax. Metadata filters (session id, cwd, created-at, parent, availability, event seq/time/type/surface) narrow results before ranking. All `current`, `shadowed`, and `log-only` events are searchable by default; pass a surface filter to narrow.
 
 Ranking uses BM25 with one historical background for persisted and live matches. Live bodies contribute their latest phrase frequency and token length, but do not change historical statistics; old persisted bodies of live-shadowed sessions remain background only. When history has no indexed tokens, ranking uses the live average token length and a common IDF of 1. A phrase absent from history also uses IDF 1. The common phrase IDF cancels for ranking; both sources round normalized scores to 12 decimal places so inversion noise does not override metadata ties. Event time, session id, and seq break score ties. Results carry plain-text snippets bounded by `snippetChars` Unicode code points, without numeric scores. Opaque cursors bind the exact normalized request; target changes or historical revisions invalidate event pages (`SESSION_QUERY_STALE_CURSOR`). Unrelated live changes preserve event cursors when a historical background exists; without one, live changes invalidate them too. Cross-session cursors invalidate on any corpus change.
@@ -73,7 +76,7 @@ With `openAt: first-search`, the service activates without importing `node:sqlit
 
 ### Failures and recovery
 
-Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DISABLED` when search is configured off; `SESSION_QUERY_INDEX_FAILED` when the index cannot open or reconcile; `SESSION_QUERY_SESSION_NOT_FOUND` when a search target is absent; `SESSION_QUERY_STALE_CURSOR` when the corpus changed between pages — retry the complete search call; and `SESSION_QUERY_INVALID_CURSOR` for a cursor that does not belong to this request. Cancellation is honored between synchronous SQLite calls; a statement already executing on the JavaScript thread cannot be interrupted.
+Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DISABLED` when search is configured off; `SESSION_QUERY_INDEX_FAILED` when the index cannot open or reconcile; `SESSION_QUERY_SESSION_NOT_FOUND` when a search target is absent; `SESSION_QUERY_STALE_CURSOR` when the corpus changed between pages — retry the complete search call; and `SESSION_QUERY_INVALID_CURSOR` for a cursor that does not belong to this request.
 
 -----
 
@@ -90,7 +93,7 @@ This section explains the design decisions behind the backend and points at the 
 The backend is built on one separation and three commitments:
 
 - **Derived index, never the source store.** The FTS rows live in a dedicated disposable database; the session-persistence database is never opened here.
-- **Live-preferred observation.** One serialized state machine compares persistence snapshot revisions, reads only new or changed logs through short-lived read handles, and reconciles each changed session in its own transaction, so a search reflects the newest stable state.
+- **Live-preferred observation.** An attached live session takes precedence over its indexed historical body.
 - **Generation-bound cursors.** Every corpus change bumps a generation; cursors carry the generation they were created under and fail stale rather than returning a shifted page.
 - **Literal phrases as data.** Caller query text is quoted into one FTS5 phrase so query syntax stays inert, and reserved highlight markers are stripped from documents before indexing.
 
@@ -100,14 +103,14 @@ The design history lives in the [SQLite FTS5 session search note](../../../.agen
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | Service: config, openAt lifecycle, serialized reconciliation, query execution, cursors |
+| [`src/index.ts`](src/index.ts) | Service: config, openAt lifecycle, background warmup and dirty tracking |
 | [`src/query.ts`](src/query.ts) | Request normalization, parameterized predicates, snippets, predicate and binding budgets |
 | [`src/bm25.ts`](src/bm25.ts) | Connection-local token probe and historical BM25 calibration |
 | [`src/schema.ts`](src/schema.ts) | Database schema, application-id ownership, in-place reset, owner-only file creation |
 
 ### Index lifecycle
 
-Persisted FTS rows survive restarts; connection-local TEMP rows shadow the durable base for live sessions. The first search and persistence-source replacement each list lightweight snapshots once; a restart reuses matching database revisions, while a replacement source is reread even if its revisions collide. During runtime, `session/created`, `session/event`, `session/flush`, and `session/disposed` mark the session and a direct subagent child’s parent dirty. Searches observe only dirty stored ids and project only changed live sessions. A persistence flush precedes dirty stored reads; closing sessions retain their final live projection until durable handoff. Each changed stored session commits separately. Documents compare text, type, time, and surface by `(session_id, seq)` and insert, update, or delete only changed FTS rows, without deleting and reinserting the session. FTS5 cannot index its `UNINDEXED` metadata columns, so per-session document lookups and deletions go through rowid key tables indexed by `session_id`: a TEMP table for live rows and the `keysPath` sidecar for persisted rows; their cost scales with the session, not the corpus. Unchanged searches neither list storage, cold-read logs, nor write the index. Logs above `maxIndexedSessionBytes` evict stale rows and warn without body reads; later observation or transaction failures retain earlier committed sessions.
+One worker owns SQLite and the JSONL reader. It reads, decompresses, and projects durable logs off the Host thread. Each changed session commits a new generation together with its revision, FTS rows, and keys; reopening skips committed revisions. Lifecycle events mark changed sessions dirty, and live projection yields between batches on the Host. Non-JSONL backends supply raw logs through the generic persistence interface on their owning thread.
 
 Ranking materializes complete MATCH candidates with metadata and native BM25 scores before filters, session-best selection, and pagination; it never truncates either source before merging. Event queries restrict both raw branches to the target session before materialization, while calibration and phrase statistics remain global. Full highlighting runs only for the bounded result page. A reusable TEMP unicode61 token probe measures changed live bodies, and a TEMP rowid-to-token-count table updates in the same transaction as live FTS rows. Unchanged bodies are not retokenized; retirement removes their counts.
 
@@ -117,7 +120,7 @@ For one literal phrase in the single indexed text column, public `bm25` calls at
 
 The database carries an application id and schema version 8. Opening refuses a file owned by another application or a canonical database, rejects unknown user tables, and only a recognized incompatible derived schema resets in place — so an unrelated or session-persistence database is never touched. On POSIX filesystems, missing directories and database files are created owner-only (`0700` and `0600` before the process umask). Exactly one service in one process owns a derived-index path; generations and TEMP shadow state are connection-owned.
 
-The document-key sidecar at `keysPath` is attached to the same connection and carries its own application id and schema version 1, so the main file keeps exactly the upstream schema and tables; an index owner without the sidecar can open it unchanged. The sidecar records the main generation it mirrors and is written in the same transactions as the main file. Opening rebuilds it with one scan of the main FTS table, without reading session logs, when it is missing, its schema version differs, or its recorded generation differs from the main generation — for example after an interrupted commit or after another owner wrote only the main file. Opening refuses a sidecar owned by another application or containing unknown tables.
+The attached document-key sidecar upgrades schema 1 in place and preserves the main schema and path. A generation mismatch starts or resumes a bounded rebuild from the main FTS table without reading session logs. Each committed batch checkpoints progress, and queries never use partially rebuilt keys.
 
 </details>
 
@@ -153,7 +156,7 @@ None; this package neither assembles nor sends a provider request.
 These limits define when this package is a poor fit or needs special operational care. They are current package constraints, not a general SQLite comparison or a task backlog.
 
 - **No caller authorization** — this is a trusted context-wide service; a model tool or UI must enforce its own access policy.
-- **Synchronous query execution** — `DatabaseSync` blocks the JavaScript thread during MATCH execution and cannot interrupt a statement already running.
+- **Synchronous worker queries** — a large MATCH can queue other work on the index worker, but does not block the Host event loop.
 - **Token recall, not arbitrary substrings** — the `unicode61` tokenizer does not match substrings inside a larger token; use `filterEvents()` for literal scans.
 - **Single-owner derived index** — one service in one process must own each index path; external writers and multi-process sharing are unsupported.
 - **External file changes are not discovered in real time** — another process editing persisted files emits no local lifecycle notification; restart the query service or replace the persistence service to rescan metadata on the first search.
@@ -166,6 +169,10 @@ These limits define when this package is a poor fit or needs special operational
 <summary>Working context for maintainers — click to expand</summary>
 
 This Dev Note is working context for maintainers: open design questions and directions that are not decided. It is explicitly non-authoritative — shipped behavior, limits, and accepted rationale live in the sections above, the package code, and the linked Agent Notes.
+
+#### Packed worker smoke
+
+Install the packed SQLite and session-query packages together with the target JSONL persistence package into a disposable pnpm prefix. Run `node tests/pack-smoke.mjs <prefix>` from this package to verify the SQLite worker resolves the installed JSONL peer and indexes a compressed log. This smoke does not open a Host.
 
 #### Future: alternate tokenizers and search providers
 

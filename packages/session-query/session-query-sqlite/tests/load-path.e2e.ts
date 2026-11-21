@@ -15,6 +15,8 @@ import SqliteSessionQueryEngine, * as queryModule from '@deepseek-ai/dsh-session
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+import { SessionQueryError } from '@deepseek-ai/dsh-session-query'
 
 const temporaryDirectories: string[] = []
 
@@ -45,8 +47,6 @@ describe('dsh-session-query-sqlite real Loader path', () => {
     const loader = Object.create(Loader.prototype) as Loader
     const unwrapped = loader.unwrapExports(queryModule) as Parameters<Context['plugin']>[0]
     expect(unwrapped).toBe(SqliteSessionQueryEngine)
-    const query = await ctx.plugin(unwrapped, { path: searchPath })
-
     const id = SessionId('loader-path')
     const writer = await ctx.sessionPersistence.create({ version: SESSION_FORMAT_VERSION, id, createdAt: 10, isSeeded: false })
     await writer.append([{
@@ -60,8 +60,19 @@ describe('dsh-session-query-sqlite real Loader path', () => {
     }])
     await writer.close()
 
-    await expect(ctx.sessionQuery.searchSessions({ query: 'Loader needle' }))
-      .resolves.toMatchObject({ items: [{ header: { id }, persisted: true, live: false }] })
+    const query = await ctx.plugin(unwrapped, { path: searchPath, openAt: 'first-search' })
+    const request = { query: 'Loader needle' }
+    await expect(ctx.sessionQuery.searchSessions(request)).rejects.toMatchObject({ code: 'SESSION_QUERY_INDEX_WARMING' })
+    for (;;) {
+      try {
+        expect(await ctx.sessionQuery.searchSessions(request))
+          .toMatchObject({ items: [{ header: { id }, persisted: true, live: false }] })
+        break
+      } catch (error: unknown) {
+        if (!(error instanceof SessionQueryError) || error.code !== 'SESSION_QUERY_INDEX_WARMING') throw error
+        await delay(10)
+      }
+    }
     await expect(ctx.sessionQuery.listSessions())
       .resolves.toMatchObject([{ header: { id }, persisted: true, live: false }])
     await query.dispose()
