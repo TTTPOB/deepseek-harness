@@ -1,6 +1,5 @@
 /** Profile patch edits and credential updates reach the next real adapter request. */
 
-import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -27,8 +26,6 @@ const truncatedToolCallEvents = [
   '[DONE]',
 ]
 
-const piVersion: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('@earendil-works/pi-ai')), 'utf8')).version
-const forkAvailable = piVersion.includes('-fork')
 
 let root: string | undefined
 let context: Context | undefined
@@ -43,7 +40,7 @@ afterEach(async () => {
 })
 
 /** Boot the dormant composition: a bare `llm-pi-ai` row with no config at all. */
-async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }> {
+async function loadComposition(adapterConfig?: object): Promise<{ ctx: Context; settingsPath: string }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-pi-composition-'))
   await writeFile(join(root, '.credentials.yaml'), 'version: 1\nrefs:\n  PI_COMPOSITION_KEY: key-from-store\n', { mode: 0o600 })
 
@@ -60,6 +57,7 @@ async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }
     "  name: '@deepseek-ai/dsh-authorization'",
     '- id: llm-pi-ai',
     "  name: '@deepseek-ai/dsh-llm-pi-ai'",
+    ...adapterConfig === undefined ? [] : [`  config: ${JSON.stringify(adapterConfig)}`],
     '',
   ].join('\n'))
 
@@ -92,6 +90,20 @@ async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }
 }
 
 describe('llm-pi-ai real dormant composition', () => {
+  it('isolates a removed stream limit to the affected route at startup', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const route = { api: 'openai-responses', baseURL: server.url, models: [{ id: 'model' }], apiKeyEnv: 'PI_COMPOSITION_KEY' }
+    const { ctx } = await loadComposition({ providers: {
+      good: { ...route, api: 'openai-completions' },
+      bad: { ...route, compat: { maxConsecutiveWhitespaceChars: 5000 } },
+    } })
+    const good = await assemble(ctx, { provider: 'good', model: 'model', messages: [] })
+    expect(good.finish).toEqual({ kind: 'stop' })
+    const bad = await assemble(ctx, { provider: 'bad', model: 'model', messages: [] })
+    expect(bad.finish).toMatchObject({ kind: 'error', failure: { code: 'INVALID_CONFIG', message: expect.stringContaining('maxConsecutiveWhitespaceChars') } })
+    expect(server.requests).toHaveLength(1)
+  })
+
   it('dispatches header contributors through the Loader-mounted adapter', async () => {
     const server = await mockServer([{ events: textEvents }])
     const { ctx, settingsPath } = await loadComposition()
@@ -144,46 +156,6 @@ describe('llm-pi-ai real dormant composition', () => {
     expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
     expect(server.headers[0]?.authorization).toBe('Bearer key-from-store')
   })
-
-  it.skipIf(!forkAvailable)
-    .each([[' ', 'consecutive whitespace'], ['x', 'degenerate output']])(
-      'loads provider limits from the profile patch and aborts a %s flood at 5000', async (character, errorText) => {
-        const events = (length: number) => [
-          { type: 'response.output_item.added', output_index: 0,
-            item: { type: 'message', id: 'msg_guard', role: 'assistant', content: [] } },
-          { type: 'response.output_text.delta', output_index: 0, content_index: 0, item_id: 'msg_guard',
-            delta: character.repeat(length) },
-          { type: 'response.completed', response: { status: 'completed' } },
-        ].map(event => JSON.stringify(event))
-        const server = await mockServer([{ events: events(4999) }, { events: events(5000) }])
-        const { ctx, settingsPath } = await loadComposition()
-        await writeFile(settingsPath, [
-          '- id: llm-pi-ai',
-          '  config:',
-          '    providers:',
-          '      gateway:',
-          '        apiKeyEnv: PI_COMPOSITION_KEY',
-          '        api: openai-responses',
-          `        baseURL: ${server.url}`,
-          '        compat:',
-          '          maxConsecutiveWhitespaceChars: 5000',
-          '          maxRepeatedPatternChars: 5000',
-          '        models:',
-          '          - id: guard-model',
-          '',
-        ].join('\n'))
-        await vi.waitFor(() => {
-          expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['gateway'])
-        }, { timeout: 5000 })
-        const below = await assemble(ctx, { provider: 'gateway', model: 'guard-model', messages: [] })
-        expect(below.finish.kind).toBe('stop')
-        const at = await assemble(ctx, { provider: 'gateway', model: 'guard-model', messages: [] })
-        expect(at.finish).toMatchObject({
-          kind: 'error', failure: { message: expect.stringContaining(errorText) },
-        })
-        expect(server.requests).toHaveLength(2)
-      },
-    )
 
   it('offers OpenAI sign-in by API key only, while other subscription logins stay', async () => {
     const { ctx } = await loadComposition()

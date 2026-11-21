@@ -60,34 +60,10 @@ try {
   assert.throws(() => Schema.resolve({ transport: 'stdio', serverName: 'fixture', command: 'unused', maxBufferSize: 0 }, mcp.Config, {}))
   const [piConfig] = Schema.resolve({}, pi.Config, {})
   assert.deepEqual(piConfig.providers.get(), {})
-  const streamLimits = { maxConsecutiveWhitespaceChars: 5000, maxRepeatedPatternChars: 5000 }
-  const [guardConfig] = Schema.resolve({ providers: { gateway: {
-    api: 'openai-responses', baseURL: 'https://gateway.test/v1', models: [{ id: 'guard-model' }], compat: streamLimits,
-  } } }, pi.Config, {})
-  for (const [field, value] of Object.entries(streamLimits)) assert.equal(guardConfig.providers.get().gateway.compat[field], value)
-  for (const field of Object.keys(streamLimits)) {
-    for (const invalid of [-1, 0.5]) {
-      assert.throws(() => Schema.resolve({ providers: { gateway: { compat: { [field]: invalid } } } }, pi.Config, {}))
-    }
-  }
   const adapterRequire = createRequire(hostRequire.resolve('@deepseek-ai/dsh-llm-pi-ai'))
   const responsesParser = adapterRequire.resolve('@earendil-works/pi-ai/api/openai-responses-shared', { conditions: new Set(['import', 'node', 'default']) })
   const piManifest = JSON.parse(await readFile(join(dirname(responsesParser), '../../package.json'), 'utf8'))
   assert.match(piManifest.version, /-fork\d+$/, 'isolated core must use the qualified Pi fork')
-  const { processResponsesStream } = await import(pathToFileURL(responsesParser).href)
-  for (const [field, delta, message] of [
-    ['maxConsecutiveWhitespaceChars', ' '.repeat(12), /consecutive whitespace/],
-    ['maxRepeatedPatternChars', 'abc'.repeat(4), /repeated a 3-character pattern/],
-  ]) {
-    const events = async function* () {
-      yield { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'fixture', role: 'assistant', content: [] } }
-      yield { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } }
-      yield { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta }
-    }
-    await assert.rejects(processResponsesStream(events(), { content: [] }, { push() {} },
-      { compat: { maxConsecutiveWhitespaceChars: 0, maxRepeatedPatternChars: 0, [field]: delta.length } }), message)
-  }
-  console.log(JSON.stringify({ responsesParser, streamLimits }))
   const { Session, SessionId, default: SessionStore } = await load('@deepseek-ai/dsh-session')
   const { default: SessionProjections } = await load('@deepseek-ai/dsh-session-projection')
   await ctx.plugin(SessionProjections)
