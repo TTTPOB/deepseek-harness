@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-ptc-runtime-node",
   "description": "Node PTC execution with async function, REPL and VM Script evaluators and optional retained state",
-  "version": "0.2.2-rc.1-fork1",
+  "version": "0.2.2-rc.5",
   "publishConfig": {
     "access": "public"
   },
@@ -35,7 +35,10 @@
     "lib/configuration.js",
     "lib/process.js",
     "lib/persistent-process.js",
-    "lib/types/**/*.d.ts"
+    "lib/types/**/*.d.ts",
+    "lib/types/**/*.d.ts.map",
+    "lib/**/*.js.map",
+    "src"
   ],
   "license": "MIT",
   "peerDependencies": {
@@ -51,8 +54,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-util-values": "workspace:*",
     "@deepseek-ai/schemastery": "workspace:~",
-    "@sveltejs/acorn-typescript": "^1.0.13",
-    "acorn": "^8.19.0",
+    "acorn": "^8.18.0",
     "acorn-walk": "^8.3.5",
     "birpc": "4.2.0"
   },

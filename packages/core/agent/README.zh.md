@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 创建或恢复 agent
 
-`ctx.agents.create()` 在一个身份下构建全新 agent 与会话；`ctx.agents.resume()` 加载持久化会话并在此基础上重建 agent。两者都委托给已注册工厂，并返回 `AgentHandle`——唯一能拆除该 agent 的对象。发布和失败清理的时序见 [`AgentFactory`](src/index.ts)。在任一操作的 options 中设置 `parentAgent`，可使结果成为运行时子级；省略它则得到运行时根级。`get(id)`、`list()` 与 `roots()` 用于查找实时 agent；`isOwnedBy(id, parent)` 用于检验这项确切的实时所有权关系。
+`ctx.agents.create()` 在一个身份下构建全新 agent 与会话；`ctx.agents.resume()` 加载持久化会话并在此基础上重建 agent。两者都委托给已注册工厂，并返回 `AgentHandle`——唯一能拆除该 agent 的对象。发布和失败清理的时序见 [`AgentFactory`](src/index.ts)。`get(id)` 与 `list()` 用于查找实时 agent。[subagent 服务](../../subagent/subagent/README.zh.md) 拥有委派执行和运行时树成员关系。
 
 ```text
 const handle = await ctx.agents.create({
@@ -40,7 +40,7 @@ const handle = await ctx.agents.create({
 await handle.dispose()   // stops the loop, unregisters, removes the session, unwinds the scope
 ```
 
-`AgentOptions` 提供初始提供方／模型路由、可选的由适配器定义的 `reasoningEffort`，以及可选的正数 `maxTokens` 输出上限。循环会校验确切模型的推理（reasoning）支持、解析适配器默认值、把生效值记录在请求头中，并将它们应用到每个对话请求。可选的 `setup(agentCtx, agent)` 回调会在 agent 发布之前组合其作用域世界：`agentCtx` 拥有注册，显式的未发布 Agent 则提供其 Session；Context 不含反向 Agent 属性。作用域工具、提示词段与监听器在 `agent/created` 之前就已存在。Setup 只做组合：创建完成后才能驱动 agent。setup 开始前 Session 已进入 Store 并完成 `session/created`，因此初始化事件通过实时事件流发出。`ctx.agents.registerSetup(setup)` 为每次 create 和 resume 安装由注册 fiber 拥有的贡献。贡献按注册顺序串行执行，再执行调用方 setup；全部 setup 等待完成后，以相同顺序执行发布 commit。释放注册 fiber 会移除其贡献。
+`AgentOptions` 提供初始提供方／模型路由、可选的由适配器定义的 `reasoningEffort`，以及可选的正数 `maxTokens` 输出上限。循环会校验确切模型的推理（reasoning）支持、解析适配器默认值、把生效值记录在请求头中，并将它们应用到每个对话请求。可选的 `setup(agentCtx, agent)` 回调会在 agent 发布之前组合其作用域世界：`agentCtx` 拥有注册，显式的未发布 Agent 则提供其 Session；Context 不含反向 Agent 属性。作用域工具、提示词段与监听器在 `agent/created` 之前就已存在。Setup 只做组合：创建完成后才能驱动 agent。 setup 开始前 Session 已进入 Store 并完成 `session/created`，因此初始化事件通过实时事件流发出。
 
 <a id="model-selection"></a>
 ### 选择模型
@@ -55,7 +55,7 @@ await handle.dispose()   // stops the loop, unregisters, removes the session, un
 
 ### 驱动 agent 的对话
 
-句柄的方法把带标识的 user 角色消息路由进 agent 的收件箱。`followup()` 排队一条普通的下一个轮次提示词并唤醒驱动器；`steer()` 提交下一步输入并唤醒它；`inject()` 添加面向模型的上下文但不唤醒驱动器，因此它落在下一个被接纳的步骤中。`cancel(cause)` 中止当前活动，并在未设置 `keepInbox` 时清除待处理工作；`whenIdle()` 会在整个 agent 达到完全停稳后完成。
+句柄的方法把带标识的 user 角色消息路由进 agent 的收件箱。`followup()` 排队一条普通的下一个轮次提示词并唤醒驱动器；`steer()` 提交下一步输入并唤醒它；`inject()` 添加面向模型的上下文但不唤醒驱动器，因此它落在下一个被接纳的步骤中。`cancel(cause)` 中止当前活动，并在未设置 `keepInbox` 时清除待处理工作；`whenIdle()` 会在整个 agent 达到完全停稳后完成。取消期间的队列写入失败仍会中止当前工作，并把错误传给调用方。
 
 ```text
 handle.agent.followup({
@@ -127,7 +127,7 @@ await handle.agent.whenIdle()
 
 ### 发起方作用域
 
-每个驱动器在 `ctx.agents.withInitiator(agent, ...)` 内运行其完整生命周期，因此继承的异步链会观察到该 agent，直到操作返回非 Promise 值、抛错或其返回的 Promise 结算。共享发起方 slot 随后清空 Agent 引用，因此仍存活的定时器、监听器或 socket 回调读取到 `undefined`；`withoutInitiator()` 为无关的进程本地工作立即隐藏 Agent。如果 Promise 的 species 阻止观察结算，该 Promise 会保留归因，并被排除在 teardown 排空范围外。该边界只是进程本地归因——环境中的身份既不是存活证明，也不是授权，显式身份在 worker、进程、持久化与 wire 边界保持权威。Teardown 拒绝新边界，让返回 Promise 的边界排空，然后禁用底层存储。[发起方作用域决策](../../../.agents/notes/implemented/architecture/2026-07-15-agent-initiator-scope.zh.md) 拥有详细约定。
+每个驱动器在 `ctx.agents.withInitiator(agent, ...)` 内运行其完整生命周期，因此继承的异步链会观察到该 agent；`withoutInitiator()` 为共享定时器等无关的进程本地工作隐藏它。该边界只是进程本地归因——环境中的身份既不是存活证明，也不是授权，显式身份在 worker、进程、持久化与 wire 边界保持权威。Teardown 拒绝新边界，让返回 Promise 的边界排空，然后禁用底层存储。[发起方作用域决策](../../../.agents/notes/implemented/architecture/2026-07-15-agent-initiator-scope.zh.md) 拥有详细约定。
 
 ### 所有权不变式
 

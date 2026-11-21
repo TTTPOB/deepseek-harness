@@ -27,7 +27,6 @@ import { PluginManagerPage } from './PluginManagerPage.tsx'
 import { createPluginHeaderRef } from './header-scroll.ts'
 import { PluginRefreshToast, type PluginRefreshToastFace } from './PluginRefreshToast.tsx'
 import { PluginsPanelIcon } from './PluginsPanelIcon.tsx'
-import { ManagerMain, ManagerModal } from './ManagerEntry.tsx'
 import { configLedgerSource } from './config-ledger.ts'
 import { tabLedgerSource } from './tab-ledger.ts'
 import { PluginManagerController } from './manager-store.ts'
@@ -51,17 +50,10 @@ declare module '@deepseek-ai/cordis' {
     pluginNavigation: {
       /**
        * Open a bundle's details without changing the current Session.
-       * An absent bundle displays the plugin list after loading. While the modal
-       * is open, details stay there; otherwise this selects the Plugins panel.
+       * An absent bundle displays the plugin list after loading.
        * @param packageName - npm package name of the bundle.
        */
       openBundle(packageName: string): void
-      /**
-       * Open the plugin list over the current page without selecting a panel or Session.
-       * Repeated calls preserve the open modal's selected detail. Native Modal owns
-       * closing, Escape, and focus restoration; a new opening starts at the list.
-       */
-      openModal(): void
       /** Open the Plugins main list without opening a dialog or changing the current Session. */
       openList(): void
     }
@@ -73,7 +65,7 @@ export type { ConfigLedger, OfficialItem } from './config-ledger.ts'
 export type { PluginManagerFace } from './manager-store.ts'
 export type { PluginManagerLocaleKey } from './locales.ts'
 export type {
-  ConfigPageForm, PluginActivationOwnerProps, PluginAddActionsProps, PluginTabInstall, PluginTabProps,
+  ConfigPageForm, PluginActivationOwnerProps, PluginAddActionsProps, PluginTabInstall, PluginTabProps, PluginTabUpdate,
   PluginConfigViewProps, PluginDetailProps, PluginPackageRef, PluginRowRef, PluginsSubject,
 } from './slot-contract.ts'
 
@@ -134,12 +126,12 @@ export function apply(ctx: ClientContext): void {
         dismissNotice: face.dismissNotice,
       }),
     }, PluginRefreshToast))
-    yield ctx.slots.inject('main', () => ctx.slots.inject('shell.overlay', function* () {
+    yield ctx.slots.inject('main', function* () {
       const handle = createNavigationStore(), instance = handle.create()
       const store: typeof handle = { ...handle, create: () => instance }
-      yield ctx.slots.registerFactory({
-        name: 'plugins.manager',
-        scope: 'root',
+      yield ctx.slots.register({
+        name: 'main',
+        key: PANEL_ID,
         locale: NS,
         store,
         inject: () => ({ ...face, createHeaderRef: createPluginHeaderRef }),
@@ -155,28 +147,23 @@ export function apply(ctx: ClientContext): void {
           'plugins.detail.section': { kind: 'list', scope: 'root' },
         },
       }, PluginManagerPage)
-      yield ctx.slots.register({ name: 'main', key: PANEL_ID, store }, ManagerMain)
-      yield ctx.slots.register({ name: 'shell.overlay', id: 'plugins.manager', locale: NS, store }, ManagerModal)
       yield ctx.layout.panelInfo.subscribe(() => {
-        if (!instance.getSnapshot().modalOpen && ctx.layout.panelInfo.getSnapshot().activePanelId !== PANEL_ID) {
-          instance.actions.setView({ kind: 'list' })
-        }
+        if (ctx.layout.panelInfo.getSnapshot().activePanelId !== PANEL_ID) instance.actions.setView({ kind: 'list' })
       })
       const disposeNavigation = ctx.reflect.provide('pluginNavigation', {
-        openBundle: (packageName: string) => {
-          if (!instance.getSnapshot().modalOpen) ctx.layout.selectPanel(PANEL_ID)
-          instance.actions.setTab('installed')
-          instance.actions.setView({ kind: 'package', name: packageName })
-        },
         openList: () => {
           ctx.layout.selectPanel(PANEL_ID)
           instance.actions.setTab('installed')
           instance.actions.setView({ kind: 'list' })
         },
-        openModal: () => { instance.actions.openModal() },
+        openBundle: (packageName: string) => {
+          ctx.layout.selectPanel(PANEL_ID)
+          instance.actions.setTab('installed')
+          instance.actions.setView({ kind: 'package', name: packageName })
+        },
       })
       yield () => { void disposeNavigation() }
-    }))
+    })
     yield ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
       name: 'sidebar.panellist',
       id: PANEL_ID,

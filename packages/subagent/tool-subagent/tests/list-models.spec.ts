@@ -107,22 +107,6 @@ function call(ctx: Context, args: unknown, signal = testToolSignal) {
 }
 
 describe('list_subagent_models', () => {
-  it('discovers the selected parent route before its first request without a Session allowlist', async () => {
-    const ctx = await setup({ provider: 'mock', modelDiscovery: true })
-    const agent = modelSelectionSetupAgent(ctx)
-    const selection = { provider: 'alpha', model: 'plain' }
-    ctx.llm.registerAdapter([selection.provider], new CatalogAdapter())
-    agent.model.select(selection)
-    expect(agent.session.requestHeader()).toBeUndefined()
-    const result = await executeToolFixture(ctx, {
-      signal: testToolSignal, callId: ToolCallId('switched-discovery'),
-      name: 'list_subagent_models', arguments: { provider: selection.provider }, agent,
-    })
-    expect(result.isError, text(result)).not.toBe(true)
-    expect(text(result)).toContain(selection.provider + '/' + selection.model)
-    expect(text(result)).not.toContain('alpha/fast')
-  })
-
   it('defaults discovery off independently of model selection', async () => {
     const ctx = await setup({ provider: 'mock', modelSelection: true })
     expect(ctx.tools.get('list_subagent_models')).toBeUndefined()
@@ -144,6 +128,7 @@ describe('list_subagent_models', () => {
       .not.toHaveProperty('properties.model')
     await sibling.dispose()
     expect(ctx.tools.get('list_subagent_models')).toBeDefined()
+    expect(ctx.tools.get('list_subagent_models')?.isConcurrencySafe?.({})).toBe(true)
     await owner.dispose()
     expect(ctx.tools.get('list_subagent_models')).toBeUndefined()
     expect(ctx.tools.get('subagent')).toBeDefined()

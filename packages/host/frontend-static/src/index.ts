@@ -10,7 +10,7 @@
  * index render (structured injection rows, then raw taps). Non-index assets
  * stay public; every file other than the index carries a weak ETag with
  * `cache-control: no-cache` and answers a matching `If-None-Match` with 304,
- * while the index carries `cache-control: no-store`. The dist location is workspace
+ * while the index carries no cache headers. The dist location is workspace
  * knowledge of the composing application, so `distIndex` is typically
  * supplied through a `!!js` expression, never hardcoded by a deployment.
  * @module @deepseek-ai/dsh-host-frontend-static
@@ -92,7 +92,7 @@ function bytesBody(bytes: Uint8Array): ReadableStream<Uint8Array> {
  */
 async function serveStatic(
   request: Request, distRoot: string, distIndex: string,
-  authorizeIndex: () => Response | undefined | Promise<Response | undefined>,
+  authorizeIndex: () => Response | undefined,
   renderIndex: (html: string) => string,
 ): Promise<Response> {
   const target = resolve(normalize(join(distRoot, decodeURIComponent(new URL(request.url).pathname))))
@@ -104,10 +104,10 @@ async function serveStatic(
   let headers: Record<string, string>
   try {
     if (target === distRoot || target === distIndex) {
-      const refusal = await authorizeIndex()
+      const refusal = authorizeIndex()
       if (refusal !== undefined) return refusal
       body = renderIndex(await readFile(distIndex, 'utf8'))
-      headers = { 'content-type': HTML_MIME, 'cache-control': 'no-store' }
+      headers = { 'content-type': HTML_MIME }
     } else {
       body = await readFile(target)
       // Weak: gzip changes the transferred bytes.
@@ -136,11 +136,11 @@ export function apply(ctx: Context, config: Config): void {
   // Connection's browser authentication writes the token exchange's 303 or
   // the 401 through a writeHead/end response; capture it as a Fetch response.
   // The answer stays a 401 unless Connection writes another one.
-  const authorizeIndex = async (request: Request): Promise<Response | undefined> => {
+  const authorizeIndex = (request: Request): Response | undefined => {
     let status = 401
     let headers = new Headers()
     let body: string | undefined
-    const admitted = await ctx.connection.authorizeIndexAsync(request, {
+    const admitted = ctx.connection.authorizeIndex(request, {
       writeHead(nextStatus, nextHeaders) {
         status = nextStatus
         headers = new Headers(nextHeaders)

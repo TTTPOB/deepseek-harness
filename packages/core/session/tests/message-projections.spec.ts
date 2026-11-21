@@ -5,7 +5,7 @@ import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import SessionStore, { Session, SessionId, SessionSeq, SessionLogOffset, foldSurface, deriveEventMessage } from '../src/index.ts'
 import type { SessionEvent, SessionMessageProjection } from '../src/index.ts'
 import { MESSAGE_PROJECTION_EVENT_TYPES } from '../src/known-event-types.ts'
-import { SurfaceFoldAccumulator, SurfaceManager } from '../src/surface.ts'
+import { SurfaceManager } from '../src/surface.ts'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -44,15 +44,7 @@ describe('plugin-owned message projections', () => {
   })
 
   it('applies generic decisions atomically and replays them through detached folds', () => {
-    let calls = 0
-    const counted: SessionMessageProjection<'test/project'> = {
-      ...projection,
-      project(event, context) {
-        calls += 1
-        return projection.project(event, context)
-      },
-    }
-    const definitions = [counted]
+    const definitions = [projection]
     const session = Session.create(SessionId('pure'), undefined, undefined, undefined, definitions)
     const source = input(session)
     const original = session.deriveMessages()
@@ -62,10 +54,27 @@ describe('plugin-owned message projections', () => {
     expect(session.deriveMessages()[0]?.content).toEqual([{ type: 'text', text: 'projected' }])
     expect(session.surface.replaceGeneration).toBe(0)
     expect(session.surface.contentGeneration).toBe(1)
-    expect(calls).toBe(2)
     const folded = foldSurface(session.snapshotEvents(), definitions)
     expect(deriveEventMessage(source, folded.projectedMessages)).toEqual(session.deriveMessages()[0])
     expect(source.data.content).toEqual([{ type: 'text', text: 'original' }])
+  })
+
+  it.each(['projected', 'reject'])('admits message projections through array append (%s)', (text) => {
+    const session = Session.create(SessionId('array-projection'), undefined, undefined, undefined, [projection])
+    const original = createUserMessage({ content: [{ type: 'text', text: 'original' }], source: { kind: 'user' } })
+    const append = () => session.append([
+      ['user/message', original, { surfaceOp: 'append' }],
+      ['test/project', { seq: SessionSeq(0), text }],
+    ])
+    if (text === 'reject') {
+      expect(append).toThrow('rejected decision')
+      expect(session.seq).toBe(0)
+      expect(session.deriveMessages()).toEqual([])
+    } else {
+      append()
+      expect(session.deriveMessages()[0]?.content).toEqual([{ type: 'text', text }])
+      expect(session.surface.contentGeneration).toBe(1)
+    }
   })
 
   it('registers by fiber and refuses cached or pending decisions after disposal', async () => {
@@ -83,10 +92,6 @@ describe('plugin-owned message projections', () => {
     const pending = ctx.sessions.create(SessionId('pending'))
     input(pending)
     pending.append('test/project', { seq: source.seq, text: 'changed' })
-    const accumulator = new SurfaceFoldAccumulator(ctx.sessions.messageProjections)
-    const events = live.snapshotEvents()
-    for (const event of events) accumulator.append(event, events)
-    expect(deriveEventMessage(source, accumulator.projectedMessages)).toEqual(live.deriveMessages()[0])
     const before = live.deriveMessages()
     const child = ctx.sessions.fork(live)
     expect(child.deriveMessages()).toEqual(before)
@@ -99,10 +104,6 @@ describe('plugin-owned message projections', () => {
     expect(restored.deriveMessages()).toEqual(before)
     await fiber.dispose()
     expect(ctx.sessions.messageProjections).toEqual([])
-    expect(() => accumulator.nodes).toThrow(/was removed or replaced/)
-    expect(() => accumulator.projectedMessages).toThrow(/was removed or replaced/)
-    expect(() => accumulator.append({ type: 'turn/start', seq: SessionSeq(events.length), time: 0, data: { turn: 1 } }, events))
-      .toThrow(/was removed or replaced/)
     for (const session of [live, pending, child, restored]) {
       expect(() => session.deriveMessages()).toThrow(/was removed or replaced/)
       expect(() => session.deriveEventMessage(source)).toThrow(/was removed or replaced/)

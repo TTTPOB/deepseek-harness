@@ -1,29 +1,40 @@
 import { describe, expect, it } from 'vitest'
-import { ToolCallId, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ToolCallId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createSettlementMessage, withContinuableReturnGuidance } from '../src/continuation-messages.ts'
-
-describe('continuable return guidance', () => {
-  it.each(['parent', 'parent "quoted"\\line\nnext'])('appends guidance without changing task blocks for %j', (id) => {
-    const prompt: ContentBlock[] = [{ type: 'text', text: '  task\n' }, { type: 'text', text: 'second task block' }]
-    const original = structuredClone(prompt)
-    const content = withContinuableReturnGuidance(SessionId(id), prompt)
-
-    expect(prompt).toEqual(original)
-    expect(content.slice(0, -1)).toEqual(prompt)
-    expect(content).toHaveLength(prompt.length + 1)
-    expect(content.at(-1)).toMatchObject({ type: 'text' })
-    const guidance = content.at(-1)!
-    if (guidance.type !== 'text') throw new Error('expected text guidance')
-    expect(guidance.text.split(JSON.stringify(id))).toHaveLength(3)
-    expect(guidance.text).not.toMatch(/\bsend_message\s*\(/)
-  })
-})
+import { createSettlementMessage } from '../src/continuation-messages.ts'
 
 const childId = SessionId('settled-child')
-const summary = { type: 'text', text: `Background subagent ${childId} finished and will do no further work unless you send it more.` }
+const childName = 'reviewer/checker'
+const summary = { type: 'text', text: `Background subagent ${childName} finished and will do no further work unless you send it more.` }
 const reasoning: ContentBlock = { type: 'reasoning', text: 'private child reasoning' }
 const toolCall: ContentBlock = { type: 'tool-call', id: ToolCallId('child-call'), name: 'read', arguments: '{}' }
+
+describe('settlement attribution', () => {
+  it.each(['completed', 'aborted', 'max-tokens', 'refusal', 'error'] as const)(
+    'records the exact %s stop reason without changing model content', (stopReason) => {
+      const terminal = { stopReason, output: [{ type: 'text' as const, text: '  answer\n' }] }
+      const message = createSettlementMessage(childId, childName, terminal)
+      expect(message.source).toMatchObject({
+        kind: 'subagent-settled', form: 'notice',
+        senderSessionId: childId, stopReason,
+      })
+      expect(message.content.slice(1)).toEqual([
+        { type: 'text', text: 'Its closing message:' },
+        ...terminal.output,
+      ])
+    },
+  )
+
+  it('preserves historical notices without inferring missing attribution from English', () => {
+    const source = { kind: 'subagent-settled' as const, form: 'notice' as const,
+      summary: 'Historical runtime summary', senderSessionId: childId }
+    const content = [{ type: 'text' as const, text: 'Background subagent settled-child finished.' }]
+    const message = createUserMessage({ source, content })
+    expect(message.source).toEqual(source)
+    expect(message.source).not.toHaveProperty('stopReason')
+    expect(message.content).toEqual(content)
+  })
+})
 
 describe('continuable settlement content', () => {
   it.each([
@@ -31,7 +42,7 @@ describe('continuable settlement content', () => {
     ['a tool call after the answer', [{ type: 'text', text: 'answer' }, toolCall]],
   ] satisfies [string, ContentBlock[]][])('reports only the closing text with %s', (_label, output) => {
     const original = structuredClone(output)
-    const message = createSettlementMessage(childId, { stopReason: 'completed', output })
+    const message = createSettlementMessage(childId, childName, { stopReason: 'completed', output })
 
     expect(message.role).toBe('user')
     expect(message.content).toEqual([
@@ -47,7 +58,7 @@ describe('continuable settlement content', () => {
     ['reasoning-only output', [reasoning]],
     ['empty text', [{ type: 'text', text: '' }]],
   ] satisfies [string, ContentBlock[]][])('reports no closing message for %s', (_label, output) => {
-    const message = createSettlementMessage(childId, { stopReason: 'completed', output })
+    const message = createSettlementMessage(childId, childName, { stopReason: 'completed', output })
 
     expect(message.content).toEqual([
       summary,
@@ -58,7 +69,7 @@ describe('continuable settlement content', () => {
   it('preserves text block order and bytes around omitted reasoning and tool calls', () => {
     const first: ContentBlock = { type: 'text', text: '  first\n' }
     const second: ContentBlock = { type: 'text', text: '\n第二段  ' }
-    const message = createSettlementMessage(childId, {
+    const message = createSettlementMessage(childId, childName, {
       stopReason: 'completed',
       output: [reasoning, first, toolCall, second],
     })
@@ -73,7 +84,7 @@ describe('continuable settlement content', () => {
 })
 
 it('includes closing text alongside structured results and diagnostics', () => {
-  expect(createSettlementMessage(childId, {
+  expect(createSettlementMessage(childId, childName, {
     stopReason: 'completed', output: [{ type: 'text', text: 'final answer' }],
     structured: { answer: 42 }, diagnostic: 'safe diagnostic',
   }).content).toEqual([
@@ -86,7 +97,7 @@ it('includes closing text alongside structured results and diagnostics', () => {
 })
 
 it('omits the closing text after the child messaged its parent, keeping structured results and diagnostics', () => {
-  expect(createSettlementMessage(childId, {
+  expect(createSettlementMessage(childId, childName, {
     stopReason: 'completed', output: [{ type: 'text', text: 'final answer, restated' }],
     structured: { answer: 42 }, diagnostic: 'safe diagnostic',
   }, true, true).content).toEqual([

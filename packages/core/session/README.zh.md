@@ -59,10 +59,6 @@ session.deriveMessages()         // the derived model history
 
 `system/message` 承载渲染后的系统提示词：第一条是 surface 第 0 号节点，准入依据已准备调用的能力，不具备能力的路由将非空渲染文本归并到首个系统节点，延续中的 `in-history` 序列则在缓存历史之后追加；空系统节点不投影为消息，因此清除提示词必须为所有生效的系统节点记录空内容替换，而非仅替换最新节点；当第 0 号节点是 `system/message` 时，surface 折叠拒绝覆盖它的替换，除非替换事件本身是恰好覆盖该节点的 `system/message`，而后续系统节点不受保护，压缩范围可以遮蔽它们（[决策](../../../.agents/notes/implemented/architecture/2026-09-02-system-prompt-as-surface-node.zh.md)）。
 
-### 折叠保留的事件前缀
-
-独立读取器可以保留 `dsh-session/surface` 导出的 `SurfaceFoldAccumulator`，只折叠新增的已提交事件，推进到本次捕获的截止位置。它与 `foldSurface(events, projections)` 和实时管理器共用规范校验及位置转换，返回实际替换元数据，自身不保留替换历史。冻结事件引用、解释器定义与结果生命周期由调用方拥有；前缀推进和借用视图语义见[可续接的 surface 折叠](../../../docs/subsystems/session.zh.md#surface-folding)。
-
 ### 读取日志
 
 `session.seq` 无需物化数组即可读取当前日志长度，`session.eventAt(seq)` 按序列号读取单个已接受且深度冻结的事件。`session.snapshotEvents(fromSeq?, toSeqExclusive?)` 会物化半开区间的冻结稳定快照；当前完整快照会缓存到下一次追加。`eventAt()`、`snapshotEvents()` 和 `ownEvents()` 已弃用：现有逻辑可以暂不迁移，但禁止新增生产调用。仓库测试文件可以在限定范围的 lint 豁免下使用这三个读取方法（[策略](../../../.agents/notes/implemented/architecture/2026-09-09-deprecate-synchronous-session-event-reads.zh.md)）。只需要长度的调用方使用 `seq`。
@@ -75,7 +71,7 @@ session.deriveMessages()         // the derived model history
 
 `appendPluginRecord(session, type, data)` 为 `packages/experimental/` 下的包追加一条插件记录；`verify-plugin-record-callers` 检查拒绝本仓库中任何其他生产调用方。本仓库之外的插件同样不得调用它，尽管仓库检查无法检查它们。
 
-在所属实验性包的 `src/` 中，通过 `@deepseek-ai/dsh-session/types` 的 `PluginRecordMap` 为每条记录声明描述与显式 payload 类型注解。名称使用 `plugin:<owner>/<record>`，其中 `owner` 是包名 `@deepseek-ai/dsh-experimental-<owner>` 的后缀；例如 `plugin:pi-extensions/entry`。TypeScript 按声明检查每个名称与 payload；写入方运行时的 JSON 快照拒绝无法无损保留的值。扩展自定义名称或其他动态名称放在已声明记录的 payload 中。
+在所属实验性包的 `src/` 中，通过 `@deepseek-ai/dsh-session/types` 的 `PluginRecordMap` 为每条记录声明描述与显式 payload 类型注解。名称使用 `plugin:<owner>/<record>`，其中 `owner` 是包名去掉前缀后的部分：带旧前缀时去掉 `@deepseek-ai/dsh-experimental-`，否则去掉 `@deepseek-ai/dsh-`；例如 `plugin:pi-extensions/entry`。TypeScript 按声明检查每个名称与 payload；写入方运行时的 JSON 快照拒绝无法无损保留的值。扩展自定义名称或其他动态名称放在已声明记录的 payload 中。
 
 [实验性持久化目录](../../../docs/experimental-persistence-catalog.zh.md)列出当前插件记录声明及其所属包、描述、payload 类型注解与源文件。这些声明与 `SessionEventMap`、展开的持久化 schema、已发布类型历史及 `KNOWN_SESSION_EVENT_TYPES` 分开。记录带有 `ignorable: true`：不认识某条记录的构建在读取时保留并跳过它。记录从不进入模型可见的 surface。resume 与 fork 随日志其余部分一起携带它们；Session 格式迁移以尽力而为的方式保留它们。
 
@@ -86,6 +82,8 @@ session.deriveMessages()         // the derived model history
 `ctx.sessions.fork(source, boundary?, childSessionId?)` 从实时源会话复制包含切点的精确事件前缀（默认：最后一个事件）。`dsh-session/fork` 的 `buildForkSeed` 在复制事件之后放置继承标记，仅为开放步骤补缺失的错误工具结果，并以 `forked` 原因关闭步骤和轮次。已关闭的步骤与轮次保持原样，包括历史缺失结果。标记和结束事件属于子会话；`inheritedEventCount` 只统计复制的前缀。
 
 逻辑 `SessionHeader.isSeeded` 字段报告是否存在 fork 历史，而不公开位置整数。`Session.inheritedEventCount` 保留经过校验的精确 `SessionLogOffset`；`ownEvents()` 返回从该切点开始的事件，`isOwnSeq(seq)` 只接受已存在且由子会话拥有的位置。底层带 seed 构造必须显式提供 `seed` 与 `inheritedEventCount`，因为构造 seed 可以在继承前缀之后包含子会话自有的设置事件。
+
+`session.append(type, data, ...opts)` 追加一个事件并返回该事件。`session.append(inputs)` 接受位置参数元组 `[type, data, ...opts]`（`SessionEventInput`）的只读数组，并按输入顺序返回已提交事件；空数组不追加任何内容。数组准入会在改变日志或surface前验证所有候选和同步分发，因此观察者读取完整的已提交组。持久化监听器保留各自的持久性规则；仅数组准入不保证进程崩溃时整组存储的原子性。
 
 ### 刷新持久状态
 

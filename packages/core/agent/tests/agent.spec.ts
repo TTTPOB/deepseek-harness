@@ -111,7 +111,6 @@ describe('AgentRegistry', () => {
     const dispose = await ctx.agents.register(agent)
     expect(ctx.agents.get(agent.id)).toBe(agent)
     expect(ctx.agents.list()).toEqual([agent])
-    expect(ctx.agents.roots()).toEqual([agent])
     await expect(Promise.resolve(ctx.agents.register(stubAgent('a1')))).rejects.toThrow(/already registered/)
 
     await dispose()
@@ -125,31 +124,9 @@ describe('AgentRegistry', () => {
     await ctx.plugin(AgentRegistry)
     const agent = stubAgent('agent-id', { session: Session.create(SessionId('session-id')) })
 
-    expect(() => ctx.agents.enter(agent, undefined))
+    expect(() => ctx.agents.enter(agent))
       .toThrow('agent id "agent-id" does not match session id "session-id"')
     expect(ctx.agents.list()).toEqual([])
-  })
-
-  it('tracks runtime creator ownership separately from registry order', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SessionProjectionRegistry)
-    await ctx.plugin(AgentRegistry)
-    const root = stubAgent('root')
-    const child = stubAgent('child')
-    const detachRoot = ctx.agents.enter(root, undefined)
-    await ctx.agents.announce(root, 'startup')
-    const detachChild = ctx.agents.enter(child, root)
-    await ctx.agents.announce(child, 'startup')
-
-    expect(ctx.agents.list()).toEqual([root, child])
-    expect(ctx.agents.roots()).toEqual([root])
-    expect(ctx.agents.isOwnedBy(child.id, root)).toBe(true)
-    expect(ctx.agents.isOwnedBy(root.id, root)).toBe(false)
-    expect(ctx.agents.isOwnedBy(SessionId('missing'), root)).toBe(false)
-
-    detachChild()
-    expect(ctx.agents.isOwnedBy(child.id, root)).toBe(false)
-    detachRoot()
   })
 
   it('rolls an entry back and pairs a partially delivered creation when a listener throws', async () => {
@@ -230,7 +207,7 @@ describe('AgentRegistry', () => {
     ctx.on('agent/disposed', ({ agent }) => void lifecycle.push(`disposed:${agent.id}`))
 
     const first = stubAgent('split')
-    const detachFirst = ctx.agents.enter(first, undefined)
+    const detachFirst = ctx.agents.enter(first)
     expect(lifecycle).toEqual([])
     await ctx.agents.announce(first, 'startup')
     await expect(ctx.agents.announce(first, 'startup')).rejects.toThrow(/already announced/)
@@ -238,7 +215,7 @@ describe('AgentRegistry', () => {
     detachFirst()
 
     const replacement = stubAgent('split')
-    const detachReplacement = ctx.agents.enter(replacement, undefined)
+    const detachReplacement = ctx.agents.enter(replacement)
     detachFirst()
     expect(ctx.agents.get(replacement.id)).toBe(replacement)
     await expect(ctx.agents.announce(first, 'startup')).rejects.toThrow(/not live/)
@@ -259,7 +236,7 @@ describe('AgentRegistry', () => {
     })
     ctx.on('agent/created', () => void order.push(`second:${ctx.agents.get(agent.id) === agent}`))
     ctx.on('agent/disposed', () => void order.push('disposed'))
-    const detach = ctx.agents.enter(agent, undefined)
+    const detach = ctx.agents.enter(agent)
     await ctx.agents.announce(agent, 'startup')
     expect(order).toEqual(['first:true', 'after-detach:true', 'second:true', 'disposed'])
     expect(ctx.agents.get(agent.id)).toBeUndefined()
@@ -358,23 +335,6 @@ describe('AgentRegistry factory seam', () => {
     }, { inject: ['agents'] }))
     expect(calls.create[0]?.ownerCtx.fiber).toBe(callerFiber)
     expect(calls.resume[0]?.ownerCtx.fiber).toBe(callerFiber)
-    expect(calls.create[0]?.options.parentAgent).toBeUndefined()
-    expect(calls.resume[0]?.options.parentAgent).toBeUndefined()
-  })
-
-  it('keeps the runtime parent in options separately from the caller context', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SessionProjectionRegistry)
-    await ctx.plugin(AgentRegistry)
-    const { factory, calls } = stubFactory()
-    ctx.agents.setFactory(factory)
-    const parent = stubAgent('parent')
-    const unregister = await ctx.agents.register(parent)
-
-    await ctx.agents.create({ sessionId: SessionId('child'), parentAgent: parent })
-
-    expect(calls.create[0]?.options.parentAgent).toBe(parent)
-    await unregister()
   })
 
   it('rejects a second factory and clears the slot with its owner (HMR)', async () => {
@@ -388,47 +348,6 @@ describe('AgentRegistry factory seam', () => {
     await expect(ctx.agents.create({ sessionId: SessionId('before-s') })).resolves.toBeDefined()
     await owner.dispose()
     await expect(ctx.agents.create({ sessionId: SessionId('after-s') })).rejects.toThrow(/no agent factory/)
-  })
-
-  it('runs effect-owned setup contributions before caller setup on create and resume', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SessionProjectionRegistry)
-    await ctx.plugin(AgentRegistry)
-    const events: string[] = []
-    ctx.agents.setFactory({
-      async createAgent(_owner, options) {
-        const agent = stubAgent(options.sessionId)
-        const commit = await options.setup?.(ctx, agent)
-        commit?.commit()
-        events.push('published')
-        return { agent, dispose: async () => {} }
-      },
-      async resume(_owner, options) {
-        const agent = stubAgent(options.resumeSessionId)
-        const commit = await options.setup?.(ctx, agent)
-        commit?.commit()
-        events.push('published')
-        return { agent, dispose: async () => {} }
-      },
-    })
-    const contribution = await ctx.plugin(Object.assign((owner: Context) => {
-      owner.agents.registerSetup(() => {
-        events.push('contribution')
-        return { commit: () => { events.push('contribution commit') } }
-      })
-    }, { inject: ['agents'] }))
-    const setup = () => {
-      events.push('caller')
-      return { commit: () => { events.push('caller commit') } }
-    }
-    await ctx.agents.create({ sessionId: SessionId('create'), setup })
-    await ctx.agents.resume({ resumeSessionId: SessionId('resume'), setup })
-    expect(events).toEqual(Array.from({ length: 2 }, () =>
-      ['contribution', 'caller', 'contribution commit', 'caller commit', 'published']).flat())
-    await contribution.dispose()
-    events.length = 0
-    await ctx.agents.create({ sessionId: SessionId('after'), setup })
-    expect(events).toEqual(['caller', 'caller commit', 'published'])
   })
 
   it('canonicalizes an already traced Service before tracing it for the caller', async () => {

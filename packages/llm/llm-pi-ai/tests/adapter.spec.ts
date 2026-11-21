@@ -395,49 +395,6 @@ describe('PiAiAdapter provider routing', () => {
   })
 
   it.each([
-    [
-      { type: 'error', code: 'upstream_http2_stream_error', message: 'Upstream HTTP/2 stream failed' },
-      'TRANSPORT',
-    ],
-    [
-      { type: 'response.failed', response: {
-        status: 'failed', error: { code: 'server_error', message: 'An error occurred while processing your request.' },
-      } },
-      'SERVER',
-    ],
-  ])('classifies Responses stream failure %j as %s', async (event, code) => {
-    const server = await mockServer([{ events: [JSON.stringify(event)] }])
-    const ctx = new Context()
-    await ctx.plugin(LlmRuntime)
-    await ctx.plugin(LlmPiAi, {
-      providers: { openai: { apiKeyEnv: 'PI_TEST_KEY', baseURL: `${server.url}/v1` } },
-    })
-    const result = await assemble(ctx, { provider: 'openai', model: 'gpt-4.1', messages: [] })
-    expect(result.finish).toMatchObject({ kind: 'error', failure: { code } })
-    expect(server.paths).toEqual(['/v1/responses'])
-  })
-
-  it('applies a configured error-code rule to a Responses stream failure', async () => {
-    const server = await mockServer([{ events: [JSON.stringify({
-      type: 'response.failed',
-      response: { status: 'failed', error: { code: 'upstream_error', message: 'Upstream service temporarily unavailable' } },
-    })] }])
-    const ctx = new Context()
-    await ctx.plugin(LlmRuntime)
-    await ctx.plugin(LlmPiAi, {
-      providers: {
-        openai: {
-          apiKeyEnv: 'PI_TEST_KEY',
-          baseURL: `${server.url}/v1`,
-          errorCodeRules: [{ match: '^upstream_error:', code: 'SERVER' }],
-        },
-      },
-    })
-    const result = await assemble(ctx, { provider: 'openai', model: 'gpt-4.1', messages: [] })
-    expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
-  })
-
-  it.each([
     { name: 'the default count bound rejects', profile: {}, failure: { code: 'IMAGE_OFFLOAD_REQUIRED', offloadImages: DEFAULT_IMAGE_OFFLOAD_COUNT_QUANTUM }, requests: 0 },
     { name: 'a raised count bound dispatches', profile: { maxRequestImages: 60 }, failure: { code: 'AUTH' }, requests: 1 },
   ])('$name a request carrying 51 retained images', async ({ profile, failure, requests }) => {
@@ -515,6 +472,29 @@ describe('PiAiAdapter provider routing', () => {
     const result = await assemble(ctx, { model: 'deepseek-flash', messages: [] })
     expect(result.finish).toMatchObject({ kind: 'error', failure: { code } })
     expect(server.paths).toEqual(['/chat/completions'])
+  })
+
+  it('classifies a gateway 500 that relays an upstream 401 as SERVER with the rendered message', async () => {
+    vi.stubEnv('PI_TEST_KEY', 'test-key')
+    // The Anthropic SDK renders the whole JSON body after the gateway's own status.
+    const body = JSON.stringify({
+      error: {
+        origin: 'upstream',
+        message: 'upstream returned an error response: User not found.',
+        type: 'upstream_error',
+        upstream: { provider: 'custom', status: 401, body: { error: { message: 'User not found.' } } },
+      },
+    })
+    const server = await mockServer([{ status: 500, body }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        gateway: { apiKeyEnv: 'PI_TEST_KEY', api: 'anthropic-messages', baseURL: server.url, models: [{ id: 'gateway-model' }] },
+      },
+    })
+    const result = await assemble(ctx, { provider: 'gateway', model: 'gateway-model', messages: [] })
+    expect(result.finish).toEqual({ kind: 'error', failure: { message: `500 ${body}`, code: 'SERVER' } })
   })
 
   it('uses the resolved catalog context window for usage-based overflow detection', async () => {
@@ -1098,7 +1078,7 @@ describe('provider profile lifecycle', () => {
     await expect((async () => {
       for await (const _chunk of adapter.stream({ provider: 'anthropic', model: 'claude-sonnet-4', messages: [] })) { /* drain */ }
     })()).rejects.toMatchObject({ code: 'NO_ADAPTER' })
-    expect(new LlmError('x', 'X')).toBeInstanceOf(Error)
+    expect(LlmError.fromFailure({ message: 'x', code: 'X' })).toBeInstanceOf(Error)
   })
 
   it('rejects unsupported or unresolved image input before provider I/O', async () => {

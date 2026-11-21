@@ -11,7 +11,6 @@ import { CONNECT_PATH } from './connect-protocol.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
 import { assertTrustedAuthority } from './api-request-trust.ts'
 import { BrowserAuth } from './browser-auth.ts'
-import { CloudflareAccess, type CloudflareAccessConfig } from './cloudflare-access.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { ConnectionRecoveryConfigSchema, resolveConnectionConfig, type ConnectionRecoveryConfig } from './recovery-config.ts'
 
@@ -104,8 +103,6 @@ export interface ConnectionConfig {
    * an entry here. A non-canonical or non-bare authority fails plugin load.
    */
   trustedHosts?: string[]
-  /** Optional Cloudflare Access ingress; non-loopback requests require a valid assertion. */
-  cloudflareAccess?: CloudflareAccessConfig
   /** Absolute browser and API cookie lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -115,7 +112,6 @@ export interface ConnectionConfig {
 export const Config: z<ConnectionConfig> = z.object({
   recovery: ConnectionRecoveryConfigSchema.default({}),
   trustedHosts: z.array(String).default([]),
-  cloudflareAccess: z.union([z.object({ issuer: z.string().required(), audience: z.string().required() })]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
 })
@@ -141,7 +137,6 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
     ctx,
     trustedHosts,
     await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
-    config?.cloudflareAccess === undefined ? undefined : new CloudflareAccess(config.cloudflareAccess),
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
@@ -153,7 +148,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       kind: 'prefix',
       path: API_PATH,
       handler: async (req, res) => {
-        const admission = await connection.admitAsync(req)
+        const admission = connection.admit(req)
         if ('rejection' in admission) {
           res.writeHead(admission.rejection)
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')
@@ -165,7 +160,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
     webCtx.effect(() => webCtx.webServer.register({
       kind: 'exact', path: CONNECT_PATH,
-      handler: async (req, res) => { await connection.authorizeConnectAsync(req, res) },
+      handler: (req, res) => { connection.authorizeConnect(req, res) },
     }), 'client-connection: /connect route')
   })
   ctx.inject(['attachments'], (attachmentCtx) => {

@@ -1,4 +1,5 @@
 /** Select program syntax and own temporary or retained Node processes. */
+import { stripTypeScriptTypes } from 'node:module'
 import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PtcProgramFormat, PtcRunRequest, PtcRunResult, PtcRunSpec } from '@deepseek-ai/dsh-ptc-runtime'
@@ -8,7 +9,6 @@ import type { ResolvedConfig } from './config.ts'
 import { validateBindings } from './bindings.ts'
 import type { PolicyProcesses } from './policy-processes.ts'
 import { ProgramWorker } from './worker.ts'
-import { prepareProgram } from './program.ts'
 
 /** Syntax, state retention and model guidance selected during provider construction. */
 export interface ExecutionMode {
@@ -19,7 +19,7 @@ export interface ExecutionMode {
   /** Model-facing syntax, output and recovery rules. */
   readonly executionInstructions: string
   /**
-   * Convert raw literals and erase TypeScript in the selected syntax without executing the program.
+   * Erase TypeScript in the selected syntax without executing the program.
    * @param program - Model-written TypeScript source.
    * @returns JavaScript accepted by the selected evaluator.
    */
@@ -52,9 +52,7 @@ class NodeExecution {
   constructor(
     private readonly ctx: Context, private readonly config: ResolvedConfig,
     private readonly processes: PolicyProcesses, readonly mode: ExecutionMode,
-  ) {
-    if (mode.retainsState && this.config.launch.kind === 'embedded') throw new Error('Persistent PTC requires a node-script launch')
-  }
+  ) {}
 
   /** Stop every owned process, retaining failed cleanup for a later retry. */
   async dispose(): Promise<void> {
@@ -92,10 +90,10 @@ class NodeExecution {
     worker?.assertIdle()
     if (worker && !worker.closed && (worker.policy.mode !== spec.sandboxPolicy.mode
       || worker.policy.workspaceRoot !== spec.sandboxPolicy.workspaceRoot
-      || worker.policy.sessionId !== spec.sandboxPolicy.sessionId
-      || !sameAdditionalRoots(worker.policy.additionalWritableRoots, spec.sandboxPolicy.additionalWritableRoots))) {
+      || worker.policy.sessionId !== spec.sandboxPolicy.sessionId)) {
       throw new Error('persistent PTC: release the retained environment before changing its sandbox policy')
     }
+    // Retained processes keep their launch-time directory grants until release.
     if (!worker || worker.closed) {
       if (worker) this.workers.delete(worker)
       // Direct callers can own mutable policy arrays; the retained process owns its grant snapshot.
@@ -127,40 +125,34 @@ class NodeExecution {
   }
 }
 
-/**
- * Compare requested extra grants without resolving paths in another execution world.
- * @param left - one policy's additional roots.
- * @param right - the other policy's additional roots.
- * @returns whether both contain the same paths, ignoring order and duplicates.
- */
-function sameAdditionalRoots(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
-  const effective = (roots: readonly string[] | undefined): string[] => [...new Set(roots ?? [])].sort()
-  const a = effective(left)
-  const b = effective(right)
-  return a.length === b.length && a.every((root, index) => root === b[index])
-}
-
-const RAW_TEXT_INSTRUCTIONS = ' For verbatim text, use @ followed by N backticks (N >= 2), then the text and exactly N closing backticks. Quotes, backslashes and ${...} stay literal; one immediate opening LF or CRLF is omitted. Use a wider delimiter when the text contains an equal-length backtick run.'
-const RETAINED_STATE_INSTRUCTIONS = 'Changing the session sandbox mode clears retained variables. An approved sandbox escalation runs in a separate temporary environment: it cannot access retained variables, and its declarations are discarded afterward. Restart, Agent disposal, cancellation, timeout, output overflow, or process failure clears the environment. If a variable is undefined, recreate it and reacquire its resources. State is not restored from the conversation, and failed evaluations can leave earlier mutations in memory. Redeclaring an existing let, const, or class name fails; assign to a mutable binding or use a new name. Await all tool calls; background callbacks cannot call tools after their evaluation ends. Await child-process completion before ending an evaluation; raw subprocess output belongs to whichever evaluation is active when it arrives.'
+const STRIP_PREFIX = 'async function __dsh_program__() {\n'
+const STRIP_SUFFIX = '\n}'
+const RETAINED_STATE_INSTRUCTIONS = 'Timeout and cancellation results say whether retained variables were preserved or cleared. Restart, sandbox changes, output overflow, or process failure clears them. Recreate missing variables and resources; conversation history does not restore state. Earlier mutations and tool effects are not rolled back. Approved sandbox escalations use a fresh environment and discard its variables afterward. Do not redeclare existing let, const, or class names; reuse mutable bindings or choose new names. Await tools and cleanup before returning; unfinished tools reject. After completion, timeout, or cancellation, new tool calls are rejected and captured output is discarded; background work may still change state. Await child-process completion before returning; raw output belongs to the active evaluation.'
 
 function resolveMode(config: ResolvedConfig): ExecutionMode {
   switch (config.executionMode) {
     case 'per-call': return {
       format: 'function-body',
       retainsState: false,
-      executionInstructions: 'The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. Emit output with console.log(...) or return a lossless JSON value. Only printed values and the returned value become program output. Each call runs in a fresh Node process. Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution\'s sandbox policy.' + RAW_TEXT_INSTRUCTIONS,
-      stripTypes: program => prepareProgram(program, 'function-body'),
+      executionInstructions: 'The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. Emit output with console.log(...) or return a lossless JSON value. Only printed values and the returned value become program output. Each call runs in a fresh Node process. Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution\'s sandbox policy.',
+      stripTypes(program) {
+        const stripped = stripTypeScriptTypes(STRIP_PREFIX + program + STRIP_SUFFIX)
+        return stripped.slice(STRIP_PREFIX.length, stripped.length - STRIP_SUFFIX.length)
+      },
     }
     case 'persistent-in-memory': return {
       format: 'repl',
       retainsState: true,
-      executionInstructions: 'The program contains TypeScript REPL statements; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level declarations and await are supported; top-level return is not supported. Emit output with console.log(...) or a final lossless JSON expression. Only printed values and that final expression become program output. Variables, functions, and imported modules remain in memory for this Agent across calls. Use await import(...) for modules. Direct filesystem access follows this execution\'s sandbox policy; process.env starts empty. ' + RETAINED_STATE_INSTRUCTIONS + RAW_TEXT_INSTRUCTIONS,
-      stripTypes: program => prepareProgram(program, 'repl'),
+      executionInstructions: 'The program contains TypeScript REPL statements; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level declarations and await are supported; top-level return is not supported. Emit output with console.log(...) or a final lossless JSON expression. Only printed values and that final expression become program output. Variables, functions, and imported modules remain in memory for this Agent across calls. Use await import(...) for modules. Direct filesystem access follows the environment\'s launch-time sandbox policy; process.env starts empty. ' + RETAINED_STATE_INSTRUCTIONS,
+      stripTypes: stripTypeScriptTypes,
     }
     case 'vm-script': {
       const lifetime = config.scriptPersistence
         ? 'Variables, functions, and imported modules remain in memory for this Agent across calls.'
         : 'Each call runs in a fresh Node process.'
+      const filePolicy = config.scriptPersistence
+        ? 'Direct filesystem access follows the environment\'s launch-time sandbox policy; process.env starts empty.'
+        : 'Direct filesystem access follows this execution\'s sandbox policy; process.env starts empty.'
       const asynchronousFailure = 'Await asynchronous work: an uncaught callback exception or unhandled rejection terminates the process'
         + (config.scriptPersistence ? ' and clears its variables.' : '.')
       const recovery = config.scriptPersistence
@@ -169,8 +161,8 @@ function resolveMode(config: ResolvedConfig): ExecutionMode {
       return {
         format: 'script',
         retainsState: config.scriptPersistence,
-        executionInstructions: 'The program contains TypeScript script statements; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level declarations and await are supported; top-level return is not supported. Emit output with console.log(...) or a final lossless JSON expression. The final expression is awaited if it is a Promise. Only printed values and that final expression become program output. ' + lifetime + ' Use await import(...) for modules. Relative paths use the supplied working directory. Direct filesystem access follows this execution\'s sandbox policy; process.env starts empty. ' + asynchronousFailure + ' Values from bindings and imports can belong to another realm; use Array.isArray for arrays and the supplied binding error classes for failures, because instanceof Array or Error may be false.' + recovery + RAW_TEXT_INSTRUCTIONS,
-        stripTypes: program => prepareProgram(program, 'script'),
+        executionInstructions: 'The program contains TypeScript script statements; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level declarations and await are supported; top-level return is not supported. Emit output with console.log(...) or a final lossless JSON expression. The final expression is awaited if it is a Promise. Only printed values and that final expression become program output. ' + lifetime + ' Use await import(...) for modules. Relative paths use the supplied working directory. ' + filePolicy + ' ' + asynchronousFailure + ' Values from bindings and imports can belong to another realm; use Array.isArray for arrays and the supplied binding error classes for failures, because instanceof Array or Error may be false.' + recovery,
+        stripTypes: stripTypeScriptTypes,
       }
     }
     /* v8 ignore next -- Loader validates the closed execution-mode union before selection. */

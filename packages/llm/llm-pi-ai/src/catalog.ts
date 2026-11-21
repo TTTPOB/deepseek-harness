@@ -270,26 +270,23 @@ const COMPLETIONS_COMPAT_GATE = {
   zaiToolStream: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
   sendSessionAffinityHeaders: 'withhold',
-  supportsMidConvoSystemMessages: 'offer',
-  supportsMidConvoToolAdditions: 'offer',
+  supportsMidConvoSystemMessages: 'withhold',
+  supportsMidConvoToolAdditions: 'withhold',
   sessionAffinityFormat: 'withhold',
 } as const satisfies Record<keyof OpenAICompletionsCompat, CompatDisposition>
 
 /** Disposition of every `OpenAIResponsesCompat` field; a drift gate like the one above. */
 const RESPONSES_COMPAT_GATE = {
-  maxConsecutiveWhitespaceChars: 'offer',
-  maxRepeatedPatternChars: 'offer',
   supportsDeveloperRole: 'offer',
-  systemPromptFormat: 'offer',
   supportsMaxOutputTokens: 'offer',
   supportsStrictMode: 'offer',
   supportsLongCacheRetention: 'offer',
   sessionAffinityFormat: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
-  supportsAdditionalTools: 'offer',
-  supportsToolSearch: 'offer',
+  supportsAdditionalTools: 'withhold',
+  supportsToolSearch: 'withhold',
   supportsExplicitPromptCacheMode: 'withhold',
-  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoSystemMessages: 'withhold',
   supportsMidConvoEffort: 'withhold',
 } as const satisfies Record<keyof OpenAIResponsesCompat, CompatDisposition>
 
@@ -304,8 +301,8 @@ const ANTHROPIC_COMPAT_GATE = {
   supportsStrictTools: 'offer',
   sendSessionAffinityHeaders: 'withhold',
   sessionAffinityFormat: 'withhold',
-  supportsMidConvoSystemMessages: 'offer',
-  supportsMidConvoToolChanges: 'offer',
+  supportsMidConvoSystemMessages: 'withhold',
+  supportsMidConvoToolChanges: 'withhold',
   supportsMidConvoEffort: 'withhold',
   allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
@@ -317,7 +314,7 @@ const BEDROCK_COMPAT_GATE = {
 
 /** Disposition of every `MistralConversationsCompat` field. */
 const MISTRAL_COMPAT_GATE = {
-  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoSystemMessages: 'withhold',
 } as const satisfies Record<keyof MistralConversationsCompat, CompatDisposition>
 
 /**
@@ -368,6 +365,7 @@ type OfferedCompatField =
   | OfferedIn<typeof RESPONSES_COMPAT_GATE>
   | OfferedIn<typeof ANTHROPIC_COMPAT_GATE>
   | OfferedIn<typeof BEDROCK_COMPAT_GATE>
+  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- Include gates whose current offering is empty.
   | OfferedIn<typeof MISTRAL_COMPAT_GATE>
 
 /**
@@ -389,16 +387,6 @@ type OfferedCompatField =
  * switch settable on one is settable on all three.
  */
 export interface PiAiCompatProfile {
-  /**
-   * Per-output-item consecutive whitespace limit in UTF-16 code units; the three Responses protocols.
-   * Default 32768; 0 disables only this check. Requires pi-ai fork.
-   */
-  maxConsecutiveWhitespaceChars?: NonNullable<OpenAIResponsesCompat['maxConsecutiveWhitespaceChars']>
-  /**
-   * Per-output-item repeated-pattern limit in UTF-16 code units, periods 1–100; the three Responses protocols.
-   * Default 32768; 0 disables only this check. Requires pi-ai fork.
-   */
-  maxRepeatedPatternChars?: NonNullable<OpenAIResponsesCompat['maxRepeatedPatternChars']>
   /** Whether the endpoint accepts `store`; `openai-completions`. */
   supportsStore?: boolean
   /**
@@ -407,14 +395,6 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
-  /** System prompt location on Responses protocols; defaults to input. Requires pi-ai fork. */
-  systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
-  /** Whether the endpoint accepts system updates in history; all protocols whose compat type declares it. */
-  supportsMidConvoSystemMessages?: boolean
-  /** Whether Chat Completions accepts message-anchored tool additions. */
-  supportsMidConvoToolAdditions?: boolean
-  /** Whether Anthropic accepts tool changes in history. */
-  supportsMidConvoToolChanges?: boolean
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
@@ -478,10 +458,6 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
-  /** Whether to serialize client-executed tool search; the three Responses protocols. */
-  supportsToolSearch?: boolean
-  /** Whether to serialize message-anchored additional tools; wins over tool search on Responses protocols. */
-  supportsAdditionalTools?: boolean
 }
 
 /** Compile-time constraint that `T` is `never`. */

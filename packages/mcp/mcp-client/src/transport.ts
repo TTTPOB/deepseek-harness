@@ -26,7 +26,7 @@ function buildChildEnv(extra: Record<string, string>): Record<string, string> {
  * Create an MCP transport from the resolved plugin config.
  *
  * @param config - Resolved plugin config discriminated on `transport`.
- * @returns A connected-ready MCP Transport (stdio or Streamable HTTP).
+ * @returns an unstarted MCP transport (stdio or Streamable HTTP).
  */
 export function createTransport(config: Config): Transport {
   switch (config.transport) {
@@ -36,7 +36,6 @@ export function createTransport(config: Config): Transport {
         args: config.args,
         env: buildChildEnv(config.env),
         cwd: config.cwd,
-        ...(config.maxBufferSize === undefined ? {} : { maxBufferSize: config.maxBufferSize }),
       })
     case 'streamable-http':
       return new StreamableHTTPClientTransport(

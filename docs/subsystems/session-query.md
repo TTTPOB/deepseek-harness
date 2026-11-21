@@ -6,14 +6,6 @@ Query vocabulary over the live-preferred logical session corpus. The [Service De
 
 Source: [`packages/session-query/session-query/src/types.ts`](../../packages/session-query/session-query/src/types.ts)
 
-<a id="synchronous-session-sampling"></a>
-
-## Synchronous session sampling
-
-`captureSession` selects the live or unpublished prepared Session and passes the original instance as a readonly `SessionCaptureReader`, together with its source observation, to one synchronous callback. Return independently owned data; do not yield, mutate or retain the Session or observation, or return borrowed containers. The observation lease releases on success and callback failure; callback exceptions propagate unchanged. Source authorization belongs to the caller.
-
-Use `deriveEventMessage` with events from the paired observation to apply the store’s message definitions; a node with no message returns `null`. Select `projectionMode: none` for node-only reads or `all` for recorded projection summaries. Cold sampling uses store preparation without activating an Agent or writing persistence; the source observation excludes the preparation end-seed marker even though Session `seq` includes it.
-
 ## Logical records
 
 `SessionRecord` is returned by the cross-corpus list. It exposes source availability independently from the cloned live-preferred header. `SessionEventRecord` is a lightweight raw-log projection; classification uses the same `foldSurface()` transitions as model-history derivation.
@@ -398,19 +390,14 @@ Exact reads, filters, and traces are backend-independent concrete behavior. A ba
 observeSession( sessionId: SessionId, options: SessionObservationOptions = {}, ): Promise<SessionObservation>
 
 /**
- * Sample the current live or unpublished prepared Session in one synchronous callback.
- * Uses store message definitions, with no Agent activation or persistent writes.
- * The runtime reader is the original full Session. Do not mutate it, yield, retain
- * its observation, or return borrowed containers; return independently owned data.
- * A cold observation excludes the end-seed marker added by preparation; Session seq includes it.
- * The lease releases in finally on success or callback failure. Cold cancellation
- * uses the observation error taxonomy; callback exceptions propagate unchanged.
- * @param sessionId - logical Session identity; caller owns source authorization.
- * @param capture - synchronous callback over the selected Session and its source observation.
- * @param options - cancellation and projection selection; no preparation-mode override.
- * @returns independently owned callback output after releasing the observation lease.
+ * Inspect domain-owned state without attaching or resuming a cold Session.
+ * The getter runs synchronously after preparation and must not mutate or retain the Session.
+ * @param sessionId - logical Session identity.
+ * @param read - domain getter returning detached data.
+ * @param signal - preparation cancellation.
+ * @returns the getter's value at the current live or prepared cut.
  */
-captureSession<Value>( sessionId: SessionId, capture: (session: SessionCaptureReader, observation: SessionObservation) => Value & (Value extends PromiseLike<unknown> ? never : unknown), options: SessionObservationOptions = {}, ): Promise<Value>
+inspectSession<T>(sessionId: SessionId, read: (session: Session) => T, signal?: AbortSignal): Promise<T>
 
 /**
  * Search the live-preferred logical corpus and group by session.
@@ -436,22 +423,6 @@ abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchE
 listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
 
 /**
- * Page newest-first metadata from an immutable snapshot; continuation never re-lists persistence.
- * @param request - metadata filters, positive page size, and optional snapshot cursor.
- * @param signal - cancellation for metadata observation and waiting.
- * @returns detached records; expired, evicted, or unloaded snapshots reject with STALE_CURSOR.
- */
-async pageSessions(request: SessionMetadataPageRequest, signal?: AbortSignal): Promise<SessionSearchPage<SessionRecord>>
-
-/**
- * Project only one ascending raw-event page from one live or prepared observation.
- * @param request - target, exclusive seq bound, optional types and text, and positive page size.
- * @param signal - cancellation during cold resolution and page scanning.
- * @returns page metadata, exact source header and observed upper seq, and optional continuation.
- */
-async pageEvents(request: SessionEventPageRequest, signal?: AbortSignal): Promise<SessionEventPage>
-
-/**
  * Read and replay-validate one complete logical session log without making it live.
  * @param sessionId - live or persisted session id to read.
  * @returns cloned header and complete raw event log from one observation.
@@ -460,9 +431,9 @@ async pageEvents(request: SessionEventPageRequest, signal?: AbortSignal): Promis
 async readSession(sessionId: SessionId): Promise<SessionLogSnapshot>
 
 /**
- * Filter logical sessions; exact id clauses avoid a complete persistence listing.
+ * Filter the complete logical corpus with provider-independent predicates.
  * @param filters - ANDed session metadata and availability clauses.
- * @param signal - optional cancellation for persistence observations.
+ * @param signal - optional cancellation for persistence listing.
  * @returns matching cloned records in deterministic newest-first order.
  */
 async filterSessions( filters: readonly SessionResultFilter[], signal?: AbortSignal, ): Promise<SessionRecord[]>
@@ -510,7 +481,7 @@ async listEvents(sessionId: SessionId): Promise<SessionEventRecord[]>
 async filterEvents( sessionId: SessionId, filters: readonly SessionEventResultFilter[], ): Promise<SessionEventSearchDocument[]>
 
 /**
- * Read original current surface events from an exact cut, reusing owner-held analysis.
+ * Read one session's complete current model surface from one corpus observation.
  * @param sessionId - live-preferred session id to read.
  * @returns cloned header, current surface, and the last sequence number included in the raw-log capture.
  * @throws when source resolution fails or the session surface is invalid.
@@ -527,7 +498,7 @@ async readSurface(sessionId: SessionId): Promise<SessionSurfaceSnapshot>
 async traceSession(sessionId: SessionId, signal?: AbortSignal): Promise<SessionLineageTrace>
 
 /**
- * Trace direct replacements and citations at an exact cut, advancing only unseen events.
+ * Trace one event's direct positional replacements and cited source events.
  * @param request - target session id and event seq.
  * @param signal - optional cancellation for persisted source resolution.
  * @returns source header, direct links, and the target's positional replacement chain.
@@ -544,7 +515,7 @@ async traceEvent(request: SessionEventTraceRequest, signal?: AbortSignal): Promi
 async readEvent(request: SessionEventReadRequest, signal?: AbortSignal): Promise<SessionEventWindow>
 ```
 
-Types: [SessionId](core.md) · [SessionTitleSnapshot](session-title.md)
+Types: [Session](session.md) · [SessionId](core.md) · [SessionTitleSnapshot](session-title.md)
 
 Source: [`packages/session-query/session-query/src/index.ts`](../../packages/session-query/session-query/src/index.ts)
 <!-- END GENERATED cordis-surface -->

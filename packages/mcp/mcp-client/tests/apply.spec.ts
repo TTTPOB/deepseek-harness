@@ -4,13 +4,12 @@
  */
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import assert from 'node:assert/strict'
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import type { Transport } from '@modelcontextprotocol/client'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
-import type { Config } from '@deepseek-ai/dsh-mcp-client'
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
 // ---- Mock MCP SDK ----
 
@@ -25,8 +24,15 @@ const { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotification
   ) => Promise<unknown>>()
   const mockSetNotificationHandler = vi.fn()
   class MockClient {
-    transport = {}
-    connect = mockConnect
+    transport: Transport | undefined
+    onclose: (() => void) | undefined
+    async connect(transport: Transport): Promise<void> {
+      this.transport = transport
+      const onclose = transport.onclose
+      transport.onclose = () => { onclose?.(); this.onclose?.() }
+      await transport.start()
+      await mockConnect.call(this)
+    }
     close = mockClose
     listTools = mockListTools
     callTool = mockCallTool
@@ -39,13 +45,28 @@ const { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotification
   return { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotificationHandler, MockClient }
 })
 
-vi.mock('@modelcontextprotocol/client', () => ({
+vi.mock('@modelcontextprotocol/client', async importOriginal => ({
+  ...await importOriginal<typeof import('@modelcontextprotocol/client')>(),
   Client: MockClient,
-  StreamableHTTPClientTransport: vi.fn(),
+  StreamableHTTPClientTransport: vi.fn(function () {
+    return {
+      onclose: undefined as (() => void) | undefined,
+      start: () => Promise.resolve(),
+      send: () => Promise.resolve(),
+      close() { this.onclose?.(); return Promise.resolve() },
+    }
+  }),
 }))
 
 vi.mock('@modelcontextprotocol/client/stdio', () => ({
-  StdioClientTransport: vi.fn(),
+  StdioClientTransport: vi.fn(function () {
+    return {
+      onclose: undefined as (() => void) | undefined,
+      start: () => Promise.resolve(),
+      send: () => Promise.resolve(),
+      close() { this.onclose?.(); return Promise.resolve() },
+    }
+  }),
 }))
 
 // vi.mock is hoisted above static imports, so the module under test sees the
@@ -56,6 +77,7 @@ import { apply, name, inject, Config as ConfigSchema } from '@deepseek-ai/dsh-mc
 
 async function mountRegistry(): Promise<Context> {
   const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(NativeToolExecutor)
@@ -71,7 +93,7 @@ function sleep(ms: number): Promise<void> {
   return gate.promise
 }
 
-const stdioConfig: Config = {
+const stdioConfig = ConfigSchema({
   transport: 'stdio',
   serverName: 'srv',
   command: 'echo',
@@ -79,8 +101,9 @@ const stdioConfig: Config = {
   env: {},
   cwd: '',
   toolCallTimeoutMs: 60_000,
+  startupTimeoutMs: 30_000,
   failOnStartupError: false,
-}
+})
 
 // ---- Tests ----
 
@@ -122,26 +145,15 @@ describe('mcp-client plugin module exports', () => {
     expect(resolved.serverName).toBe('github-prod_1')
   })
 
-  it('preserves the SDK default when no stdio buffer size is configured', () => {
-    expect(ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo' } as never))
-      .not.toHaveProperty('maxBufferSize')
-  })
-
-  it('accepts a positive integer stdio buffer size and rejects invalid limits', () => {
-    expect(ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo', maxBufferSize: 67_108_864 } as never))
-      .toHaveProperty('maxBufferSize', 67_108_864)
-    for (const maxBufferSize of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-      expect(() => ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo', maxBufferSize } as never))
-        .toThrow()
-    }
-  })
-
   it('Config schema materializes reconnect defaults and merges partial overrides', () => {
     const omitted = ConfigSchema({
       transport: 'stdio',
       serverName: 'srv',
       command: 'echo',
     } as never)
+    expect(omitted.startupTimeoutMs).toBeUndefined()
+    expect(omitted.closeTimeoutMs).toBe(5_000)
+    expect(omitted.expandTemplates).toBe(false)
     expect(omitted.reconnect).toEqual({ enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 })
 
     const partial = ConfigSchema({
@@ -170,8 +182,8 @@ describe('apply (plugin lifecycle)', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     mockConnect.mockResolvedValue(undefined)
-    mockClose.mockImplementation(function (this: { onclose?: () => void }) {
-      this.onclose?.()
+    mockClose.mockImplementation(function (this: { transport?: Transport }) {
+      this.transport?.onclose?.()
       return Promise.resolve()
     })
     mockListTools.mockResolvedValue({
@@ -204,14 +216,8 @@ describe('apply (plugin lifecycle)', () => {
     expect(mockConnect).toHaveBeenCalled()
     expect(mockListTools).toHaveBeenCalled()
     expect(mockSetNotificationHandler).toHaveBeenCalled()
-    expect(vi.mocked(StdioClientTransport).mock.calls.at(-1)?.[0]).not.toHaveProperty('maxBufferSize')
     expect(ctx.tools.get('mcp__srv__remote')).toBeDefined()
     expect(ctx.tools.get('remote')).toBeUndefined()
-  })
-
-  it('passes the configured byte limit to the SDK stdio transport', async () => {
-    await apply(ctx, { ...stdioConfig, serverName: 'large', maxBufferSize: 67_108_864 })
-    expect(StdioClientTransport).toHaveBeenCalledWith(expect.objectContaining({ maxBufferSize: 67_108_864 }))
   })
 
   it('keeps the Cordis plugin loading until initial discovery publishes its tools', async () => {
@@ -244,8 +250,8 @@ describe('apply (plugin lifecycle)', () => {
   it('closes the transport when its owner unloads during initial connection', async () => {
     const connecting: PromiseWithResolvers<void> = Promise.withResolvers()
     mockConnect.mockImplementation(() => connecting.promise)
-    mockClose.mockImplementation(function (this: { onclose?: () => void }) {
-      this.onclose?.()
+    mockClose.mockImplementation(function (this: { transport?: Transport }) {
+      this.transport?.onclose?.()
       connecting.resolve()
       return Promise.resolve()
     })
@@ -381,7 +387,7 @@ describe('apply (plugin lifecycle)', () => {
       failOnStartupError: true,
     })).rejects.toThrow('initial connection or tool synchronization failed')
 
-    expect(mockListTools).toHaveBeenCalledTimes(2)
+    expect(mockListTools).toHaveBeenCalledTimes(1)
     expect(ctx.tools.get('mcp__srv__remote')?.description).toBe('Foreign squatter')
     await ctx.fiber.dispose()
   })
@@ -439,8 +445,8 @@ describe('apply (plugin lifecycle)', () => {
   })
 
   it('effect disposer handles client.close failure gracefully', async () => {
-    mockClose.mockImplementation(function (this: { onclose?: () => void }) {
-      this.onclose?.()
+    mockClose.mockImplementation(function (this: { transport?: Transport }) {
+      this.transport?.onclose?.()
       return Promise.reject(new Error('already closed'))
     })
 
@@ -454,14 +460,15 @@ describe('apply (plugin lifecycle)', () => {
   })
 
   it('uses streamable-http config path', async () => {
-    const httpConfig: Config = {
+    const httpConfig = ConfigSchema({
       transport: 'streamable-http',
       serverName: 'web',
       url: 'http://localhost:3000/mcp',
       headers: { Authorization: 'Bearer x' },
       toolCallTimeoutMs: 30_000,
+      startupTimeoutMs: 30_000,
       failOnStartupError: false,
-    }
+    })
 
     await apply(ctx, httpConfig)
 

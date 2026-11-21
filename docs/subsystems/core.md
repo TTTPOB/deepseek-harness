@@ -46,9 +46,9 @@ interface AgentHandle {
 }
 ```
 
-`CreateAgentOptions` carries the shared identity and everything a fresh agent needs before publication: an optional live `parentAgent`, session metadata (`meta` — validated `cwd`, fork lineage, the `isSeeded` marker, origin classification, delegation depth, and `agentPreset`), the exact fork cut in sibling field `inheritedEventCount`, an optional `seed` replay prefix, per-agent `AgentOptions`, a creation-only cancellation `signal`, and `setup`. `ResumeAgentOptions` is the persisted-identity counterpart: `resumeSessionId`, `parentAgent`, `agentOptions`, `signal`, and `setup`. The `setup` callback (`AgentSetup`) receives `(agentCtx, agent)` after Session store entry and completed `session/created`, before Agent registration: the context owns scoped registrations, while the explicit Agent supplies the exact child Session without a reverse property on the Context. Everything registered through `agentCtx` exists before `agent/created` and the first prompt assembly. Setup may return a synchronous commit invoked immediately before publication; a setup rejection, commit throw, or owner disposal unwinds the transaction, removes the Session, and preserves restored pending input and already stored events.
+`CreateAgentOptions` carries the shared identity and everything a fresh agent needs before publication: session metadata (`meta` — validated `cwd`, fork lineage, the `isSeeded` marker, origin classification, delegation depth, and `agentPreset`), the exact fork cut in sibling field `inheritedEventCount`, an optional `seed` replay prefix, per-agent `AgentOptions`, a creation-only cancellation `signal`, and `setup`. `ResumeAgentOptions` is the persisted-identity counterpart: `resumeSessionId`, `agentOptions`, `signal`, and `setup`. The `setup` callback (`AgentSetup`) receives `(agentCtx, agent)` after Session store entry and completed `session/created`, before Agent registration: the context owns scoped registrations, while the explicit Agent supplies the exact child Session without a reverse property on the Context. Everything registered through `agentCtx` exists before `agent/created` and the first prompt assembly. Setup may return a synchronous commit invoked immediately before publication; a setup rejection, commit throw, or owner disposal unwinds the transaction, removes the Session, and preserves restored pending input and already stored events.
 
-`AgentFactory` is the creation interface behind the registry: the loop registers its factory via `ctx.agents.setFactory()`, so consumers use `ctx.agents` without depending on the concrete loop package. A runtime child creator sets `options.parentAgent`; the registry passes the options and caller Context to the factory without deriving one from the other. The exact `create`/`resume` signatures and rollback contracts are in the [generated section](#ctxagents--agentregistry) below.
+`AgentFactory` is the creation interface behind the registry: the loop registers its factory via `ctx.agents.setFactory()`, so consumers use `ctx.agents` without depending on the concrete loop package. The registry passes creation options and the caller Context to the factory; the caller Context owns the returned handle's lifetime. The exact `create`/`resume` signatures and rollback contracts are in the [generated section](#ctxagents--agentregistry) below.
 
 ## The agent handle
 
@@ -78,6 +78,7 @@ interface Agent {
    * Clear queued and steering work — unless `keepInbox` — and abort the active
    * turn or between-turn task. The first cause wins for that activity. With no
    * active activity, cancellation is a no-op and does not arm later work.
+   * Queue-write failures still abort the activity and propagate to the caller.
    * @param cause - the stable caller intent carried by the active operation signal.
    * @param options - cancellation options; `keepInbox` preserves pending work.
    */
@@ -585,9 +586,9 @@ Registry of YAML-declared presets and the revisions live Agents retain.
  */
 presetForSession(session: Session): string | null
 
-/** Register a declaration; mount it on first Agent or cold inspection use.
- * @param definition - preset identity, metadata and child plugin declarations.
- * @returns an asynchronous disposer that unregisters the declaration and collects unused mounts.
+/** Register and eagerly load a definition; activation failure remains visible in the roster.
+ * @param definition Parsed configuration supplied by the declaring plugin.
+ * @returns Definition disposer after activation or its diagnostic settles; the declaring plugin owns it.
  */
 async register(definition: PresetDefinition): Promise<() => Promise<void>>
 
@@ -618,12 +619,6 @@ async resolve(id?: string): Promise<AgentPreset>
  * @returns The declared composition beside its published metadata.
  */
 @Remote('read') readDocument(agentPreset: string): Promise<AgentPresetDocument>
-
-/** Transfer a workspace lease into the Agent scope before caller setup.
- * @param ctx - scoped Agent context that owns the transferred lease.
- * @param placement - retained workspace placement to release with the Agent scope.
- */
-place(ctx: Context, placement: PresetPlacement): void
 
 /** Bind an unpublished Agent to the current preset revision.
  * @param ctx Agent context from its setup callback.
@@ -690,7 +685,7 @@ Source: [`packages/preset/agent-preset-registry/src/index.ts`](../../packages/pr
 
 Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by whichever plugin implements the AgentFactory (`@deepseek-ai/dsh-agent-loop`), registered via setFactory.
 
-Initiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain. Inherited resources share a slot cleared when the operation settles, so they do not retain its Agent after completion.
+Initiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.
 
 ```ts cordis-catalog
 /**
@@ -706,9 +701,8 @@ turnBoundaryOf(session: Session): TurnBoundaryProjection
  * that also supports agentless calls. When a parent creates a child, setup
  * reports the causal parent while the setup callback's Agent parameter
  * identifies the child.
- * @returns the inherited Agent while its operation is in flight, including
- *   before registration; `undefined` outside a boundary, inside a clearing
- *   boundary, or in inherited callbacks after the operation settles.
+ * @returns the inherited Agent, or `undefined` outside an initiator boundary
+ *   and inside an explicit clearing boundary.
  * @throws when this service instance has been disposed.
  */
 currentInitiator(): Agent | undefined
@@ -730,9 +724,6 @@ requireInitiator(): Agent
  * lifetime.
  * A queue or wire receiver may establish this boundary only after validating
  * explicit identity and resolving the exact live Agent; this method does neither.
- * Inherited callbacks lose attribution when the operation returns a non-Promise
- * value, throws, or its returned Promise settles. A Promise whose species prevents settlement
- * observation retains attribution and is excluded from teardown draining.
  * Detached work remains owned by the subsystem that starts it.
  * @param agent - initiating Agent to inherit; presence is neither liveness proof nor authorization.
  * @param operation - synchronous or asynchronous operation to invoke.
@@ -769,19 +760,12 @@ withoutInitiator<T>(operation: () => T): T
 setFactory(factory: AgentFactory): () => void
 
 /**
- * Register setup run before each create/resume caller setup.
- * @param setup - contribution composed into unpublished Agent setup.
- * @returns disposer owned by the registering plugin fiber.
- */
-registerSetup(setup: AgentSetup): () => void
-
-/**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
  * registered or creation/setup fails. The resolved {@link AgentHandle} lets
  * the owner tear down exactly this agent.
- * @param options - shared identity, optional live parent, session seed/metadata, and agent options.
+ * @param options - shared identity, session seed/metadata, and agent options.
  * @returns the handle after setup, rollback-covered publication, and loop start complete.
  */
 async create(options: CreateAgentOptions): Promise<AgentHandle>
@@ -790,7 +774,7 @@ async create(options: CreateAgentOptions): Promise<AgentHandle>
  * Load a persisted session and resume an agent on it through the registered
  * factory. Rejects if no factory is registered; the factory rejects if
  * session persistence is not configured or persistence/setup fails.
- * @param options - persisted identity, optional live parent, configuration, and setup.
+ * @param options - persisted identity, configuration, and setup.
  * @returns the handle after setup, rollback-covered publication, and loop start complete.
  */
 async resume(options: ResumeAgentOptions): Promise<AgentHandle>
@@ -802,8 +786,7 @@ async resume(options: ResumeAgentOptions): Promise<AgentHandle>
  * (`scopeTarget(agent, agent)`): the subject is the agent in hand, so the
  * emits are scope-filtered regardless of which context invoked `register`
  * (calling through `agent.ctx` scopes EFFECTS; dispatch scoping always
- * requires passing the carrier). The entry is a runtime root; factory-backed
- * creation uses `options.parentAgent` for child ownership. Await the registration before using the agent.
+ * requires passing the carrier). Await registration before using the agent.
  * @param agent - the already-constructed agent to record in the store.
  * @returns the awaitable Cordis effect disposer (single-shot; a repeat call
  *   returns undefined without awaiting an in-flight teardown). Exact
@@ -823,15 +806,12 @@ register(agent: Agent): ReturnType<Context['effect']>
  * returned detach closure into its pre-installed composite teardown before
  * calling {@link announce}. Ordinary callers use {@link register}.
  * @param agent - the prepared, unpublished agent.
- * @param owner - explicitly supplied live runtime owner, or
- *   undefined for a top-level runtime root. This is runtime ownership, not
- *   the resumed session's durable parent lineage.
  * @returns an idempotent closure that removes this exact entry and emits
  *   `agent/disposed` with listener failures contained. When called from a
  *   `agent/created` listener, removal and disposal wait until the serial
  *   creation dispatch settles.
  */
-enter(agent: Agent, owner: Agent | undefined): () => void
+enter(agent: Agent): () => void
 
 /**
  * Announce an agent previously inserted with {@link enter}.
@@ -853,28 +833,10 @@ async announce(agent: Agent, source: SessionStartSource, signal?: AbortSignal): 
 get(id: SessionId): Agent | undefined
 
 /**
- * Test whether a live agent was created through one exact parent agent's
- * scoped context. Runtime ownership is independent of durable session
- * lineage and remains unambiguous when unrelated providers reuse an id.
- * @param id - the candidate child agent's shared agent/session id.
- * @param owner - the expected runtime creator agent.
- * @returns true only while the exact child entry is live under that owner.
- */
-isOwnedBy(id: SessionId, owner: Agent): boolean
-
-/**
  * All live agents, in registration order.
  * @returns a fresh array; mutating it does not affect the registry.
  */
 list(): Agent[]
-
-/**
- * All live top-level agents in registration order. A top-level agent was
- * created without an owning agent context; durable session lineage does not
- * affect this runtime relation, so a resumed fork may still be a root.
- * @returns a fresh array; mutating it does not affect the registry.
- */
-roots(): Agent[]
 ```
 
 Types: [Session](session.md)

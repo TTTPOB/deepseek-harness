@@ -21,7 +21,7 @@ import SubagentModelSelectionConfig from '../src/model-selection-settings.ts'
 import {
   subagentModelSelectionPolicy,
   subagentModelSelectionProjectionDefinition,
-} from '@deepseek-ai/dsh-subagent'
+} from '../src/model-selection-state.ts'
 import { callSubagent, ownContext, text } from './harness.ts'
 
 const ALLOWED_MODELS = [{ provider: 'alpha', model: 'fast-model' }]
@@ -251,7 +251,6 @@ describe('SubagentModelSelectionConfig', () => {
           ctx.emit('tools/change')
         }
       })
-      await createAgent(ctx, 'policy-refresh-owner')
       const register = vi.spyOn(ctx.tools, 'register')
 
       const agent = await createAgent(ctx, 'policy-refresh')

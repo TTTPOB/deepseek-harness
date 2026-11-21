@@ -24,7 +24,6 @@ function observation(
       ...options.cwd === undefined ? {} : { cwd: options.cwd },
     },
     events,
-    readEvents: () => events,
     inheritedEventCount: SessionLogOffset(0),
     cursor: -1,
     projections: {

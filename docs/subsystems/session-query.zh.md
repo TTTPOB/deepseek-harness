@@ -6,14 +6,6 @@
 
 源码：[`packages/session-query/session-query/src/types.ts`](../../packages/session-query/session-query/src/types.ts)
 
-<a id="synchronous-session-sampling"></a>
-
-## Session 同步采样
-
-`captureSession` 选择 live 或尚未发布的已准备 Session，将原始实例以只读 `SessionCaptureReader` 类型连同其来源观察传给一次同步回调。返回独立拥有的数据；不要让出执行、修改或保留 Session 或观察，也不要返回借用容器。成功或回调失败时都会释放观察租约；回调异常原样传播。来源授权由调用方负责。
-
-对配对观察中的事件使用 `deriveEventMessage`，以应用存储的消息定义；没有消息的节点返回 `null`。仅需节点读取时选择 `projectionMode: none`，需要已记录的投影摘要时选择 `all`。冷采样使用存储准备机制，不激活 Agent，也不写入持久化；来源观察不包含准备阶段的 end-seed 标记，但 Session 的 `seq` 包含它。
-
 ## 逻辑记录
 
 `SessionRecord` 由全语料库列表返回。它除了克隆的、优先取自 live 源的 header 外，还单独公开各源的可用性。`SessionEventRecord` 是轻量的原始日志投影；分类使用与模型历史推导相同的 `foldSurface()` 状态转换。
@@ -398,19 +390,14 @@ Exact reads, filters, and traces are backend-independent concrete behavior. A ba
 observeSession( sessionId: SessionId, options: SessionObservationOptions = {}, ): Promise<SessionObservation>
 
 /**
- * Sample the current live or unpublished prepared Session in one synchronous callback.
- * Uses store message definitions, with no Agent activation or persistent writes.
- * The runtime reader is the original full Session. Do not mutate it, yield, retain
- * its observation, or return borrowed containers; return independently owned data.
- * A cold observation excludes the end-seed marker added by preparation; Session seq includes it.
- * The lease releases in finally on success or callback failure. Cold cancellation
- * uses the observation error taxonomy; callback exceptions propagate unchanged.
- * @param sessionId - logical Session identity; caller owns source authorization.
- * @param capture - synchronous callback over the selected Session and its source observation.
- * @param options - cancellation and projection selection; no preparation-mode override.
- * @returns independently owned callback output after releasing the observation lease.
+ * Inspect domain-owned state without attaching or resuming a cold Session.
+ * The getter runs synchronously after preparation and must not mutate or retain the Session.
+ * @param sessionId - logical Session identity.
+ * @param read - domain getter returning detached data.
+ * @param signal - preparation cancellation.
+ * @returns the getter's value at the current live or prepared cut.
  */
-captureSession<Value>( sessionId: SessionId, capture: (session: SessionCaptureReader, observation: SessionObservation) => Value & (Value extends PromiseLike<unknown> ? never : unknown), options: SessionObservationOptions = {}, ): Promise<Value>
+inspectSession<T>(sessionId: SessionId, read: (session: Session) => T, signal?: AbortSignal): Promise<T>
 
 /**
  * Search the live-preferred logical corpus and group by session.
@@ -436,22 +423,6 @@ abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchE
 listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
 
 /**
- * Page newest-first metadata from an immutable snapshot; continuation never re-lists persistence.
- * @param request - metadata filters, positive page size, and optional snapshot cursor.
- * @param signal - cancellation for metadata observation and waiting.
- * @returns detached records; expired, evicted, or unloaded snapshots reject with STALE_CURSOR.
- */
-async pageSessions(request: SessionMetadataPageRequest, signal?: AbortSignal): Promise<SessionSearchPage<SessionRecord>>
-
-/**
- * Project only one ascending raw-event page from one live or prepared observation.
- * @param request - target, exclusive seq bound, optional types and text, and positive page size.
- * @param signal - cancellation during cold resolution and page scanning.
- * @returns page metadata, exact source header and observed upper seq, and optional continuation.
- */
-async pageEvents(request: SessionEventPageRequest, signal?: AbortSignal): Promise<SessionEventPage>
-
-/**
  * Read and replay-validate one complete logical session log without making it live.
  * @param sessionId - live or persisted session id to read.
  * @returns cloned header and complete raw event log from one observation.
@@ -460,9 +431,9 @@ async pageEvents(request: SessionEventPageRequest, signal?: AbortSignal): Promis
 async readSession(sessionId: SessionId): Promise<SessionLogSnapshot>
 
 /**
- * Filter logical sessions; exact id clauses avoid a complete persistence listing.
+ * Filter the complete logical corpus with provider-independent predicates.
  * @param filters - ANDed session metadata and availability clauses.
- * @param signal - optional cancellation for persistence observations.
+ * @param signal - optional cancellation for persistence listing.
  * @returns matching cloned records in deterministic newest-first order.
  */
 async filterSessions( filters: readonly SessionResultFilter[], signal?: AbortSignal, ): Promise<SessionRecord[]>
@@ -510,7 +481,7 @@ async listEvents(sessionId: SessionId): Promise<SessionEventRecord[]>
 async filterEvents( sessionId: SessionId, filters: readonly SessionEventResultFilter[], ): Promise<SessionEventSearchDocument[]>
 
 /**
- * Read original current surface events from an exact cut, reusing owner-held analysis.
+ * Read one session's complete current model surface from one corpus observation.
  * @param sessionId - live-preferred session id to read.
  * @returns cloned header, current surface, and the last sequence number included in the raw-log capture.
  * @throws when source resolution fails or the session surface is invalid.
@@ -527,7 +498,7 @@ async readSurface(sessionId: SessionId): Promise<SessionSurfaceSnapshot>
 async traceSession(sessionId: SessionId, signal?: AbortSignal): Promise<SessionLineageTrace>
 
 /**
- * Trace direct replacements and citations at an exact cut, advancing only unseen events.
+ * Trace one event's direct positional replacements and cited source events.
  * @param request - target session id and event seq.
  * @param signal - optional cancellation for persisted source resolution.
  * @returns source header, direct links, and the target's positional replacement chain.
@@ -544,7 +515,7 @@ async traceEvent(request: SessionEventTraceRequest, signal?: AbortSignal): Promi
 async readEvent(request: SessionEventReadRequest, signal?: AbortSignal): Promise<SessionEventWindow>
 ```
 
-Types: [SessionId](core.zh.md) · [SessionTitleSnapshot](session-title.zh.md)
+Types: [Session](session.zh.md) · [SessionId](core.zh.md) · [SessionTitleSnapshot](session-title.zh.md)
 
 Source: [`packages/session-query/session-query/src/index.ts`](../../packages/session-query/session-query/src/index.ts)
 <!-- END GENERATED cordis-surface -->

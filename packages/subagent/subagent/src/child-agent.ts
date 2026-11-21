@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
 // Type-only: make `ctx.get('sandboxPolicy')`, `ctx.get('approval')`, and
@@ -58,14 +58,15 @@ export function resolveChildDepth(parent: Agent, maxDepth: number | undefined): 
 }
 
 /**
- * Resolve the parent values inherited by a child. The Agent's current model
- * selection owns provider, model, and reasoning effort, including selections
- * made before a request. Creation options retain the output-token limit.
+ * Resolve the parent values inherited by a child. The latest request header
+ * owns provider, model, and reasoning effort after request-time selection;
+ * creation options remain the fallback before the first request and retain
+ * the configured output-token limit.
  * @param parent - delegating parent Agent.
  * @returns detached Agent options for child-option merging.
  */
 export function parentAgentOptionsForDelegation(parent: Agent): AgentOptions {
-  const requestConfig = parent.model.current()
+  const requestConfig = parent.session.requestHeader()?.config
   if (requestConfig === undefined) return { ...parent.options }
   const {
     provider: _createdProvider,
@@ -154,7 +155,7 @@ export function childSessionMeta(
 
 /** The scoped composition a child agent's creation window applies. */
 export interface ChildComposition {
-  /** Independently mounted preset; omission shares the parent's standing generation. */
+  /** Preset to mount; omission shares a supplied creator or uses host composition. */
   readonly agentPreset?: string | undefined
   /** Historical descriptor persona reapplied only during cold resume. */
   readonly persona?: string | undefined
@@ -175,16 +176,17 @@ export const SUBAGENT_DELEGATION_CONTEXT
 
 /**
  * Compose a child before publication and restore historical descriptor overrides.
- * Explicit selection mounts the named preset; omission synchronously joins the
- * parent's current generation. Registrations belong to the child's scope.
+ * Explicit selection mounts the named preset. Omission joins a supplied creator's
+ * current generation; a restored child without a saved preset uses host composition.
+ * Registrations belong to the child's scope.
  * @param childCtx - the child agent's scoped creation context.
- * @param parent - the delegating parent used when no preset is selected.
+ * @param parent - creator for fresh delegation; absent during target-only restoration.
  * @param composition - independent preset and any overrides read from a historical descriptor.
  * @returns A promise when mounting an independent preset; otherwise completes synchronously.
  */
 export function applyChildComposition(
   childCtx: Context,
-  parent: Agent,
+  parent: Agent | undefined,
   composition: ChildComposition,
 ): void | Promise<void> {
   if (composition.agentPreset !== undefined) {
@@ -196,7 +198,7 @@ export function applyChildComposition(
       applyChildOverrides(childCtx, composition)
     })
   }
-  childCtx.get('agentPresets')?.composeFrom(childCtx, parent.ctx)
+  if (parent !== undefined) childCtx.get('agentPresets')?.composeFrom(childCtx, parent.ctx)
   applyChildOverrides(childCtx, composition)
 }
 
@@ -275,16 +277,4 @@ export function appendDelegatedPolicyOverrides(
   if (overrides.permissionPreset !== undefined) {
     childSession.append('permission/preset', { preset: overrides.permissionPreset })
   }
-}
-
-/** Identity and lineage inputs shared by every in-process child creation. */
-export interface ChildCreateInputs {
-  /** The child's reserved session id. */
-  readonly sessionId: SessionId
-  /** The delegating parent agent. */
-  readonly parent: Agent
-  /** The resolved delegation depth. */
-  readonly childDepth: number
-  /** How many leading seed events came from the parent's log. */
-  readonly lineageSeedLength: number
 }

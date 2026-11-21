@@ -8,15 +8,27 @@ import type {} from '@deepseek-ai/dsh-agent'
 import {
   subagentModelSelectionPolicy,
   subagentModelSelectionProjectionDefinition,
-} from '@deepseek-ai/dsh-subagent'
+} from './model-selection-state.ts'
 import {
   AllowedModelRouteSchema,
   assertAllowedModelRoutes,
   type AllowedModelRoute,
-} from '@deepseek-ai/dsh-subagent'
+} from './model-selection.ts'
 
-import type { SubagentModelSelectionSettings, SubagentModelSelectionSettingsSource } from '@deepseek-ai/dsh-subagent'
-export type { SubagentModelSelectionSettings } from '@deepseek-ai/dsh-subagent'
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** User preference sampled during Agent creation. */
+    subagentModelSelection: SubagentModelSelectionConfig
+  }
+}
+
+/** Stored user preference; the shipped composition defaults it off. */
+export interface SubagentModelSelectionSettings {
+  /** Whether new top-level Sessions receive model selection. */
+  enabled: boolean
+  /** Exact child LLM routes offered to new top-level Sessions. */
+  allowedModels: AllowedModelRoute[]
+}
 
 /** Optional deployment base for the preference. */
 export interface Config {
@@ -27,7 +39,7 @@ export interface Config {
 }
 
 /** Host settings owner that records Session authorization before the first model request. */
-export class SubagentModelSelectionConfig extends Service implements SubagentModelSelectionSettingsSource {
+export class SubagentModelSelectionConfig extends Service {
   static inject = ['sessionProjections', 'sessions']
 
   static Config = z.object({
@@ -67,7 +79,7 @@ export class SubagentModelSelectionConfig extends Service implements SubagentMod
    * Read a detached selection preference for the next fresh top-level Session.
    * @returns the enabled state and exact allowed routes.
    */
-  current(): SubagentModelSelectionSettings {
+  private current(): SubagentModelSelectionSettings {
     const enabled = this.config.enabled.get()
     const allowedModels = this.config.allowedModels.get()
     assertAllowedModelRoutes(allowedModels)

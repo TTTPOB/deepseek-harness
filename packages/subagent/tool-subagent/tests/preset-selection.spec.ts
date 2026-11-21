@@ -342,9 +342,10 @@ describe('spawn preset selection', () => {
         provider: 'spawn', agentPreset: 'later',
       } }],
     })
-    await using lease = await ctx.agentPresets.acquireScope('pending-reference')
+    const lease = await ctx.agentPresets.acquireScope('pending-reference')
     const definition = ctx.tools.get('subagent', lease.key)
     expect(definition).toBeDefined()
+    await lease[Symbol.asyncDispose]()
     const handle = await ctx.agents.create({
       sessionId: SessionId('retry-preset'),
       agentOptions: { provider: 'mock', model: 'mock' },
@@ -364,7 +365,7 @@ describe('spawn preset selection', () => {
     const retried = await callSubagent(ctx, args, { agent: handle.agent })
     expect(retried.isError).not.toBe(true)
     expect(text(retried)).toContain('started subagent')
-    await ctx.subagents.waitForChildren(handle.agent)
+    await ctx.subagents.waitForTreeWork(handle.agent)
     expect(ctx.tools.get('subagent', handle.agent)).toBe(definition)
   })
 })
