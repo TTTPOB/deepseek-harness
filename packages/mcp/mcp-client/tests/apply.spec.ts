@@ -237,8 +237,9 @@ describe('apply (plugin lifecycle)', () => {
   })
 
   it('passes the configured byte limit to the SDK stdio transport', async () => {
-    await apply(ctx, { ...stdioConfig, serverName: 'large', maxBufferSize: 67_108_864 })
-    expect(StdioClientTransport).toHaveBeenCalledWith(expect.objectContaining({ maxBufferSize: 67_108_864 }))
+    const maxBufferSize = 67_108_864
+    await apply(ctx, ConfigSchema({ transport: 'stdio', command: 'echo', serverName: 'large', maxBufferSize }))
+    expect(StdioClientTransport).toHaveBeenCalledWith(expect.objectContaining({ maxBufferSize }))
   })
 
   it('keeps the Cordis plugin loading until initial discovery publishes its tools', async () => {
