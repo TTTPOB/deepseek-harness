@@ -32,10 +32,9 @@ test('artifact names follow individual manifests and a subset does not shrink th
 test('capability groups track owners and toolchain', async () => {
   const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   assert.equal(packageManager, rootManifest.packageManager)
-  const tools = plan('core', ['packages/core/tools'])
-  assert(tools.tests.includes('packages/core/tools/tests'))
+  const tools = plan('core', ['packages/core/tool-executor-ptc'])
+  assert(tools.tests.includes('packages/core/tool-executor-ptc/tests'))
   assert(plan('core').tests.includes('packages/subagent/subagent/tests'))
-  assert(plan('core').tests.includes('packages/experimental/tool-agent-team/tests'))
   const runtime = plan('core', ['packages/ptc-runtime/ptc-runtime-node'])
   assert(runtime.tests.includes('packages/ptc-runtime/ptc-runtime-node/tests'))
   const closure = artifactClosure(plan('core').packages)
@@ -164,11 +163,11 @@ test('isolated consumers preserve the qualified source Pi override without copyi
 })
 
 test('smokes reject incomplete artifact sets before installation', () => {
-  for (const script of ['smoke-session-query.mjs', 'smoke-core-packages.mjs', 'smoke-team-model-selection.mjs', 'smoke-access-navigation.mjs', 'smoke-subagent.mjs']) {
+  for (const script of ['smoke-session-query.mjs', 'smoke-core-packages.mjs', 'smoke-team-model-selection.mjs', 'smoke-access-navigation.mjs']) {
     const args = script === 'smoke-session-query.mjs'
       ? ['query.tgz', 'jsonl.tgz', 'sqlite.tgz']
       : script === 'smoke-team-model-selection.mjs'
-        ? ['subagent.tgz', 'tool-subagent.tgz', 'agent-team.tgz', 'tool-agent-team.tgz']
+        ? ['subagent.tgz', 'tool-subagent.tgz', 'tool-subagent-control.tgz']
         : []
     const result = spawnSync(process.execPath, [join(root, 'scripts', script), ...args], { encoding: 'utf8', timeout: 10_000 })
     assert.notEqual(result.status, 0)

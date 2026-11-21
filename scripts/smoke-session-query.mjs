@@ -4,6 +4,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
+import { setTimeout as delay } from 'node:timers/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -13,6 +14,18 @@ const packages = plan('session-query').packages.map(pkg => [pkg.name, pkg.versio
 const tarballs = process.argv.slice(2).map(path => resolve(path))
 assert.equal(tarballs.length, 4,
   'Usage: node scripts/smoke-session-query.mjs <session-query.tgz> <persistence-jsonl.tgz> <session-query-sqlite.tgz> <session.tgz>')
+async function searchSessions(query, request) {
+  const deadline = performance.now() + 30_000
+  for (;;) {
+    try {
+      return await query.searchSessions(request)
+    } catch (error) {
+      if (error?.code !== 'SESSION_QUERY_INDEX_WARMING' || performance.now() >= deadline) throw error
+      await delay(200)
+    }
+  }
+}
+
 const runtime = await mkdtemp(join(tmpdir(), 'dsh-session-index-artifact-'))
 try {
   await stageArtifactOverrides(runtime, plan('session-query').packages, tarballs)
@@ -149,9 +162,9 @@ try {
       content: [{ type: 'text', text }], source: { kind: 'user' },
     }), { surfaceOp: 'append' })
     append('initial needle')
-    assert.equal((await ctx.sessionQuery.searchSessions({ query: 'initial needle' })).items.length, 1)
+    assert.equal((await searchSessions(ctx.sessionQuery, { query: 'initial needle' })).items.length, 1)
     const before = { ...counters }
-    assert.equal((await ctx.sessionQuery.searchSessions({ query: 'initial needle' })).items.length, 1)
+    assert.equal((await searchSessions(ctx.sessionQuery, { query: 'initial needle' })).items.length, 1)
     assert.deepEqual(counters, before, 'Unchanged search observes no stored source')
     const prototype = sessionModule.SurfaceFoldAccumulator.prototype
     const originalAppend = prototype.append
@@ -176,7 +189,7 @@ try {
       prototype.append = originalAppend
     }
     detach()
-    const page = await ctx.sessionQuery.searchSessions({ query: 'final tail' })
+    const page = await searchSessions(ctx.sessionQuery, { query: 'final tail' })
     assert.equal(page.items.length, 1)
     assert.equal(page.items[0].live, false)
     assert.equal(page.items[0].persisted, true)
@@ -205,7 +218,7 @@ try {
         await storedWriter.close()
       }
       const request = { query: 'alpha alpha' }
-      const history = await ctx.sessionQuery.searchSessions(request)
+      const history = await searchSessions(ctx.sessionQuery, request)
       assert.deepEqual(history.items.map(item => item.header.id), ids,
         'BM25 ranks the shorter document first when actual phrase TF is equal')
       const live = ctx.sessions.prepare(ids[0], { meta: { createdAt: 20 } })
@@ -217,7 +230,7 @@ try {
       ctx.sessions.announce(unrelated)
       appendTo(unrelated, 'unrelated '.repeat(1000))
       try {
-        const mixed = await ctx.sessionQuery.searchSessions(request)
+        const mixed = await searchSessions(ctx.sessionQuery, request)
         assert.deepEqual(mixed.items.map(item => item.header.id), ids,
           'Moving identical history to live with an unrelated long live document preserves ranking')
         assert.equal(mixed.items[0].live, true)
@@ -230,10 +243,10 @@ try {
       ctx.sessions.announce(updated)
       appendTo(updated, 'fresh live marker')
       try {
-        const fresh = await ctx.sessionQuery.searchSessions({ query: 'fresh live marker' })
+        const fresh = await searchSessions(ctx.sessionQuery, { query: 'fresh live marker' })
         assert.equal(fresh.items[0].header.id, ids[0])
         assert.equal(fresh.items[0].live, true)
-        assert.deepEqual((await ctx.sessionQuery.searchSessions(request)).items.map(item => item.header.id), [ids[1]],
+        assert.deepEqual((await searchSessions(ctx.sessionQuery, request)).items.map(item => item.header.id), [ids[1]],
           'Latest live body shadows the old persisted phrase candidate')
       } finally {
         leaveUpdated()

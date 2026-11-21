@@ -6,27 +6,26 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { checkSubagentManager } from './smoke-subagent.mjs'
 
 import { plan, officialVersion, packageManager } from './daily-driver-plan.mjs'
 import { stageArtifactOverrides } from './daily-driver-artifacts.mjs'
 const expected = plan('core').packages
 const names = expected.map(pkg => pkg.name)
+const artifact = name => names.indexOf('@deepseek-ai/dsh-' + name)
 const tarballs = process.argv.slice(2).map(path => resolve(path))
-assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <tool-agent-team.tgz> <tools.tgz> <agent-loop.tgz> <ptc-runtime-node.tgz> <tool-executor-ptc.tgz>')
+assert.equal(tarballs.length, names.length, 'Usage: node scripts/smoke-core-packages.mjs <agent.tgz> <registry.tgz> <subagent.tgz> <llm-pi-ai.tgz> <mcp-client.tgz> <ptc-runtime-node.tgz> <tool-executor-ptc.tgz>')
 const store = execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'store', 'path'], { encoding: 'utf8', timeout: 60_000 }).trim()
 const root = await mkdtemp(join(tmpdir(), 'dsh-core-artifact-'))
 const run = (args, cwd = root) => execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--store-dir', dirname(store), ...args], { cwd, stdio: 'inherit', timeout: 600_000 })
 let ctx
 try {
   await stageArtifactOverrides(root, expected, tarballs)
-  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'core-artifact-smoke', private: true, type: 'module', packageManager, dependencies: { '@deepseek-ai/dsh': officialVersion, [names[5]]: 'file:./' + basename(tarballs[5]) } }))
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'core-artifact-smoke', private: true, type: 'module', packageManager, dependencies: { '@deepseek-ai/dsh': officialVersion } }))
   run(['install', '--ignore-scripts', '--config.enable-global-virtual-store=false'])
   const project = createRequire(join(root, 'package.json'))
   const host = await realpath(project.resolve('@deepseek-ai/dsh/package.json'))
   const hostRequire = createRequire(host)
-  const resolver = name => name === names[5] ? project : hostRequire
-  const load = async name => import(pathToFileURL(resolver(name).resolve(name)).href)
+  const load = async name => import(pathToFileURL(hostRequire.resolve(name)).href)
   const boot = await load('@deepseek-ai/dsh-app-boot')
   const { Context } = await load('@deepseek-ai/cordis')
   const home = join(root, 'home')
@@ -40,7 +39,7 @@ try {
   await ctx.plugin(boot.PluginPackages, { resolution })
   const packages = []
   for (const name of names) {
-    const anchor = name === names[5] ? join(root, 'package.json') : host
+    const anchor = host
     const selected = ctx.pluginPackages.packageOf(name, pathToFileURL(anchor).href)
     assert(selected, name)
     assert.equal(selected.version, expected.find(pkg => pkg.name === name).version, name)
@@ -53,8 +52,8 @@ try {
     }
     packages.push(await load(name))
   }
-  const [agent, presets, , pi, mcp, , , , ptcRuntime] = packages
-  await checkSubagentManager(dirname(hostRequire.resolve(names[2] + '/package.json')))
+  const [agent, presets, , pi, mcp] = packages
+  const ptcRuntime = packages[artifact('ptc-runtime-node')]
   const { default: Schema } = await load('@deepseek-ai/schemastery')
   const [mcpConfig] = Schema.resolve({ transport: 'stdio', serverName: 'fixture', command: 'unused', maxBufferSize: 1048576 }, mcp.Config, {})
   assert.equal(mcpConfig.maxBufferSize, 1048576)
@@ -133,12 +132,11 @@ try {
     assert.equal(typeof lease.key, 'object')
   }
   assert.equal(mounted, 0)
-  const { createScope, bindScopeParent, scopeOf } = await load('@deepseek-ai/dsh-scope')
   const { default: SystemPrompt } = await load('@deepseek-ai/dsh-system-prompt')
   const { default: Tools } = await load('@deepseek-ai/dsh-tools')
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(Tools)
-  const { defineTool } = packages[6]
+  const { defineTool } = await load('@deepseek-ai/dsh-tools')
   const { ToolCallId } = await load('@deepseek-ai/dsh-llm')
   const ptcExecutor = await load('@deepseek-ai/dsh-tool-executor-ptc')
   const calls = []
@@ -148,40 +146,6 @@ try {
       output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
       async execute() { calls.push(name); return name },
     }))
-  }
-  ctx.provide('agentTeams', { tryMembership: () => ({ role: 'lead', name: 'lead' }) })
-  // Team tools resolve their execution provider only when a teammate is spawned.
-  ctx.provide('subagents', { getProvider: () => undefined })
-  const teamPresetKey = {}
-  const ordinaryPresetKey = {}
-  const teamKey = {}
-  const ordinaryKey = {}
-  let teamOwner
-  await ctx.plugin({ inject: ['agents', 'agentTeams', 'tools', 'systemPrompt'], apply(owner) { teamOwner = owner } })
-  const teamPreset = createScope(teamOwner, teamPresetKey)
-  const teamScope = createScope(teamOwner, teamKey)
-  const ordinaryScope = createScope(teamOwner, ordinaryKey)
-  const teamBinding = bindScopeParent(teamKey, teamPresetKey)
-  const ordinaryBinding = bindScopeParent(ordinaryKey, ordinaryPresetKey)
-  const teamAgent = { id: 'team-scope-agent', ctx: teamScope.ctx }
-  const ordinaryAgent = { id: 'ordinary-scope-agent', ctx: ordinaryScope.ctx }
-  const originalList = ctx.agents.list
-  ctx.agents.list = () => [teamAgent, ordinaryAgent]
-  try {
-    const teamFiber = await teamPreset.ctx.plugin(packages[5])
-    const schemas = agent => ctx.tools.schemas(scopeOf(agent.ctx))
-    assert(schemas(teamAgent).some(tool => tool.name === 'spawn_teammate'))
-    assert(!schemas(ordinaryAgent).some(tool => tool.name === 'spawn_teammate'))
-    assert(schemas(teamAgent).find(tool => tool.name === 'send_message').parameters.properties.target)
-    teamBinding.rebind(ordinaryPresetKey)
-    ordinaryBinding.rebind(teamPresetKey)
-    ctx.emit('tools/change')
-    assert(!schemas(teamAgent).some(tool => tool.name === 'spawn_teammate'))
-    assert(schemas(ordinaryAgent).some(tool => tool.name === 'spawn_teammate'))
-    await teamFiber.dispose()
-    assert(!schemas(ordinaryAgent).some(tool => tool.name === 'spawn_teammate'))
-  } finally {
-    ctx.agents.list = originalList
   }
   const { default: FileSystem } = await load('@deepseek-ai/dsh-fs-local')
   const { default: Subprocess } = await load('@deepseek-ai/dsh-subprocess-local')
@@ -218,7 +182,7 @@ try {
     await executor.dispose()
     await fiber.dispose()
   }
-  console.log('Core artifacts resolve through official Host peers; Config, PTC native exception API, awaited setup, preset leases, Team scope switching/disposal, and PTC raw text with parse locations passed. No personal plugins or Host process used.')
+  console.log('Core artifacts resolve through official Host peers; Config, PTC native exception API, awaited setup, preset leases, PTC raw text with parse locations passed. No personal plugins or Host process used.')
 } finally {
   if (ctx) await ctx.fiber.dispose()
   await rm(root, { recursive: true, force: true })
