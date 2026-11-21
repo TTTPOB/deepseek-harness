@@ -795,7 +795,7 @@ describe('service-owned worker warmup', () => {
   it('starts listing history on activation without a search request', async () => {
     const listed = Promise.withResolvers<undefined>()
     TestPersistence.reset()
-    TestPersistence.listStarted = listed.resolve
+    TestPersistence.listStarted = () => { listed.resolve(undefined) }
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     await ctx.plugin(TestPersistence)
