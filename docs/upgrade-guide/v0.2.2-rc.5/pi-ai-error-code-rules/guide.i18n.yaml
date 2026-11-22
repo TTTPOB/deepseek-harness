@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-rc.5/pi-ai-error-code-rules/guide.md
 /:
-  en: 1b618f8d9938c5dd
-  zh: c0b26fde108e05ff
-/move-pi-ai-error-code-overrides-out-of-provider-profiles:
-  en: da6435a2a46550f2
-  zh: 1f807312b1e972f4
-/move-pi-ai-error-code-overrides-out-of-provider-profiles/change:
-  en: 791d7c96c3bf2771
-  zh: 156304159240d519
-/move-pi-ai-error-code-overrides-out-of-provider-profiles/migration:
-  en: b4602487da8747b4
-  zh: afc645d566c3a87b
+  en: 9aafeedb505f9042
+  zh: 3b82a11bd37077b6
+/move-error-code-rules-out-of-pi-ai-provider-profiles:
+  en: b1813c6b7dab08eb
+  zh: 19c5a32c0536276b
+/move-error-code-rules-out-of-pi-ai-provider-profiles/change:
+  en: ba3780b9306754c7
+  zh: 2c1c4a34d33dce48
+/move-error-code-rules-out-of-pi-ai-provider-profiles/migration:
+  en: 76fea0a346e8fd12
+  zh: dcedd6ceb5834b54

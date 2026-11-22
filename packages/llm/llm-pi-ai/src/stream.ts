@@ -46,7 +46,7 @@ const LEADING_HTTP_STATUS = /^[45]\d\d\b/
 // wrapper a bare `terminated`, so we are left pattern-matching terse words here.
 // If pi-ai ever forwards the original Error (or a fetch/dispatcher hook that lets
 // us capture the cause ourselves), classify on `code`/`cause` instead of text.
-function classifyBuiltinPiAiError(message: string): BuiltinLlmFailureCode {
+function classifyPiAiError(message: string): BuiltinLlmFailureCode {
   const statusSource = LEADING_HTTP_STATUS.exec(message)?.[0] ?? message
   if (/\b(?:401|403)\b/.test(statusSource)) return 'AUTH'
   if (isQuotaExceededError(message)) return QUOTA_EXCEEDED_CODE
@@ -132,7 +132,7 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
     }
     case 'error': {
       const text = message.errorMessage ?? 'pi-ai stream error'
-      return { kind: 'error', failure: { message: text, code: classifyBuiltinPiAiError(text) } }
+      return { kind: 'error', failure: { message: text, code: classifyPiAiError(text) } }
     }
   }
 }
