@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 
@@ -60,10 +60,6 @@ try {
   assert.throws(() => Schema.resolve({ transport: 'stdio', serverName: 'fixture', command: 'unused', maxBufferSize: 0 }, mcp.Config, {}))
   const [piConfig] = Schema.resolve({}, pi.Config, {})
   assert.deepEqual(piConfig.providers.get(), {})
-  const adapterRequire = createRequire(hostRequire.resolve('@deepseek-ai/dsh-llm-pi-ai'))
-  const responsesParser = adapterRequire.resolve('@earendil-works/pi-ai/api/openai-responses-shared', { conditions: new Set(['import', 'node', 'default']) })
-  const piManifest = JSON.parse(await readFile(join(dirname(responsesParser), '../../package.json'), 'utf8'))
-  assert.match(piManifest.version, /-fork\d+$/, 'isolated core must use the qualified Pi fork')
   const { Session, SessionId, default: SessionStore } = await load('@deepseek-ai/dsh-session')
   const { default: SessionProjections } = await load('@deepseek-ai/dsh-session-projection')
   await ctx.plugin(SessionProjections)

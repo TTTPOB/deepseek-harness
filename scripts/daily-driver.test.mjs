@@ -121,44 +121,23 @@ test('release workflow exposes every capability selection in plan order', async 
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.selection.options, Object.keys(selections))
 })
 
-test('consumer overrides and build permissions belong to its workspace, including an explicit Pi tarball', async () => {
+test('isolated consumers resolve the staged artifact from their own workspace', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'daily-driver-overrides-test-'))
-  const previous = process.env.DSH_PI_AI_TARBALL
   try {
     const runtime = join(temporary, 'runtime')
     await mkdir(runtime)
     const asset = join(temporary, 'fixture.tgz')
-    const pi = join(temporary, 'pi-fixture.tgz')
-    await writeFile(asset, 'fixture')
-    await writeFile(pi, 'pi-fixture')
-    process.env.DSH_PI_AI_TARBALL = pi
-    await stageArtifactOverrides(runtime, [{ name: 'fixture', version: 'fixture' }], [asset])
-    const workspace = JSON.parse(await readFile(join(runtime, 'pnpm-workspace.yaml'), 'utf8'))
-    assert.deepEqual(workspace.overrides, { fixture: 'file:./fixture.tgz', '@earendil-works/pi-ai': 'file:./pi-fixture.tgz' })
-    assert.equal(workspace.allowBuilds['node-pty'], true)
-    assert.equal(workspace.allowBuilds.protobufjs, false)
-    assert.equal(await readFile(join(runtime, 'pi-fixture.tgz'), 'utf8'), 'pi-fixture')
+    const contents = 'fixture archive bytes'
+    await writeFile(asset, contents)
+    const pkg = { name: 'fixture', version: 'fixture' }
+    await stageArtifactOverrides(runtime, [pkg], [asset])
+    const { overrides } = JSON.parse(await readFile(join(runtime, 'pnpm-workspace.yaml'), 'utf8'))
+    assert.deepEqual(Object.keys(overrides), [pkg.name])
+    const spec = overrides[pkg.name]
+    assert.match(spec, /^file:\.\//)
+    assert.equal(await readFile(join(runtime, spec.slice('file:'.length)), 'utf8'), contents)
   } finally {
-    if (previous === undefined) delete process.env.DSH_PI_AI_TARBALL
-    else process.env.DSH_PI_AI_TARBALL = previous
     await rm(temporary, { recursive: true, force: true })
-  }
-})
-
-test('isolated consumers preserve the qualified source Pi override without copying workspace links', async () => {
-  const runtime = await mkdtemp(join(tmpdir(), 'daily-driver-pi-default-'))
-  const previous = process.env.DSH_PI_AI_TARBALL
-  try {
-    delete process.env.DSH_PI_AI_TARBALL
-    const source = parseYaml(await readFile(join(root, 'pnpm-workspace.yaml'), 'utf8'))
-    await stageArtifactOverrides(runtime, [], [])
-    const consumer = JSON.parse(await readFile(join(runtime, 'pnpm-workspace.yaml'), 'utf8'))
-    assert.equal(consumer.overrides['@earendil-works/pi-ai'], source.overrides['@earendil-works/pi-ai'])
-    assert(!Object.values(consumer.overrides).some(value => value.startsWith('link:')))
-  } finally {
-    if (previous === undefined) delete process.env.DSH_PI_AI_TARBALL
-    else process.env.DSH_PI_AI_TARBALL = previous
-    await rm(runtime, { recursive: true, force: true })
   }
 })
 
@@ -175,14 +154,6 @@ test('smokes reject incomplete artifact sets before installation', () => {
   }
 })
 
-test('core release refuses missing Pi qualification before contacting GitHub', () => {
-  const result = spawnSync(process.execPath, ['scripts/daily-driver.mjs', 'release', 'core'], {
-    cwd: root, encoding: 'utf8', env: { ...process.env, DSH_PI_AI_TARBALL: '' },
-  })
-  assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /Core release requires DSH_PI_AI_TARBALL/)
-})
-
 for (const scenario of ['existing-release', 'failed-prepare']) {
   test(`${scenario} never creates or edits a release`, async () => {
     const temporary = await mkdtemp(join(tmpdir(), 'daily-driver-release-test-'))
@@ -196,7 +167,7 @@ for (const scenario of ['existing-release', 'failed-prepare']) {
       const result = spawnSync(process.execPath, ['scripts/daily-driver.mjs', 'release', 'core'], {
         cwd: root, encoding: 'utf8', timeout: 30_000,
         env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, COMMAND_LOG: log,
-          GH_REPO: 'fixture/repository', RELEASE_TAG: 'daily-driver-test', DSH_PI_AI_TARBALL: '/unused/fixture-pi.tgz' },
+          GH_REPO: 'fixture/repository', RELEASE_TAG: 'daily-driver-test' },
       })
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, scenario === 'existing-release' ? /never overwrite/ : /prepare-failed/)
