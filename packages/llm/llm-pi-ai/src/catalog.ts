@@ -150,8 +150,19 @@ const CACHE_CONTROL_FORMAT_GATE: Record<PiAiCacheControlFormat, true> = {
 /** The prompt-cache marker conventions a profile may name. */
 export const CACHE_CONTROL_FORMATS = Object.keys(CACHE_CONTROL_FORMAT_GATE) as readonly PiAiCacheControlFormat[]
 
+/** Configuration objects omit optional properties rather than setting them to undefined. */
+type Configurable<T> = T extends object ? { [K in keyof T]: Configurable<Exclude<T[K], undefined>> } : T
+
+/** A literal template argument or a reference to the request's thinking state. */
+type ConfiguredChatTemplateKwarg = Exclude<ChatTemplateKwargValue, object> | {
+  /** The thinking value to substitute into the template. */
+  $var: PiAiChatTemplateVar
+  /** Whether to omit this argument when thinking is off. */
+  omitWhenOff?: boolean
+}
+
 /** The request-state placeholders a `chat_template_kwargs` value may name. */
-export type PiAiChatTemplateVar = Extract<ChatTemplateKwargValue, { $var: string }>['$var']
+export type PiAiChatTemplateVar = Extract<ChatTemplateKwargValue, object>['$var']
 
 /** Drift gate over {@link PiAiChatTemplateVar}; a new upstream placeholder fails compilation until named. */
 const CHAT_TEMPLATE_VAR_GATE: Record<PiAiChatTemplateVar, true> = {
@@ -256,6 +267,8 @@ const COMPLETIONS_COMPAT_GATE = {
   requiresAssistantAfterToolResult: 'offer',
   requiresThinkingAsText: 'offer',
   requiresReasoningContentOnAssistantMessages: 'offer',
+  requiresNonNullAssistantContent: 'offer',
+  requiresToolsWithToolHistory: 'offer',
   thinkingFormat: 'offer',
   chatTemplateKwargs: 'offer',
   chatTemplateArgs: 'offer',
@@ -264,6 +277,7 @@ const COMPLETIONS_COMPAT_GATE = {
   vllmPriority: 'offer',
   supportsStrictMode: 'offer',
   cacheControlFormat: 'offer',
+  promptCacheKeyMode: 'offer',
   supportsLongCacheRetention: 'offer',
   openRouterRouting: 'withhold',
   vercelGatewayRouting: 'withhold',
@@ -278,7 +292,7 @@ const COMPLETIONS_COMPAT_GATE = {
 /** Disposition of every `OpenAIResponsesCompat` field; a drift gate like the one above. */
 const RESPONSES_COMPAT_GATE = {
   supportsDeveloperRole: 'offer',
-  systemPromptFormat: 'offer',
+  promptCacheKeyMode: 'offer',
   supportsMaxOutputTokens: 'offer',
   supportsStrictMode: 'offer',
   supportsLongCacheRetention: 'offer',
@@ -305,6 +319,8 @@ const ANTHROPIC_COMPAT_GATE = {
   supportsMidConvoSystemMessages: 'offer',
   supportsMidConvoToolChanges: 'offer',
   supportsMidConvoEffort: 'withhold',
+  // Thread continuation relies on server-side state; leave it to pi-ai's native endpoint detection.
+  supportsMessageThreads: 'withhold',
   allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
 
@@ -316,6 +332,7 @@ const BEDROCK_COMPAT_GATE = {
 /** Disposition of every `MistralConversationsCompat` field. */
 const MISTRAL_COMPAT_GATE = {
   supportsMidConvoSystemMessages: 'offer',
+  supportsStrictMode: 'offer',
 } as const satisfies Record<keyof MistralConversationsCompat, CompatDisposition>
 
 /**
@@ -372,12 +389,9 @@ type OfferedCompatField =
  * pi-ai wire-compatibility switches, set on the route (its models' default) or
  * per model (winning over the route, field by field).
  *
- * pi-ai decides each of these from the provider id and baseURL when no layer
- * sets it, and a private gateway's URL says nothing: for an endpoint it does
- * not recognize the detection answers as though it were OpenAI itself, which
- * is wrong for most OpenAI-compatible gateways. So every field here is one a
- * deployment must be able to state because nothing can infer it, while the
- * fields pi-ai's catalog sets for a named vendor stay withheld.
+ * Otherwise pi-ai uses its catalog and protocol defaults. Those defaults
+ * cannot identify the capabilities of an unrecognized private gateway.
+ * Catalog-owned vendor features stay withheld.
  *
  * A field belongs to the protocols whose upstream compat type declares it: a
  * model-level switch its protocol does not take fails resolution, and a
@@ -395,8 +409,6 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
-  /** System prompt location on Responses protocols; defaults to input. Requires pi-ai fork. */
-  systemPromptFormat?: NonNullable<OpenAIResponsesCompat['systemPromptFormat']>
   /** Whether the endpoint accepts system updates in history; all protocols whose compat type declares it. */
   supportsMidConvoSystemMessages?: boolean
   /** Whether Chat Completions accepts message-anchored tool additions. */
@@ -422,6 +434,10 @@ export interface PiAiCompatProfile {
   requiresThinkingAsText?: boolean
   /** Whether replayed assistant messages need an empty `reasoning_content` while reasoning is on; `openai-completions`. */
   requiresReasoningContentOnAssistantMessages?: boolean
+  /** Whether a tool-only assistant message needs empty-string rather than null content; `openai-completions`. */
+  requiresNonNullAssistantContent?: boolean
+  /** Whether an empty `tools` array is required when history contains tool calls or results; `openai-completions`. */
+  requiresToolsWithToolHistory?: boolean
   /** Reasoning parameter format the endpoint expects; `openai-completions`. */
   thinkingFormat?: PiAiThinkingFormat
   /**
@@ -431,24 +447,26 @@ export interface PiAiCompatProfile {
    * entry or from pi-ai's own baseURL detection, neither of which resolution
    * can read, so kwargs set beside another format are sent nowhere.
    */
-  chatTemplateKwargs?: NonNullable<OpenAICompletionsCompat['chatTemplateKwargs']>
+  chatTemplateKwargs?: Record<string, ConfiguredChatTemplateKwarg>
   /** Arguments sent as `chat_template_args` under the `baseten` thinking format; `openai-completions`. */
-  chatTemplateArgs?: NonNullable<OpenAICompletionsCompat['chatTemplateArgs']>
+  chatTemplateArgs?: Record<string, ConfiguredChatTemplateKwarg>
   /** Alias for `thinkingTokenBudgetField: "thinking_token_budget"`; an explicit field wins. `openai-completions`. */
   supportsThinkingTokenBudget?: boolean
   /** Request field carrying the reasoning budget from `thinkingBudgets`; omitted unless configured. `openai-completions`. */
   thinkingTokenBudgetField?: PiAiThinkingTokenBudgetField
   /** vLLM scheduler `priority`; lower runs earlier, and the server must enable priority scheduling. Omitted unless configured. */
   vllmPriority?: number
-  /** Whether `openai-responses` accepts `max_output_tokens`; `false` omits it. Azure and Codex ignore this shared compat field. */
+  /** Whether Responses accepts `max_output_tokens`; `false` omits it. Azure ignores this shared compat field. */
   supportsMaxOutputTokens?: boolean
   /**
    * Whether the endpoint accepts `strict` in tool definitions;
-   * `openai-completions`, the three Responses protocols, `bedrock-converse-stream`.
+   * `openai-completions`, the three Responses protocols, `bedrock-converse-stream`, and `mistral-conversations`.
    */
   supportsStrictMode?: boolean
   /** Prompt-cache marker convention; `openai-completions`. */
   cacheControlFormat?: NonNullable<OpenAICompletionsCompat['cacheControlFormat']>
+  /** Prompt-cache key policy; `openai-completions` and the three Responses protocols. */
+  promptCacheKeyMode?: NonNullable<OpenAICompletionsCompat['promptCacheKeyMode']>
   /**
    * Whether the endpoint accepts long prompt-cache retention;
    * `openai-completions`, the three Responses protocols, `anthropic-messages`.
@@ -494,6 +512,8 @@ type AssertTrue<T extends true> = T
 /** Every compat type a gate classifies, merged so one `Pick` reaches all offered fields. */
 type UpstreamCompat = OpenAICompletionsCompat & OpenAIResponsesCompat & AnthropicMessagesCompat & BedrockCompat & MistralConversationsCompat
 
+type ConfigurableUpstreamCompat = Configurable<Pick<UpstreamCompat, OfferedCompatField>>
+
 /**
  * Proof that each documented field carries its upstream type, not a hand-copied
  * restatement of it. The name gates above pin *which* fields exist; this pins
@@ -504,8 +524,8 @@ type UpstreamCompat = OpenAICompletionsCompat & OpenAIResponsesCompat & Anthropi
  * union would otherwise leave configuration silently behind.
  */
 export type EveryProfileFieldMatchesUpstream = AssertTrue<
-  PiAiCompatProfile extends Partial<Pick<UpstreamCompat, OfferedCompatField>>
-    ? Partial<Pick<UpstreamCompat, OfferedCompatField>> extends PiAiCompatProfile ? true : false
+  PiAiCompatProfile extends ConfigurableUpstreamCompat
+    ? ConfigurableUpstreamCompat extends PiAiCompatProfile ? true : false
     : false
 >
 

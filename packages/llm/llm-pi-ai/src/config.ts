@@ -14,7 +14,7 @@
  */
 import type { Volatile } from '@deepseek-ai/cordis'
 
-import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
+import type { CacheRetention, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
@@ -289,13 +289,15 @@ const thinkingBudgets = z.object({
   high: z.number(),
 })
 
+type ConfiguredChatTemplateKwarg = NonNullable<PiAiCompatProfile['chatTemplateKwargs']>[string]
+
 /**
  * One `chat_template_kwargs` or `chat_template_args` value. The `$var` member
  * is pi-ai's placeholder for a value dispatch fills from the request's
  * thinking state, which makes a template-driven gateway configurable without
  * restating its template.
  */
-const chatTemplateKwarg: z<ChatTemplateKwargValue> = z.union([
+const chatTemplateKwarg: z<ConfiguredChatTemplateKwarg> = z.union([
   z.string(),
   z.number(),
   z.boolean(),
@@ -309,7 +311,6 @@ const chatTemplateKwarg: z<ChatTemplateKwargValue> = z.union([
 const compatProfile: z<PiAiCompatProfile> = z.object({
   supportsStore: z.boolean(),
   supportsDeveloperRole: z.boolean(),
-  systemPromptFormat: z.union(['input', 'instructions']),
   supportsMidConvoSystemMessages: z.boolean(),
   supportsMidConvoToolAdditions: z.boolean(),
   supportsMidConvoToolChanges: z.boolean(),
@@ -321,6 +322,8 @@ const compatProfile: z<PiAiCompatProfile> = z.object({
   requiresAssistantAfterToolResult: z.boolean(),
   requiresThinkingAsText: z.boolean(),
   requiresReasoningContentOnAssistantMessages: z.boolean(),
+  requiresNonNullAssistantContent: z.boolean(),
+  requiresToolsWithToolHistory: z.boolean(),
   thinkingFormat: z.union(SUPPORTED_THINKING_FORMATS),
   chatTemplateKwargs: z.dict(chatTemplateKwarg),
   chatTemplateArgs: z.dict(chatTemplateKwarg),
@@ -330,6 +333,7 @@ const compatProfile: z<PiAiCompatProfile> = z.object({
   supportsMaxOutputTokens: z.boolean(),
   supportsStrictMode: z.boolean(),
   cacheControlFormat: z.union(CACHE_CONTROL_FORMATS),
+  promptCacheKeyMode: z.union(['auto', 'enabled', 'disabled']),
   supportsLongCacheRetention: z.boolean(),
   supportsEagerToolInputStreaming: z.boolean(),
   supportsCacheControlOnTools: z.boolean(),

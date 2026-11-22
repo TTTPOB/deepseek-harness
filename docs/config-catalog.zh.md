@@ -500,7 +500,7 @@ export type Config = LocalConfig
 ## `@deepseek-ai/dsh-client-connection`
 
 - `inject`: `credentials`
-- `source`: [`packages/client/connection/src/index.ts:96`](../packages/client/connection/src/index.ts)
+- `source`: [`packages/client/connection/src/index.ts:97`](../packages/client/connection/src/index.ts)
 
 ```ts config-catalog
 /** Browser authentication, request limits, and connection recovery configuration. */
@@ -514,6 +514,8 @@ export interface ConnectionConfig {
    * an entry here. A non-canonical or non-bare authority fails plugin load.
    */
   trustedHosts?: string[]
+  /** Optional Cloudflare Access ingress; non-loopback requests require a valid assertion. */
+  cloudflareAccess?: CloudflareAccessConfig
   /** Absolute browser and API cookie lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -535,6 +537,14 @@ export interface ConnectionRecoveryConfig {
   generationReadyWarnMs?: number
   /** Deadline in ms for readiness, including physical connection setup. Default: 15000. */
   generationReadyTimeoutMs?: number
+}
+
+/** Deployment-selected Cloudflare Access application. */
+export interface CloudflareAccessConfig {
+  /** Official team issuer, for example https://team.cloudflareaccess.com. */
+  issuer: string
+  /** Application audience tag from Cloudflare Access. */
+  audience: string
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-client-connection -->
@@ -2046,8 +2056,8 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 ## `@deepseek-ai/dsh-llm-pi-ai`
 
 - `inject`: `llm`
-- `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:251`](../packages/llm/llm-pi-ai/src/config.ts)
+- `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `ChatTemplateKwargValue` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:273`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -2162,6 +2172,12 @@ export interface PiAiProviderProfile {
    * the smallest quality-ladder output is used when no quality fits.
    */
   requestImageMaxBytes?: number
+  /**
+   * Ordered overrides for terminal error classification. A rule without `after`
+   * runs before the built-in classifier and the first match wins; `after: true`
+   * runs only when the built-in classifier falls through to `PI_AI_ERROR`.
+   */
+  errorCodeRules?: PiAiErrorCodeRule[]
   /** Provider-owned model-request retry policy; omission uses normal mode with five retries. */
   retryPolicy?: RetryPolicyConfig
 }
@@ -2218,12 +2234,9 @@ export type PiAiModelOverride = Omit<PiAiModelProfile, 'id'>
  * pi-ai wire-compatibility switches, set on the route (its models' default) or
  * per model (winning over the route, field by field).
  *
- * pi-ai decides each of these from the provider id and baseURL when no layer
- * sets it, and a private gateway's URL says nothing: for an endpoint it does
- * not recognize the detection answers as though it were OpenAI itself, which
- * is wrong for most OpenAI-compatible gateways. So every field here is one a
- * deployment must be able to state because nothing can infer it, while the
- * fields pi-ai's catalog sets for a named vendor stay withheld.
+ * Otherwise pi-ai uses its catalog and protocol defaults. Those defaults
+ * cannot identify the capabilities of an unrecognized private gateway.
+ * Catalog-owned vendor features stay withheld.
  *
  * A field belongs to the protocols whose upstream compat type declares it: a
  * model-level switch its protocol does not take fails resolution, and a
@@ -2241,6 +2254,12 @@ export interface PiAiCompatProfile {
    * `openai-completions` and the three Responses protocols.
    */
   supportsDeveloperRole?: boolean
+  /** Whether the endpoint accepts system updates in history; all protocols whose compat type declares it. */
+  supportsMidConvoSystemMessages?: boolean
+  /** Whether Chat Completions accepts message-anchored tool additions. */
+  supportsMidConvoToolAdditions?: boolean
+  /** Whether Anthropic accepts tool changes in history. */
+  supportsMidConvoToolChanges?: boolean
   /** Whether the endpoint accepts `reasoning_effort`; `openai-completions`. */
   supportsReasoningEffort?: boolean
   /** Whether the endpoint accepts `stream_options: {include_usage: true}`; `openai-completions`. */
@@ -2260,6 +2279,10 @@ export interface PiAiCompatProfile {
   requiresThinkingAsText?: boolean
   /** Whether replayed assistant messages need an empty `reasoning_content` while reasoning is on; `openai-completions`. */
   requiresReasoningContentOnAssistantMessages?: boolean
+  /** Whether a tool-only assistant message needs empty-string rather than null content; `openai-completions`. */
+  requiresNonNullAssistantContent?: boolean
+  /** Whether an empty `tools` array is required when history contains tool calls or results; `openai-completions`. */
+  requiresToolsWithToolHistory?: boolean
   /** Reasoning parameter format the endpoint expects; `openai-completions`. */
   thinkingFormat?: PiAiThinkingFormat
   /**
@@ -2269,24 +2292,26 @@ export interface PiAiCompatProfile {
    * entry or from pi-ai's own baseURL detection, neither of which resolution
    * can read, so kwargs set beside another format are sent nowhere.
    */
-  chatTemplateKwargs?: NonNullable<OpenAICompletionsCompat['chatTemplateKwargs']>
+  chatTemplateKwargs?: Record<string, ConfiguredChatTemplateKwarg>
   /** Arguments sent as `chat_template_args` under the `baseten` thinking format; `openai-completions`. */
-  chatTemplateArgs?: NonNullable<OpenAICompletionsCompat['chatTemplateArgs']>
+  chatTemplateArgs?: Record<string, ConfiguredChatTemplateKwarg>
   /** Alias for `thinkingTokenBudgetField: "thinking_token_budget"`; an explicit field wins. `openai-completions`. */
   supportsThinkingTokenBudget?: boolean
   /** Request field carrying the reasoning budget from `thinkingBudgets`; omitted unless configured. `openai-completions`. */
   thinkingTokenBudgetField?: PiAiThinkingTokenBudgetField
   /** vLLM scheduler `priority`; lower runs earlier, and the server must enable priority scheduling. Omitted unless configured. */
   vllmPriority?: number
-  /** Whether `openai-responses` accepts `max_output_tokens`; `false` omits it. Azure and Codex ignore this shared compat field. */
+  /** Whether Responses accepts `max_output_tokens`; `false` omits it. Azure ignores this shared compat field. */
   supportsMaxOutputTokens?: boolean
   /**
    * Whether the endpoint accepts `strict` in tool definitions;
-   * `openai-completions`, the three Responses protocols, `bedrock-converse-stream`.
+   * `openai-completions`, the three Responses protocols, `bedrock-converse-stream`, and `mistral-conversations`.
    */
   supportsStrictMode?: boolean
   /** Prompt-cache marker convention; `openai-completions`. */
   cacheControlFormat?: NonNullable<OpenAICompletionsCompat['cacheControlFormat']>
+  /** Prompt-cache key policy; `openai-completions` and the three Responses protocols. */
+  promptCacheKeyMode?: NonNullable<OpenAICompletionsCompat['promptCacheKeyMode']>
   /**
    * Whether the endpoint accepts long prompt-cache retention;
    * `openai-completions`, the three Responses protocols, `anthropic-messages`.
@@ -2304,10 +2329,24 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Whether to serialize client-executed tool search; the three Responses protocols. */
+  supportsToolSearch?: boolean
+  /** Whether to serialize message-anchored additional tools; wins over tool search on Responses protocols. */
+  supportsAdditionalTools?: boolean
 }
 
 /** One request modality a pi-ai model may accept. */
 export type PiAiModality = Model<Api>['input'][number]
+
+/** One operator rule mapping terminal error text to a failure code. */
+export interface PiAiErrorCodeRule {
+  /** Regular expression source tested against the terminal error text. */
+  match: string
+  /** Failure code reported when the pattern matches. */
+  code: (typeof ERROR_CODE_RULES)[number]
+  /** Test only after the built-in classifier falls through to `PI_AI_ERROR`. */
+  after?: boolean
+}
 
 /**
  * Selectable reasoning efforts for one model: each key is a level the model
@@ -2322,8 +2361,19 @@ export type PiAiReasoningEfforts = Partial<Record<ModelThinkingLevel, string | n
 /** One reasoning-dispatch wire format a profile may name. */
 export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFormat']>
 
+/** A literal template argument or a reference to the request's thinking state. */
+type ConfiguredChatTemplateKwarg = Exclude<ChatTemplateKwargValue, object> | {
+  /** The thinking value to substitute into the template. */
+  $var: PiAiChatTemplateVar
+  /** Whether to omit this argument when thinking is off. */
+  omitWhenOff?: boolean
+}
+
 /** The reasoning-budget field spellings pi-ai accepts. */
 export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['thinkingTokenBudgetField']>
+
+/** The request-state placeholders a `chat_template_kwargs` value may name. */
+export type PiAiChatTemplateVar = Extract<ChatTemplateKwargValue, object>['$var']
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-llm-pi-ai -->
 
@@ -2473,7 +2523,7 @@ export interface LspLocalServerConfig {
 ## `@deepseek-ai/dsh-mcp-client`
 
 - `inject`: `tools`
-- `source`: [`packages/mcp/mcp-client/src/index.ts:138`](../packages/mcp/mcp-client/src/index.ts)
+- `source`: [`packages/mcp/mcp-client/src/index.ts:140`](../packages/mcp/mcp-client/src/index.ts)
 
 ```ts config-catalog
 /** Configuration for one stdio or Streamable HTTP MCP server. */
@@ -2497,6 +2547,8 @@ export interface StdioConfig {
   env: Record<string, string>
   /** Working directory for the child process. */
   cwd: string
+  /** Maximum stdio read buffer in bytes; omission preserves the SDK default. */
+  maxBufferSize?: number
   /** Timeout per tool call or resource request in milliseconds. */
   toolCallTimeoutMs: number
   /** Optional budget for one connection attempt plus its initial tool sync, in milliseconds. */
@@ -3274,7 +3326,7 @@ export interface Config {
 
 - `inject`: `sessions`
 - `refs`: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
-- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:92`](../packages/session-query/session-query-sqlite/src/index.ts)
+- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:61`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 ```ts config-catalog
 /** Combined session-query configuration backed by SQLite full-text search. */
@@ -3286,6 +3338,14 @@ export interface Config extends SessionQueryConfig {
    */
   path: string
   /**
+   * Dedicated document-key sidecar path, attached to the index connection so
+   * per-session document lookups use an ordinary B-tree index while the
+   * main index file keeps the upstream schema. `:memory:` is supported.
+   * Defaults to `<path>.keys.db`, or `:memory:` when `path` is `:memory:`.
+   * The sidecar is derived from the main index and rebuilt when stale.
+   */
+  keysPath?: string
+  /**
    * Open the SQLite module and handle at service activation or the first
    * search, or `never` to disable full-text search: the inherited exact
    * reads, filters, and traces stay available, while `searchSessions` and
@@ -3295,6 +3355,8 @@ export interface Config extends SessionQueryConfig {
   openAt?: OpenAt
   /** SQLite journal mode. Defaults to `wal`. */
   journalMode?: JournalMode
+  /** SQLite synchronous mode; NORMAL is honored only with WAL. Defaults to FULL. */
+  synchronous?: Synchronous
   /** Page size when a request omits `limit`. At most `Number.MAX_SAFE_INTEGER - 1`; defaults to 20. */
   defaultLimit?: number
   /** Largest accepted page size. At most `Number.MAX_SAFE_INTEGER - 1`; defaults to 100. */
@@ -3305,6 +3367,14 @@ export interface Config extends SessionQueryConfig {
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
   preparedSessionCacheSize?: number
+  /**
+   * Largest persisted log artifact, in bytes, this index reads into memory.
+   * Sessions above it stay out of full-text search and are reported once
+   * through `ctx.logger.warn`; a backend that omits
+   * `SessionPersistenceSnapshot.sizeBytes` is indexed without this bound.
+   * Defaults to 32 MiB.
+   */
+  maxIndexedSessionBytes?: number
 }
 
 /** SQLite module/handle opening phase; `never` disables full-text search entirely. */
@@ -3312,6 +3382,9 @@ export type OpenAt = 'startup' | 'first-search' | 'never'
 
 /** Supported SQLite journal modes. */
 export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
+
+/** SQLite commit synchronization; NORMAL is used only for WAL. */
+export type Synchronous = 'full' | 'normal'
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-session-query-sqlite -->
 
@@ -4234,6 +4307,8 @@ export interface Config {
   maxSubCallsPerMinute: number
   /** Maximum overlapping concurrency-safe program subcalls. */
   maxParallelSubCalls: number
+  /** Names offered as direct calls when visible; they remain available in the SDK. */
+  ptcNativeTools: string[]
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-tool-executor-ptc -->

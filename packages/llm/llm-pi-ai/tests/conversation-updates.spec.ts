@@ -6,6 +6,7 @@ import type { GenerateOptions, ToolSchema, ToolUpdate } from '@deepseek-ai/dsh-l
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import { resolveProfiles } from '../src/config.ts'
+import type { PiAiProviderProfile } from '../src/config.ts'
 import { memoryAuth } from './auth-double.ts'
 import { conversationUpdates } from '../src/models.ts'
 import { assemble } from './assemble.ts'
@@ -52,7 +53,12 @@ describe('conversation capability mapping', () => {
 
 afterEach(closeMockServers)
 
-async function send(provider: string, modelId: string, options: Omit<GenerateOptions, 'provider' | 'model'>, apiKey = 'fixture-key') {
+async function send(
+  provider: string,
+  modelId: string,
+  options: Omit<GenerateOptions, 'provider' | 'model'>,
+  { apiKey = 'fixture-key', ...profile }: Pick<PiAiProviderProfile, 'models' | 'compat'> & { apiKey?: string } = {},
+) {
   const server = await mockServer([{ status: 401, body: JSON.stringify({ error: { message: 'fixture rejection' } }) }])
   const ctx = new Context()
   const runtime = ctx.plugin(LlmRuntime)
@@ -60,7 +66,7 @@ async function send(provider: string, modelId: string, options: Omit<GenerateOpt
     await runtime
     // The serializer requires an API key even though the local server does not authenticate.
     const adapter = new LlmPiAi.PiAiAdapter({
-      profiles: () => resolveProfiles({ [provider]: { baseURL: server.url, apiKeyEnv: 'PI_CONVERSATION_TEST_KEY', transport: 'sse' } }),
+      profiles: () => resolveProfiles({ [provider]: { baseURL: server.url, apiKeyEnv: 'PI_CONVERSATION_TEST_KEY', transport: 'sse', ...profile } }),
       resolveApiKey: () => Promise.resolve(apiKey),
       auth: memoryAuth(),
     })
@@ -254,10 +260,15 @@ describe('historical tool availability on the wire', () => {
     const payload = Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' } })).toString('base64url')
     const token = `e30.${payload}.fixture`
     const update = addition()
-    const { requests } = await send('openai-codex', 'gpt-5.5', {
+    const modelId = 'tool-search-fixture'
+    const { requests } = await send('openai-codex', modelId, {
       messages: [user('first'), update], tools: [baseline, added],
       toolHistory: { tools: [baseline], updates: [{ messageId: update.id, additions: [added] }] },
-    }, token)
+    }, {
+      apiKey: token,
+      models: [{ id: modelId }],
+      compat: { supportsMidConvoSystemMessages: true, supportsToolSearch: true },
+    })
     expect(requests).toHaveLength(1)
     expect(requests[0]).toMatchObject({
       tools: [{ type: 'function', name: 'read' }],
@@ -265,9 +276,9 @@ describe('historical tool availability on the wire', () => {
         { role: 'user', content: [{ type: 'input_text', text: 'first' }] },
         { type: 'tool_search_call', execution: 'client', arguments: { query: 'search', limit: 1 } },
         { type: 'tool_search_output', execution: 'client', tools: [
-          { type: 'function', name: 'search', description: added.description, parameters: added.parameters, defer_loading: true },
+          { type: 'function', name: added.name, description: added.description, parameters: added.parameters, defer_loading: true },
         ] },
-        { role: 'developer', content: 'Instruction one.\nInstruction two.' },
+        { role: 'system', content: 'Instruction one.\nInstruction two.' },
       ],
     })
   })
@@ -297,15 +308,16 @@ describe('historical tool availability on the wire', () => {
       toolHistory: { tools: [baseline], updates: [
         { messageId: update.id, additions: [added] }, { messageId: remove.id, additions: [] },
       ] },
-    })
+    }, { compat: { supportsMidConvoSystemMessages: true, supportsAdditionalTools: true } })
     expect(requests).toHaveLength(1)
-    expect(requests[0]).toHaveProperty('tools', [expect.objectContaining({ name: 'search' })])
+    expect(requests[0]).not.toHaveProperty('tools')
     expect(requests[0]).toHaveProperty('input', [
+      expect.objectContaining({ type: 'additional_tools', tools: [expect.objectContaining({ name: added.name })] }),
       { role: 'user', content: [{ type: 'input_text', text: 'first' }] },
       { role: 'developer', content: 'Instruction one.\nInstruction two.' },
     ])
     expect(JSON.stringify(requests[0])).not.toContain('tool_removal')
-    expect(JSON.stringify(requests[0])).not.toContain('Read a file')
+    expect(JSON.stringify(requests[0])).not.toContain(baseline.description)
   })
 
   it('uses current declarations when a request prefix omits recorded updates', async () => {

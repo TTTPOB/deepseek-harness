@@ -835,7 +835,7 @@ describe('provider profile lifecycle', () => {
     expect(server.requests[1]).not.toHaveProperty('reasoning_effort')
   })
 
-  it('keeps the system role on a declared route whose gateway rejects the developer one', async () => {
+  it('uses the configured system prompt role on a declared Chat Completions route', async () => {
     vi.stubEnv('PI_TEST_KEY', 'test-key')
     const server = await mockServer([{ events: textEvents }, { events: textEvents }])
     const ctx = new Context()
@@ -847,12 +847,8 @@ describe('provider profile lifecycle', () => {
           api: 'openai-completions',
           baseURL: `${server.url}/v1`,
           models: [
-            // pi-ai sends the system prompt as `developer` to a reasoning
-            // model whenever its URL detection says the endpoint is OpenAI —
-            // which is what an unrecognized private URL resolves to. Most
-            // OpenAI-compatible gateways reject that role.
-            { id: 'acme-think', reasoningEfforts: { off: null, high: 'high' }, compat: { supportsDeveloperRole: false } },
-            { id: 'acme-guess', reasoningEfforts: { off: null, high: 'high' } },
+            { id: 'acme-system', reasoningEfforts: { off: null, high: 'high' }, compat: { supportsDeveloperRole: false } },
+            { id: 'acme-developer', reasoningEfforts: { off: null, high: 'high' }, compat: { supportsDeveloperRole: true } },
           ],
         },
       },
@@ -869,10 +865,8 @@ describe('provider profile lifecycle', () => {
       return request.messages.map(message => message.role)
     }
 
-    expect(await roles('acme-think')).toEqual(['system'])
-    // The switch is the only thing that changes it: the same route, same
-    // endpoint, same reasoning declaration still gets pi-ai's guess.
-    expect(await roles('acme-guess')).toEqual(['developer'])
+    expect(await roles('acme-system')).toEqual(['system'])
+    expect(await roles('acme-developer')).toEqual(['developer'])
   })
 
   it('sends a declared off value as the effort parameter instead of omitting it', async () => {

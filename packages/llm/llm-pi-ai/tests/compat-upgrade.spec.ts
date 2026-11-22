@@ -75,10 +75,6 @@ describe('pi-ai gateway compatibility declarations', () => {
       .toMatchObject({ supportsMidConvoToolChanges: true })
   })
 
-  it.each(['input', 'instructions'])('preserves Responses system prompt format %s', (systemPromptFormat) => {
-    expect(resolved({ systemPromptFormat }, 'openai-responses')).toMatchObject({ systemPromptFormat })
-  })
-
   it.each(['supportsAdditionalTools', 'supportsToolSearch'])('preserves Responses %s', (field) => {
     expect(resolved({ [field]: true }, 'openai-responses')).toMatchObject({ [field]: true })
     expect(() => resolved({ [field]: true })).toThrow(/compat/)
@@ -89,10 +85,17 @@ describe('pi-ai gateway compatibility declarations', () => {
   })
 })
 describe('Removed Responses compatibility settings', () => {
-  it.each(['maxConsecutiveWhitespaceChars', 'maxRepeatedPatternChars'])('rejects %s on providers and models', (field) => {
-    const compat = { [field]: 5000 }
+  it.each([
+    ['maxConsecutiveWhitespaceChars', 5000],
+    ['maxRepeatedPatternChars', 5000],
+    ['systemPromptFormat', 'instructions'],
+  ])('rejects %s on providers and models after config parsing', (field, value) => {
+    const compat = { [field]: value }
     const connection = { api: 'openai-responses', baseURL: 'https://gateway.test/v1' }
-    expect(() => resolved(compat, connection.api)).toThrow(/compat/)
-    expect(() => resolveProfiles({ gateway: { ...connection, models: [{ id: 'model', compat }] } })).toThrow(/compat/)
+    const modelConfig = Config({ providers: { gateway: { ...connection, models: [{ id: 'model', compat }] } } })
+    const diagnostic = 'sets compat "' + field + '", which no wire protocol declares'
+    expect(() => resolved(compat, connection.api)).toThrow(diagnostic)
+    expect(() => resolveProfiles(structuredClone(modelConfig.providers.get()) as import('../src/config.ts').Options['providers']))
+      .toThrow(diagnostic)
   })
 })

@@ -4,6 +4,7 @@ import { stream as streamAnthropic } from '@earendil-works/pi-ai/api/anthropic-m
 import { stream as streamCompletions } from '@earendil-works/pi-ai/api/openai-completions'
 import { stream as streamResponses } from '@earendil-works/pi-ai/api/openai-responses'
 import { BlockAssembler } from '@deepseek-ai/dsh-llm'
+import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { toStreamChunks } from '../src/stream.ts'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import { anthropicFrame as frame, anthropicMessageStart, closeMockServers, mockServer } from './mock-server.ts'
@@ -22,26 +23,29 @@ function model<A extends 'anthropic-messages' | 'openai-completions' | 'openai-r
   }
 }
 
-/** The arguments each `toolcall_delta` partial carries, and the finalized arguments. */
-async function collect(events: AsyncIterable<AssistantMessageEvent>): Promise<{ partials: unknown[]; final: unknown }> {
-  const partials: unknown[] = []
-  let final: unknown
-  for await (const event of events) {
-    if (event.type === 'toolcall_delta' && event.delta.length > 0) {
-      const block = event.partial.content[event.contentIndex]
-      partials.push(block?.type === 'toolCall' ? block.arguments : undefined)
-    } else if (event.type === 'toolcall_end') {
-      final = event.toolCall.arguments
-    } else if (event.type === 'error') {
-      throw new Error(event.error.errorMessage)
-    }
+async function collect(events: AsyncIterable<AssistantMessageEvent>) {
+  const assembler = new BlockAssembler()
+  const chunks: StreamChunk[] = []
+  for await (const chunk of toStreamChunks(events)) {
+    chunks.push(chunk)
+    assembler.push(chunk)
   }
-  return { partials, final }
+  const deltas = chunks.flatMap(chunk => chunk.type === 'tool-call-delta' && chunk.argumentsDelta
+    ? [chunk.argumentsDelta] : [])
+  return { assembler, chunks, deltas }
+}
+
+async function expectCompleteArguments(events: AsyncIterable<AssistantMessageEvent>, id: string) {
+  const { assembler, chunks, deltas } = await collect(events)
+  expect(deltas).toEqual(fragments)
+  expect(assembler.blocks()).toEqual([{ type: 'tool-call', id, name: 'write', arguments: argsJson }])
+  expect(chunks.at(-2)?.type).toBe('usage')
+  expect(assembler.finish).toEqual({ kind: 'tool-calls' })
 }
 
 const context = normalizeContext({ messages: [{ role: 'user', content: 'hi', timestamp: 0 }] })
 
-describe('streamed tool-call arguments (patched pi-ai)', () => {
+describe('streamed tool-call arguments through pi-ai and the adapter', () => {
   it('preserves an empty Responses message after parallel tool calls with its replay metadata', async () => {
     const calls = [0, 1, 2].map(index => ({ type: 'function_call', call_id: `call_${index}`, id: `item_${index}`, name: 'read', arguments: '{}' }))
     const empty = { type: 'message', id: 'message_empty', role: 'assistant', content: [{ type: 'output_text', text: '', annotations: [] }] }
@@ -71,7 +75,7 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
     expect(server.requests).toHaveLength(1)
   })
 
-  it('openai-completions parses arguments once, at the end of the call', async () => {
+  it('openai-completions emits each fragment and closes with final arguments', async () => {
     const server = await mockServer([{ events: [
       JSON.stringify({ choices: [{
         delta: {
@@ -87,13 +91,10 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
       '[DONE]',
     ] }])
     const events = streamCompletions(model('openai-completions', server.url), context, { apiKey: 'test-key' })
-    const { partials, final } = await collect(events)
-    expect(partials).toHaveLength(fragments.length)
-    expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
-    expect(final).toEqual(args)
+    await expectCompleteArguments(events, 'call_1')
   })
 
-  it('anthropic-messages parses arguments once, at the end of the call', async () => {
+  it('anthropic-messages emits each fragment and closes with final arguments', async () => {
     const server = await mockServer([{ events: [
       anthropicMessageStart,
       frame({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'write', input: {} } }),
@@ -105,13 +106,10 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
       frame({ type: 'message_stop' }),
     ] }])
     const events = streamAnthropic(model('anthropic-messages', server.url), context, { apiKey: 'test-key' })
-    const { partials, final } = await collect(events)
-    expect(partials).toHaveLength(fragments.length)
-    expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
-    expect(final).toEqual(args)
+    await expectCompleteArguments(events, 'toolu_1')
   })
 
-  it('openai-responses parses arguments once, at the end of the call', async () => {
+  it('openai-responses emits each fragment and closes with final arguments', async () => {
     const item = { type: 'function_call', call_id: 'call_1', id: 'fc_1', name: 'write' }
     const server = await mockServer([{ events: [
       '{"type":"response.created","response":{"id":"resp_1"}}',
@@ -124,9 +122,31 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
       } }),
     ] }])
     const events = streamResponses(model('openai-responses', server.url), context, { apiKey: 'test-key' })
-    const { partials, final } = await collect(events)
-    expect(partials).toHaveLength(fragments.length)
-    expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
-    expect(final).toEqual(args)
+    await expectCompleteArguments(events, 'call_1|fc_1')
+  })
+
+  it('openai-responses finishes at the output cap without finalizing an unfinished tool call', async () => {
+    const item = { type: 'function_call', call_id: 'call_1', id: 'fc_1', name: 'write', arguments: '' }
+    const partial = fragments.slice(0, 3)
+    const maxTokens = 32
+    const server = await mockServer([{ events: [
+      JSON.stringify({ type: 'response.created', response: { id: 'resp_truncated' } }),
+      JSON.stringify({ type: 'response.output_item.added', output_index: 0, item }),
+      ...partial.map(delta => JSON.stringify({ type: 'response.function_call_arguments.delta', output_index: 0, delta })),
+      JSON.stringify({ type: 'response.incomplete', response: {
+        id: 'resp_truncated', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+        output: [{ ...item, arguments: partial.join(''), status: 'incomplete' }],
+        usage: { input_tokens: 3, output_tokens: maxTokens, total_tokens: 3 + maxTokens },
+      } }),
+    ] }])
+    const { assembler, chunks, deltas } = await collect(streamResponses(
+      model('openai-responses', server.url), context, { apiKey: 'test-key', maxTokens },
+    ))
+    expect(server.requests).toEqual([expect.objectContaining({ max_output_tokens: maxTokens })])
+    expect(deltas).toEqual(partial)
+    expect(chunks.some(chunk => chunk.type === 'block-end' && chunk.block.type === 'tool-call')).toBe(false)
+    expect(chunks.at(-2)?.type).toBe('usage')
+    expect(assembler.blocks()).toEqual([])
+    expect(assembler.finish).toEqual({ kind: 'max-tokens' })
   })
 })
