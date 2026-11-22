@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-22-official-pi-ai-dependency.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-22-official-pi-ai-dependency.md
+/agent-note-use-official-pi-ai-in-the-adapter:
+  en: 30eaaf663bdab222
+  zh: 58788c164733c8d8
+/agent-note-use-official-pi-ai-in-the-adapter/problem:
+  en: a1b44928589141b0
+  zh: d16ff7bae0152b2c
+/agent-note-use-official-pi-ai-in-the-adapter/decision:
+  en: 5103b84c0433ef54
+  zh: 30b37db64e92ab8e
+/agent-note-use-official-pi-ai-in-the-adapter/alternatives-considered:
+  en: ff4fa83ec7182afc
+  zh: 1a4aeee7431664d6
+/agent-note-use-official-pi-ai-in-the-adapter/consequences:
+  en: be72b4f439f3ba84
+  zh: 554c97b30f70e4c6
