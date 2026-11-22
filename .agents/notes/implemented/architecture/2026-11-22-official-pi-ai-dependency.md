@@ -30,4 +30,4 @@ The allowlist offers three compat fields new in 1.6.0 (`requiresNonNullAssistant
 
 Pi AI 1.6.0 serializes Anthropic Messages differently, so the [prefix digest seed](../../../../packages/llm/llm-pi-ai/src/prefix-binding.ts) moved to v2. Signed thinking recorded before the upgrade fails the digest check once and is not replayed; later responses record v2 digests.
 
-The adapter still offers upstream `supportsToolSearch`. This fork keeps its own `errorCodeRules`; a future migration of the rule engine must carry the configured rules with it.
+The adapter offers upstream `supportsToolSearch`. It classifies provider errors with built-in rules; a separate dsh-config plugin on the `llm/stream` waterfall owns deployment-specific failure-code overrides.

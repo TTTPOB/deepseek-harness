@@ -480,7 +480,7 @@ export class PiAiAdapter extends LlmAdapter {
         signal: watchdog.signal,
         headers: requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders),
       })
-      const chunks = toStreamChunks(events, model.contextWindow, options.signal, model.id, digest, profile.errorCodeRules)
+      const chunks = toStreamChunks(events, model.contextWindow, options.signal, model.id, digest)
       const iterator = chunks[Symbol.asyncIterator]()
       let exhausted = false
       try {

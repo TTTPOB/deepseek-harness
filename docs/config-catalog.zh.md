@@ -2057,7 +2057,7 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `ChatTemplateKwargValue` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:273`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:251`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -2172,12 +2172,6 @@ export interface PiAiProviderProfile {
    * the smallest quality-ladder output is used when no quality fits.
    */
   requestImageMaxBytes?: number
-  /**
-   * Ordered overrides for terminal error classification. A rule without `after`
-   * runs before the built-in classifier and the first match wins; `after: true`
-   * runs only when the built-in classifier falls through to `PI_AI_ERROR`.
-   */
-  errorCodeRules?: PiAiErrorCodeRule[]
   /** Provider-owned model-request retry policy; omission uses normal mode with five retries. */
   retryPolicy?: RetryPolicyConfig
 }
@@ -2337,16 +2331,6 @@ export interface PiAiCompatProfile {
 
 /** One request modality a pi-ai model may accept. */
 export type PiAiModality = Model<Api>['input'][number]
-
-/** One operator rule mapping terminal error text to a failure code. */
-export interface PiAiErrorCodeRule {
-  /** Regular expression source tested against the terminal error text. */
-  match: string
-  /** Failure code reported when the pattern matches. */
-  code: (typeof ERROR_CODE_RULES)[number]
-  /** Test only after the built-in classifier falls through to `PI_AI_ERROR`. */
-  after?: boolean
-}
 
 /**
  * Selectable reasoning efforts for one model: each key is a level the model

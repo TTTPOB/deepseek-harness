@@ -35,7 +35,7 @@ Choose this adapter when the same composition serves several providers, when a r
 
 ### Configure provider routes
 
-Each profile may set `errorCodeRules` to map terminal error text to a failure code. Rules run in order before the built-in classifier and the first match wins, so a deployment can replace a built-in decision; `after: true` runs only when the built-in classifier falls through to `PI_AI_ERROR`. Codes are limited to the ones this adapter can report, so the profile's retry policy keeps matching. Patterns see only the provider's error text.
+The adapter classifies terminal provider errors with built-in rules. Deployment-specific failure-code overrides belong in a separate plugin on the [`llm/stream` waterfall](../../../docs/cordis-primer.md#cordis-waterfall-semantics).
 
 Each profile may set a `retryPolicy`; omission uses normal mode with five retries. `apiKeyEnv` is a credential reference resolved per request through the harness credential seam, so no secret enters the configuration file; a reference that resolves to nothing fails the request with `MISSING_CREDENTIAL`. Omitting it leaves the route configured-but-keyless, which for an installed catalog route defers to pi-ai's provider-native ambient discovery.
 
@@ -55,9 +55,6 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
         retryPolicy:
           mode: normal
           maxRetries: 3
-        errorCodeRules:
-          - match: '^upstream_error:'
-            code: SERVER
       anthropic:
         apiKeyEnv: ANTHROPIC_API_KEY
         models:
@@ -96,7 +93,6 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 | `maxRequestImages` | `50` | Retained request-image count bound; a request whose retained images exceed it fails with `IMAGE_OFFLOAD_REQUIRED`. The default follows Azure OpenAI's 50-image limit; raise it on routes whose provider accepts more images |
 | `imageOffloadCountQuantum` | `10`, capped at `maxRequestImages` | Oldest images offloaded per count overflow |
 | `retryPolicy` | normal, 5 retries | Provider-owned retry policy executed by `dsh-llm-retry` |
-| `errorCodeRules` | none | Ordered text-to-code rules evaluated before built-ins; `after: true` only fills the fallback |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-llm-pi-ai) is the exhaustive source for every accepted field and its JSDoc.
 

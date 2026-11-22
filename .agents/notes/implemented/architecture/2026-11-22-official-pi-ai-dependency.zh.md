@@ -30,4 +30,4 @@ Gemini Chat Completions 的工具调用签名只有 Pi fork 处理，1.6.0 没�
 
 Pi AI 1.6.0 序列化 Anthropic Messages 的方式有变化，因此[前缀摘要种子](../../../../packages/llm/llm-pi-ai/src/prefix-binding.ts)换成 v2。升级前记录的签名思考会有一次不能通过摘要校验，不再回放；之后的响应记录 v2 摘要。
 
-适配器继续开放上游的 `supportsToolSearch`。本 fork 保留自己的 `errorCodeRules`；日后迁移规则引擎时，已配置的规则必须一并迁移。
+适配器开放上游的 `supportsToolSearch`，并使用内置规则对提供方错误分类；部署专用的失败码覆盖由独立的 dsh-config 插件在 `llm/stream` 瀑布式事件上处理。

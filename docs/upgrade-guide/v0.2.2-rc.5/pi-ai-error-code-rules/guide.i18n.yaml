@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-rc.5/pi-ai-error-code-rules/guide.md
+/:
+  en: 1b618f8d9938c5dd
+  zh: c0b26fde108e05ff
+/move-pi-ai-error-code-overrides-out-of-provider-profiles:
+  en: da6435a2a46550f2
+  zh: 1f807312b1e972f4
+/move-pi-ai-error-code-overrides-out-of-provider-profiles/change:
+  en: 791d7c96c3bf2771
+  zh: 156304159240d519
+/move-pi-ai-error-code-overrides-out-of-provider-profiles/migration:
+  en: b4602487da8747b4
+  zh: afc645d566c3a87b
