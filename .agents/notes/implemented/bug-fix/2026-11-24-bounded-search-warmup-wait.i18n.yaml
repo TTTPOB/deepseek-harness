@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-24-bounded-search-warmup-wait.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-11-24-bounded-search-warmup-wait.md
+/agent-note-bounded-wait-for-search-warmup:
+  en: 3ad53c42e76c17a7
+  zh: bb908628a7423546
+/agent-note-bounded-wait-for-search-warmup/problem:
+  en: 1d5e936a28241423
+  zh: 41c25e18a4a2eaa0
+/agent-note-bounded-wait-for-search-warmup/decision:
+  en: 8acf4b06a29c5ff3
+  zh: e5ef5cb3aaaead26
+/agent-note-bounded-wait-for-search-warmup/alternatives-considered:
+  en: 3be102b6c0ed2cb1
+  zh: d6fdeb565b759fd6
+/agent-note-bounded-wait-for-search-warmup/consequences:
+  en: 2c6169bbd186fd5f
+  zh: af8fe56c2d595377

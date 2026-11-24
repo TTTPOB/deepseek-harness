@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-24-tool-thrown-object-messages.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-11-24-tool-thrown-object-messages.md
+/agent-note-bounded-json-text-for-thrown-objects:
+  en: 44e2990841545e5a
+  zh: 03eae761e6401b07
+/agent-note-bounded-json-text-for-thrown-objects/problem:
+  en: 1c483237eb62578e
+  zh: 0758032b3eb9e03b
+/agent-note-bounded-json-text-for-thrown-objects/decision:
+  en: d4848d1ab1f52a7e
+  zh: 30fca2a9cf893b95
+/agent-note-bounded-json-text-for-thrown-objects/alternatives-considered:
+  en: ae26d0f6c2c9c80a
+  zh: ec259c90d35687e4
+/agent-note-bounded-json-text-for-thrown-objects/consequences:
+  en: 11d2f1c4a351a08e
+  zh: c05fa19827f70675

@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-24-request-bound-search-cursors.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-11-24-request-bound-search-cursors.md
+/agent-note-request-bound-full-text-search-cursors:
+  en: 347a2fb986809c39
+  zh: 4637fb39664df78b
+/agent-note-request-bound-full-text-search-cursors/problem:
+  en: 41766c3f62602501
+  zh: 7edc736479609e04
+/agent-note-request-bound-full-text-search-cursors/decision:
+  en: e9a9b99b20208140
+  zh: 5733068d51aee1f6
+/agent-note-request-bound-full-text-search-cursors/alternatives-considered:
+  en: bde59ce44d0b909d
+  zh: d2d5975760fb5487
+/agent-note-request-bound-full-text-search-cursors/consequences:
+  en: 53dd5553d16da996
+  zh: 6cb23a403cbeee24

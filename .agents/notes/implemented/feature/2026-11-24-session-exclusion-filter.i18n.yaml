@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-24-session-exclusion-filter.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-11-24-session-exclusion-filter.md
+/agent-note-exclude-sessions-before-ranking:
+  en: 5c1030238a93b59f
+  zh: b3312cdaf041db3b
+/agent-note-exclude-sessions-before-ranking/problem:
+  en: 759535edb7b34f47
+  zh: ea3bb5769e33cf4f
+/agent-note-exclude-sessions-before-ranking/decision:
+  en: 880cd429cfbf19c2
+  zh: a455542852f146a6
+/agent-note-exclude-sessions-before-ranking/alternatives-considered:
+  en: 058d5b434cea8cdd
+  zh: e2e22fca58b45bd9
+/agent-note-exclude-sessions-before-ranking/consequences:
+  en: dc4fc51322eb8e33
+  zh: f5e880d4459d5d9d
