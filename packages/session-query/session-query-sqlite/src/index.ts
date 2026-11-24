@@ -81,6 +81,8 @@ export interface Config extends SessionQueryConfig {
    * never imported or opened. Defaults to `startup`.
    */
   openAt?: OpenAt
+  /** Cross-session warmup wait in milliseconds, from 0 (no wait) to 2,147,483,647. Defaults to 3000. */
+  warmupWaitMs?: number
   /** SQLite journal mode. Defaults to `wal`. */
   journalMode?: JournalMode
   /** SQLite synchronous mode; NORMAL is honored only with WAL. Defaults to FULL. */
@@ -109,6 +111,7 @@ interface ResolvedConfig {
   path: string
   keysPath: string
   openAt: OpenAt
+  warmupWaitMs: number
   journalMode: JournalMode
   synchronous: Synchronous
   defaultLimit: number
@@ -124,6 +127,8 @@ interface ResolvedConfig {
 }
 
 const SCAN_BATCH_SIZE = 32
+const DEFAULT_WARMUP_WAIT_MS = 3000
+const MAX_WARMUP_WAIT_MS = 2_147_483_647
 
 interface Binding {
   readonly epoch: number
@@ -134,7 +139,7 @@ interface Binding {
   readonly jobs: Map<SessionId, Promise<void>>
   readonly points: Set<SessionId>
   bound?: Promise<undefined>
-  warm?: Promise<void>
+  warm?: Promise<SessionQueryError | undefined>
   ready: boolean
   failure?: SessionQueryError
 }
@@ -147,6 +152,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     path: z.string().required(),
     keysPath: z.string(),
     openAt: z.union(['startup', 'first-search', 'never'] as const).default('startup'),
+    warmupWaitMs: z.number().step(1).min(0).max(MAX_WARMUP_WAIT_MS).default(DEFAULT_WARMUP_WAIT_MS),
     journalMode: z.union(['wal', 'delete', 'truncate', 'persist'] as const).default('wal'),
     synchronous: z.union(['full', 'normal'] as const).default('full'),
     defaultLimit: z.number().step(1).min(1).max(SQLITE_MAX_PAGE_LIMIT).default(SESSION_QUERY_SQLITE_DEFAULT_LIMIT),
@@ -229,12 +235,17 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     assertNotAborted(signal)
     const binding = this.start()
     if (!binding.ready) {
-      if (binding.failure !== undefined) {
-        const failure = binding.failure
+      const { warmupWaitMs } = this.config
+      const failure = binding.failure ?? (binding.warm !== undefined && warmupWaitMs > 0
+        ? await waitForWarmup(binding.warm, warmupWaitMs, signal)
+        : undefined)
+      assertNotAborted(signal)
+      this.assertBinding(binding)
+      if (failure !== undefined) {
         delete binding.failure
         throw failure
       }
-      throw warming()
+      if (!binding.ready) throw warming()
     }
     for (const id of [...this.dirty.keys()]) {
       await waitWithAbort(this.refresh(binding, id), signal)
@@ -334,10 +345,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     binding.warm = this.scan(binding).then(() => {
       binding.ready = true
       binding.points.clear()
+      return undefined
     }, (error: unknown) => {
       if (binding.controller.signal.aborted) return
       binding.failure = persistenceError(error)
       this.ctx.logger.warn('session-search warmup failed: ' + binding.failure.message)
+      return binding.failure
     }).finally(() => { delete binding.warm })
   }
 
@@ -510,6 +523,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     path: config.path,
     keysPath: config.keysPath ?? (config.path === ':memory:' ? ':memory:' : `${config.path}.keys.db`),
     openAt: config.openAt ?? 'startup',
+    warmupWaitMs: config.warmupWaitMs ?? DEFAULT_WARMUP_WAIT_MS,
     journalMode: config.journalMode ?? 'wal',
     synchronous: config.synchronous ?? 'full',
     defaultLimit: config.defaultLimit ?? SESSION_QUERY_SQLITE_DEFAULT_LIMIT,
@@ -534,6 +548,9 @@ function resolveConfig(config: Config): ResolvedConfig {
   }
   const openPhases: readonly string[] = ['startup', 'first-search', 'never']
   if (!openPhases.includes(resolved.openAt)) throw invalidConfig('openAt is not supported')
+  if (!Number.isInteger(resolved.warmupWaitMs) || resolved.warmupWaitMs < 0 || resolved.warmupWaitMs > MAX_WARMUP_WAIT_MS) {
+    throw invalidConfig(`warmupWaitMs must be an integer between 0 and ${MAX_WARMUP_WAIT_MS}`)
+  }
   assertPageLimit('defaultLimit', resolved.defaultLimit)
   assertPageLimit('maxLimit', resolved.maxLimit)
   assertPositiveInteger('snippetChars', resolved.snippetChars)
@@ -591,6 +608,16 @@ function indexClosed(): SessionQueryError {
 function assertNotAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new SessionQueryError('session-search aborted', 'SESSION_QUERY_ABORTED')
+  }
+}
+
+async function waitForWarmup<T>(warm: Promise<T>, waitMs: number, signal: AbortSignal | undefined): Promise<T | undefined> {
+  const timeout = Promise.withResolvers<undefined>()
+  const timer = setTimeout(timeout.resolve, waitMs, undefined)
+  try {
+    return await waitWithAbort(Promise.race([warm, timeout.promise]), signal)
+  } finally {
+    clearTimeout(timer)
   }
 }
 

@@ -252,15 +252,6 @@ export class ApiSessionList {
             pageLimit = Math.max(1, Math.floor(requestedLimit / 2))
             continue
           }
-          if (requestedCursor !== undefined
-            && error instanceof SessionQueryError
-            && error.code === 'SESSION_QUERY_STALE_CURSOR') {
-            authorized.length = 0
-            acceptedIds.clear()
-            seenCursors.clear()
-            cursor = undefined
-            continue
-          }
           throw error
         }
         if (page.items.length > requestedLimit) {

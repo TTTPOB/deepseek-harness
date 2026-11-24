@@ -100,8 +100,8 @@ declare module '@deepseek-ai/cordis' {
  * Unified live-preferred session query service.
  *
  * Exact reads, filters, and traces are backend-independent concrete behavior.
- * A backend implements full-text observation, reconciliation, ranking, cursor
- * generations, and query execution on the same `ctx.sessionQuery` service.
+ * A backend implements full-text observation, reconciliation, ranking, and
+ * pagination on the same `ctx.sessionQuery` service.
  */
 export abstract class SessionQueryEngine extends Service {
   static inject = ['sessions']
@@ -220,7 +220,7 @@ export abstract class SessionQueryEngine extends Service {
    * Search events within one live-preferred logical session.
    * @param request - target session, query text, filters, page size, and cursor.
    * @param exec - optional cancellation control.
-   * @returns matching event hits and their target header from one indexed generation.
+   * @returns matching event hits and their target header from one indexed observation.
    */
   abstract searchEvents(
     request: SessionEventSearchRequest,

@@ -1,6 +1,6 @@
 /** Worker-owned FTS, live overlays, document keys and search cursors. */
 
-import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
@@ -40,22 +40,10 @@ interface SearchRow extends SessionHeaderRow {
   score: number
 }
 
-interface CursorPayload {
-  version: 1
-  instance: string
-  scope: 'sessions' | 'events'
-  fingerprint: string
-  generation: string
-  offset: number
-}
-
 /** Search read model. Only the worker may access its connection. */
 export class SearchStore {
-  private readonly instance = randomUUID()
   private readonly _bm25: SharedBm25
-  private generation: number
   private mainGeneration: number
-  private sourceEpoch = 0
   private readonly observedRevisions = new Map<SessionId, SessionPersistenceRevision>()
 
   /** @param db - connection with complete keys and connection-local schemas.
@@ -65,18 +53,12 @@ export class SearchStore {
     this._bm25 = new SharedBm25(db)
     const { global_generation } = db.prepare('SELECT global_generation FROM search_state WHERE singleton = 1')
       .get() as { global_generation: number }
-    this.generation = this.mainGeneration = global_generation
+    this.mainGeneration = global_generation
   }
 
-  /**
-   * Switch durable source identity, invalidating pagination even if revisions collide.
-   * @param epoch - current Host persistence binding.
-   */
-  bind(epoch: number): void {
-    if (this.sourceEpoch === epoch) return
-    this.sourceEpoch = epoch
+  /** Discard revision observations from the previous persistence source. */
+  resetObservedRevisions(): void {
     this.observedRevisions.clear()
-    this.generation++
   }
 
   /**
@@ -107,7 +89,7 @@ export class SearchStore {
    * @param revision - exact backend revision.
    */
   writeStored(entry: ObservedSession, revision: SessionPersistenceRevision): void {
-    this.transaction(true, generation => this._replacePersistedSession(entry, revision, generation))
+    this.durableTransaction(generation => this._replacePersistedSession(entry, revision, generation))
     this.observedRevisions.set(entry.header.id, revision)
   }
 
@@ -119,7 +101,7 @@ export class SearchStore {
     const exists = this.db.prepare('SELECT 1 FROM persisted_sessions WHERE id = ?')
     const present = ids.filter(id => exists.get(id) !== undefined)
     if (present.length === 0) return
-    this.transaction(true, () => {
+    this.durableTransaction(() => {
       for (const id of present) this._deleteSession('persisted', id)
     })
     for (const id of present) this.observedRevisions.delete(id)
@@ -134,66 +116,57 @@ export class SearchStore {
   writeLive(id: SessionId, entry: ObservedLiveSession | undefined, persisted: boolean): void {
     const row = this.db.prepare('SELECT fingerprint, persisted FROM temp.live_sessions WHERE id = ?').get(id)
     if (entry === undefined ? row === undefined : row?.fingerprint === entry.fingerprint && row.persisted === Number(persisted)) return
-    this.transaction(false, (generation) => {
+    this.transaction(() => {
       if (entry === undefined) this._deleteSession('live', id)
-      else this._replaceLiveSession(entry, generation, persisted)
+      else this._replaceLiveSession(entry, persisted)
     })
   }
 
   /**
    * @param request - normalized across-session search request.
    * @param persisted - whether to include stored history.
-   * @returns one ranked page and a generation-bound continuation.
+   * @returns one ranked page and a request-bound continuation over the current corpus.
    */
   searchSessions(request: NormalizedSessionRequest, persisted: boolean): SessionSearchPage<SessionSearchHit> {
-    const generation = String(this.generation)
-    const fingerprint = requestFingerprint(request)
-    const offset = request.cursor === undefined
-      ? 0 : decodeCursor(request.cursor, this.instance, 'sessions', fingerprint, generation)
+    const digest = requestDigest(request)
+    const offset = request.cursor === undefined ? 0 : decodeCursor(request.cursor, digest)
     const rows = this._querySessions(request, offset, persisted)
-    return page(rows, request.limit, row => this._sessionHit(row), cursorOffset => encodeCursor({
-      version: 1, instance: this.instance, scope: 'sessions', fingerprint, generation, offset: cursorOffset,
-    }), offset)
+    return page(rows, request.limit, row => this._sessionHit(row), digest, offset)
   }
 
   /**
    * @param request - normalized single-session search request.
    * @param persisted - whether to include stored history.
-   * @returns the target's header and one ranked event page.
+   * @returns the target's header and one ranked event page over the current corpus.
    */
   searchEvents(request: NormalizedEventRequest, persisted: boolean): SessionEventSearchPage {
-    const target = this._targetObservation(request.sessionId, persisted)
-    const background = this._bm25.usesLiveBackground() ? this.generation : this.mainGeneration
-    const generation = target.generation + ':background:' + background + ':source:' + this.sourceEpoch
-    const fingerprint = requestFingerprint(request)
-    const offset = request.cursor === undefined
-      ? 0 : decodeCursor(request.cursor, this.instance, 'events', fingerprint, generation)
+    const digest = requestDigest(request)
+    const offset = request.cursor === undefined ? 0 : decodeCursor(request.cursor, digest)
     return {
-      session: target.header,
-      ...page(this._queryEvents(request, offset, persisted), request.limit, row => this._eventHit(row), cursorOffset => encodeCursor({
-        version: 1, instance: this.instance, scope: 'events', fingerprint, generation, offset: cursorOffset,
-      }), offset),
+      session: this._targetHeader(request.sessionId, persisted),
+      ...page(this._queryEvents(request, offset, persisted), request.limit, row => this._eventHit(row), digest, offset),
     }
   }
 
-  private transaction(durable: boolean, write: (generation: number) => void): void {
-    const generation = this.generation + 1
+  private durableTransaction(write: (generation: number) => void): void {
+    const generation = this.mainGeneration + 1
+    this.transaction(() => {
+      write(generation)
+      this.db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(generation)
+      this.db.prepare('UPDATE keys.key_state SET main_generation = ? WHERE singleton = 1').run(generation)
+    })
+    this.mainGeneration = generation
+    this._bm25.invalidate()
+  }
+
+  private transaction(write: () => void): void {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      write(generation)
-      if (durable) {
-        this.db.prepare('UPDATE search_state SET global_generation = ? WHERE singleton = 1').run(generation)
-        this.db.prepare('UPDATE keys.key_state SET main_generation = ? WHERE singleton = 1').run(generation)
-      }
+      write()
       this.db.exec('COMMIT')
     } catch (error: unknown) {
       this.db.exec('ROLLBACK')
       throw error
-    }
-    this.generation = generation
-    if (durable) {
-      this.mainGeneration = generation
-      this._bm25.invalidate()
     }
   }
 
@@ -233,21 +206,20 @@ export class SearchStore {
     this._upsertDocuments('persisted', entry)
   }
 
-  private _replaceLiveSession(entry: ObservedLiveSession, generation: number, persisted: boolean): void {
+  private _replaceLiveSession(entry: ObservedLiveSession, persisted: boolean): void {
     const db = this.db
     db.prepare(`
       INSERT INTO temp.live_sessions
-        (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, fingerprint, persisted, generation)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, fingerprint, persisted)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET version=excluded.version, created_at=excluded.created_at,
         cwd=excluded.cwd, parent_session=excluded.parent_session, seed_length=excluded.seed_length,
         delegation_depth=excluded.delegation_depth, agent_preset=excluded.agent_preset,
-        fingerprint=excluded.fingerprint, persisted=excluded.persisted, generation=excluded.generation
+        fingerprint=excluded.fingerprint, persisted=excluded.persisted
     `).run(
       ...headerBindings(entry.header, entry.inheritedEventCount),
       entry.fingerprint,
       persisted ? 1 : 0,
-      generation,
     )
     this._upsertDocuments('live', entry)
   }
@@ -379,33 +351,23 @@ export class SearchStore {
     `).all(...bindings) as unknown as SearchRow[]
   }
 
-  private _targetObservation(
-    sessionId: SessionId,
-    persisted: boolean,
-  ): { header: SessionHeader; generation: string } {
+  private _targetHeader(sessionId: SessionId, persisted: boolean): SessionHeader {
     const db = this.db
     const live = db.prepare(
       `SELECT
-        id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, generation
+        id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset
       FROM temp.live_sessions
       WHERE id = ?`,
-    ).get(sessionId) as (SessionHeaderRow & { generation: number }) | undefined
-    if (live !== undefined) {
-      return { header: rowHeader(live), generation: `live:${live.generation}` }
-    }
+    ).get(sessionId) as SessionHeaderRow | undefined
+    if (live !== undefined) return rowHeader(live)
     if (persisted) {
       const stored = db.prepare(
         `SELECT
-          id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, generation
+          id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset
         FROM persisted_sessions
         WHERE id = ?`,
-      ).get(sessionId) as (SessionHeaderRow & { generation: number }) | undefined
-      if (stored !== undefined) {
-        return {
-          header: rowHeader(stored),
-          generation: `persisted:${stored.generation}`,
-        }
-      }
+      ).get(sessionId) as SessionHeaderRow | undefined
+      if (stored !== undefined) return rowHeader(stored)
     }
     throw new SessionQueryError(
       `session "${sessionId}" not found`,
@@ -532,57 +494,24 @@ function page<Row, Item>(
   rows: readonly Row[],
   limit: number,
   convert: (row: Row) => Item,
-  nextCursor: (offset: number) => SessionSearchCursorValue,
+  digest: string,
   offset: number,
 ): SessionSearchPage<Item> {
-  const hasMore = rows.length > limit
   return {
     items: rows.slice(0, limit).map(convert),
-    ...hasMore ? { nextCursor: nextCursor(offset + limit) } : {},
+    ...rows.length > limit ? { nextCursor: SessionSearchCursor(`v2.${digest}.${offset + limit}`) } : {},
   }
 }
 
-function encodeCursor(payload: CursorPayload): SessionSearchCursorValue {
-  return SessionSearchCursor(Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url'))
+function requestDigest(request: NormalizedSessionRequest | NormalizedEventRequest): string {
+  return createHash('sha256').update(requestFingerprint(request)).digest().subarray(0, 12).toString('base64url')
 }
 
-function decodeCursor(
-  cursor: SessionSearchCursorValue,
-  instance: string,
-  scope: CursorPayload['scope'],
-  fingerprint: string,
-  generation: string,
-): number {
-  let decoded: Partial<CursorPayload>
-  try {
-    decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<CursorPayload>
-  } catch (error: unknown) {
-    throw invalidCursor(error)
+function decodeCursor(cursor: SessionSearchCursorValue, digest: string): number {
+  const match = /^v2\.([A-Za-z0-9_-]{16})\.(0|[1-9][0-9]*)$/u.exec(cursor)
+  const offset = Number(match?.[2])
+  if (match?.[1] !== digest || !Number.isSafeInteger(offset)) {
+    throw new SessionQueryError('session-search cursor is invalid for this request', 'SESSION_QUERY_INVALID_CURSOR')
   }
-  if (
-    decoded.version !== 1
-    || decoded.instance !== instance
-    || decoded.scope !== scope
-    || decoded.fingerprint !== fingerprint
-    || !Number.isSafeInteger(decoded.offset)
-    || decoded.offset === undefined
-    || decoded.offset < 0
-  ) {
-    throw invalidCursor(new Error('cursor does not belong to this normalized request'))
-  }
-  if (decoded.generation !== generation) {
-    throw new SessionQueryError(
-      'session-search cursor is stale because its relevant corpus changed',
-      'SESSION_QUERY_STALE_CURSOR',
-    )
-  }
-  return decoded.offset
-}
-
-function invalidCursor(cause: unknown): SessionQueryError {
-  return new SessionQueryError(
-    'session-search cursor is invalid',
-    'SESSION_QUERY_INVALID_CURSOR',
-    { cause },
-  )
+  return offset
 }

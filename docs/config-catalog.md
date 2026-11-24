@@ -3335,6 +3335,8 @@ export interface Config extends SessionQueryConfig {
    * never imported or opened. Defaults to `startup`.
    */
   openAt?: OpenAt
+  /** Cross-session warmup wait in milliseconds, from 0 (no wait) to 2,147,483,647. Defaults to 3000. */
+  warmupWaitMs?: number
   /** SQLite journal mode. Defaults to `wal`. */
   journalMode?: JournalMode
   /** SQLite synchronous mode; NORMAL is honored only with WAL. Defaults to FULL. */

@@ -66,7 +66,7 @@ The [sampling reference](../../../docs/subsystems/session-query.md#synchronous-s
 
 ### Filters
 
-`SessionResultFilter` narrows sessions by id, nullable cwd, created-at range, nullable parent, or source availability; `SessionEventResultFilter` narrows events by seq/time range, event type, surface, or literal text. Filter arrays are ANDed and list values within one clause are ORed; empty list values match nothing, ranges are inclusive, and malformed ranges or unknown closed-union values fail with `SESSION_QUERY_INVALID_FILTER`.
+`SessionResultFilter` narrows sessions by id, nullable cwd, created-at range, nullable parent, or source availability; `SessionEventResultFilter` narrows events by seq/time range, event type, surface, or literal text. Filter arrays are ANDed. Inclusion lists match any listed value and match nothing when empty. An `exclude-ids` clause removes every listed session id; an empty exclusion list removes none. Ranges are inclusive. Malformed ranges or unknown closed-union values fail with `SESSION_QUERY_INVALID_FILTER`.
 
 The text clause is a literal, case-insensitive, whitespace-flexible scan of extracted semantic text — not a full-text query. Use it for arbitrary substring recall; use the mounted backend's search methods when you need ranked full-text results.
 

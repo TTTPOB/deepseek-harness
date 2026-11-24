@@ -360,160 +360,50 @@ describe('session.search', () => {
     expect(searchSessions).toHaveBeenCalledTimes(100)
   })
 
-  it('restarts a stale continuation with its learned limit and original visibility snapshot', async () => {
-    const ctx = await baseContext()
-    const oldOnly = hit('old-only', 0)
-    const shared = hit('shared', 1)
-    const freshFirst = hit('fresh-first', 2)
-    const freshLast = hit('fresh-last', 3)
-    for (const item of [oldOnly, shared, freshFirst, freshLast]) {
-      ctx.sessions.create(item.header.id, { meta: item.header })
-    }
-    const late = hit('late-visible', 4)
-    const stale = new SessionQueryError(
-      'provider generation changed',
-      'SESSION_QUERY_STALE_CURSOR',
-    )
-    const invalidLimit = new SessionQueryError(
-      'provider accepts at most 10 items',
-      'SESSION_QUERY_INVALID_LIMIT',
-    )
-    const searchSessions = vi.fn((providerRequest: SessionSearchRequest) => {
-      switch (searchSessions.mock.calls.length) {
-        case 1:
-          expect(providerRequest).toMatchObject({ limit: 20 })
-          expect(providerRequest).not.toHaveProperty('cursor')
-          return Promise.reject(invalidLimit)
-        case 2:
-          expect(providerRequest).toMatchObject({ limit: 10 })
-          expect(providerRequest).not.toHaveProperty('cursor')
-          return Promise.resolve({
-            items: [oldOnly, shared],
-            nextCursor: 'old-cursor',
-          })
-        case 3:
-          expect(providerRequest).toMatchObject({ limit: 10 })
-          expect(providerRequest.cursor).toBe('old-cursor')
-          ctx.sessions.create(late.header.id, { meta: late.header })
-          return Promise.reject(stale)
-        case 4:
-          expect(providerRequest).toMatchObject({ limit: 10 })
-          expect(providerRequest).not.toHaveProperty('cursor')
-          return Promise.resolve({
-            items: [freshFirst, shared],
-            nextCursor: 'old-cursor',
-          })
-        case 5:
-          expect(providerRequest).toMatchObject({ limit: 10 })
-          expect(providerRequest.cursor).toBe('old-cursor')
-          return Promise.resolve({ items: [freshLast, late] })
-        default:
-          return Promise.reject(new Error('unexpected provider call'))
-      }
-    })
-    installSearchQuery(ctx, searchSessions)
+  it.each(['SESSION_QUERY_INVALID_CURSOR', 'SESSION_QUERY_STALE_CURSOR'] as const)(
+    'fails a rejected continuation (%s) without restarting from page one', async (code) => {
+      const ctx = await baseContext()
+      const partial = hit('partial')
+      ctx.sessions.create(partial.header.id, { meta: partial.header })
+      const searchSessions = vi.fn()
+        .mockResolvedValueOnce({ items: [partial], nextCursor: 'next-cursor' })
+        .mockRejectedValueOnce(new SessionQueryError('continuation rejected', code))
+      installSearchQuery(ctx, searchSessions)
 
-    const response = await (await createSessionTestRemote(ctx, defaults)).search(
-      request('stale-restart'),
-      new AbortController().signal,
-    )
+      const response = await (await createSessionTestRemote(ctx, defaults)).search(
+        request('rejected-continuation'),
+        new AbortController().signal,
+      )
 
-    expect(response).toEqual({
-      ok: true,
-      value: {
-        items: [
-          { sessionId: 'fresh-first', snippet: 'match 2' },
-          { sessionId: 'shared', snippet: 'match 1' },
-          { sessionId: 'fresh-last', snippet: 'match 3' },
-        ],
-        hasMore: false,
-      },
-    })
-    expect(searchSessions).toHaveBeenCalledTimes(5)
-  })
+      expect(response).toMatchObject({ ok: false, error: { code: 'gateway/internal' } })
+      expect(response).not.toHaveProperty('value')
+      expect(searchSessions.mock.calls.map(([providerRequest]) => providerRequest.cursor))
+        .toEqual([undefined, 'next-cursor'])
+    },
+  )
 
-  it('counts continuous stale restarts against the 100-call budget', async () => {
-    const ctx = await baseContext()
-    const partial = hit('partial')
-    ctx.sessions.create(partial.header.id, { meta: partial.header })
-    const stale = new SessionQueryError(
-      'provider generation changed',
-      'SESSION_QUERY_STALE_CURSOR',
-    )
-    const searchSessions = vi.fn((providerRequest: SessionSearchRequest) => {
-      if (searchSessions.mock.calls.length > 100) {
-        return Promise.reject(new Error('provider was called after the shared budget'))
-      }
-      if (providerRequest.cursor !== undefined) return Promise.reject(stale)
-      return Promise.resolve({
-        items: [partial],
-        nextCursor: `cursor-${searchSessions.mock.calls.length}`,
-      })
-    })
-    installSearchQuery(ctx, searchSessions)
-
-    const response = await (await createSessionTestRemote(ctx, defaults)).search(
-      request('stale-churn'),
-      new AbortController().signal,
-    )
-
-    expect(response.ok).toBe(false)
-    if (response.ok) throw new Error('unreachable')
-    expect(response.error.code).toBe('gateway/internal')
-    expect(response.error.message).toContain('100-call work budget')
-    expect(response).not.toHaveProperty('value')
-    expect(searchSessions).toHaveBeenCalledTimes(100)
-  })
-
-  it('gives abort priority over a coincident stale continuation failure', async () => {
+  it('gives abort priority over a coincident rejected continuation', async () => {
     const ctx = await baseContext()
     ctx.sessions.create(sid('visible'), { meta: header('visible') })
     const controller = new AbortController()
-    const stale = new SessionQueryError(
-      'provider generation changed',
-      'SESSION_QUERY_STALE_CURSOR',
-    )
+    const error = new SessionQueryError('continuation rejected', 'SESSION_QUERY_INVALID_CURSOR')
     const searchSessions = vi.fn()
-      .mockResolvedValueOnce({ items: [], nextCursor: 'stale-cursor' })
+      .mockResolvedValueOnce({ items: [], nextCursor: 'next-cursor' })
       .mockImplementationOnce(() => {
         controller.abort()
-        return Promise.reject(stale)
+        return Promise.reject(error)
       })
     installSearchQuery(ctx, searchSessions)
 
     const response = await (await createSessionTestRemote(ctx, defaults)).search(
-      request('abort-stale'),
+      request('abort-continuation'),
       controller.signal,
     )
 
-    expect(response).toMatchObject({
-      ok: false,
-      error: { code: 'gateway/cancelled' },
-    })
+    expect(response).toMatchObject({ ok: false, error: { code: 'gateway/cancelled' } })
     expect(searchSessions).toHaveBeenCalledTimes(2)
   })
 
-  it('does not retry a stale first-page failure', async () => {
-    const ctx = await baseContext()
-    ctx.sessions.create(sid('visible'), { meta: header('visible') })
-    const searchSessions = vi.fn(() => Promise.reject(new SessionQueryError(
-      'provider generation changed before paging',
-      'SESSION_QUERY_STALE_CURSOR',
-    )))
-    installSearchQuery(ctx, searchSessions)
-
-    const response = await (await createSessionTestRemote(ctx, defaults)).search(
-      request('first-page-stale'),
-      new AbortController().signal,
-    )
-
-    expect(response).toMatchObject({
-      ok: false,
-      error: { code: 'gateway/internal' },
-    })
-    expect(response).not.toHaveProperty('value')
-    expect(searchSessions).toHaveBeenCalledOnce()
-  })
 
   it('does not adapt an invalid-limit continuation failure', async () => {
     const ctx = await baseContext()

@@ -68,6 +68,7 @@ export function apply(ctx: Context, config: Config): void {
     parameters: toolInput.sessionSearchParameters,
     output: TEXT_OUTPUT,
     timeoutMs: resolved.searchTimeoutMs,
+    isConcurrencySafe: () => true,
     execute: (args, exec) => operations.executeSessionSearch(ctx, args, exec, resolved.maxSearchResults),
     presentCall: presentation.presentSessionSearchCall,
   }))
@@ -78,6 +79,7 @@ export function apply(ctx: Context, config: Config): void {
     parameters: toolInput.eventSearchParameters,
     output: TEXT_OUTPUT,
     timeoutMs: resolved.searchTimeoutMs,
+    isConcurrencySafe: () => true,
     execute: (args, exec) => operations.executeEventSearch(ctx, args, exec, resolved.maxSearchResults),
     presentCall: presentation.presentEventSearchCall,
   }))

@@ -49,12 +49,6 @@ export class SharedBm25 {
       historical === undefined ? 1 : phraseIdf(historical), current === undefined ? 1 : phraseIdf(current)]
   }
 
-  /**
-   * Whether scoring depends on the live corpus average rather than historical background.
-   * @returns True when historical documents contain no indexed tokens.
-   */
-  usesLiveBackground(): boolean { return this.historyAverage() === null }
-
   private probe(text: string): void {
     this.db.exec('DELETE FROM temp.token_probe')
     this.db.prepare('INSERT INTO temp.token_probe(rowid,text) VALUES(1,?)').run(text)

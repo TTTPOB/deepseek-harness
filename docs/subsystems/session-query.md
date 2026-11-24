@@ -108,15 +108,16 @@ interface SessionEventRecord {
 
 ## Provider-independent filters and documents
 
-Session and event filter arrays are ANDed; values inside one list clause are ORed. Ranges are inclusive. The event `text` clause is a literal Unicode case-insensitive, whitespace-flexible regular-expression scan over extracted semantic text, independent of full-text providers.
+Session and event filter arrays are ANDed; inclusion lists match any listed value. An `exclude-ids` clause removes every listed session id and is a no-op when empty. Ranges are inclusive. The event `text` clause is a literal Unicode case-insensitive, whitespace-flexible regular-expression scan over extracted semantic text, independent of full-text providers.
 
 ```ts type-equiv
 /**
- * One logical-session predicate. A filter array is ANDed; `values` within a
- * clause are ORed.
+ * One logical-session predicate. Filters are ANDed. Inclusion lists match any
+ * supplied value; an exclusion list rejects every listed id and is a no-op when empty.
  */
 type SessionResultFilter =
   | { kind: 'id'; values: readonly SessionId[] }
+  | { kind: 'exclude-ids'; values: readonly SessionId[] }
   | { kind: 'cwd'; values: readonly (string | null)[] }
   | ({ kind: 'created-at' } & SessionResultRange)
   | { kind: 'parent'; values: readonly (SessionId | null)[] }
@@ -202,7 +203,7 @@ Unlike grouped cross-session hits, a within-session search must also expose its 
 ```ts type-equiv
 /** Event-search results bound to the indexed target-session observation. */
 interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit> {
-  /** Cloned target header from the same indexed generation as `items`. */
+  /** Cloned target header from the same indexed observation as `items`. */
   session: SessionHeader
 }
 ```
@@ -349,6 +350,7 @@ type SessionQueryErrorCode =
   | 'SESSION_QUERY_CORRUPT_SESSION'
   | 'SESSION_QUERY_EVENT_NOT_FOUND'
   | 'SESSION_QUERY_INDEX_FAILED'
+  | 'SESSION_QUERY_INDEX_WARMING'
   | 'SESSION_QUERY_INVALID_CONFIG'
   | 'SESSION_QUERY_INVALID_CURSOR'
   | 'SESSION_QUERY_INVALID_FILTER'
@@ -378,7 +380,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 Unified live-preferred session query service.
 
-Exact reads, filters, and traces are backend-independent concrete behavior. A backend implements full-text observation, reconciliation, ranking, cursor generations, and query execution on the same `ctx.sessionQuery` service.
+Exact reads, filters, and traces are backend-independent concrete behavior. A backend implements full-text observation, reconciliation, ranking, and pagination on the same `ctx.sessionQuery` service.
 
 ```ts cordis-catalog
 /**
@@ -411,7 +413,7 @@ abstract searchSessions( request: SessionSearchRequest, exec?: SessionSearchExec
  * Search events within one live-preferred logical session.
  * @param request - target session, query text, filters, page size, and cursor.
  * @param exec - optional cancellation control.
- * @returns matching event hits and their target header from one indexed generation.
+ * @returns matching event hits and their target header from one indexed observation.
  */
 abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionEventSearchPage>
 

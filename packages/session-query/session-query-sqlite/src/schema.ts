@@ -279,8 +279,7 @@ function ensureTemporarySchema(db: DatabaseSync): void {
       delegation_depth INTEGER,
       agent_preset  TEXT,
       fingerprint    TEXT NOT NULL,
-      persisted      INTEGER NOT NULL CHECK (persisted IN (0, 1)),
-      generation     INTEGER NOT NULL
+      persisted      INTEGER NOT NULL CHECK (persisted IN (0, 1))
     ) STRICT
   `)
   db.exec(`

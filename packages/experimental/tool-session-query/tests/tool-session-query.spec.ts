@@ -309,11 +309,11 @@ describe('registration and schemas', () => {
       .not.toContain('tool:session-query')
   })
 
-  it('keeps generation-bound searches exclusive while exact observations remain parallel', async () => {
+  it('allows search and exact observations to execute alongside sibling calls', async () => {
     const mounted = await mount()
     const classifications = [
-      ['session_search', { query: 'q' }, 'exclusive'],
-      ['session_event_search', { query: 'q' }, 'exclusive'],
+      ['session_search', { query: 'q' }, 'parallel'],
+      ['session_event_search', { query: 'q' }, 'parallel'],
       ['session_trace', {}, 'parallel'],
       ['session_event_trace', { seq: 0 }, 'parallel'],
       ['session_event_read', { seq: 0 }, 'parallel'],
@@ -417,6 +417,7 @@ describe('input validation and translation', () => {
         { kind: 'availability', values: ['live'] },
         { kind: 'parent', values: ['parent', null] },
         { kind: 'cwd', values: ['/work'] },
+        { kind: 'exclude-ids', values: [mounted.caller.id] },
       ],
       eventFilters: [
         { kind: 'seq', from: 2, to: 9 },
@@ -1252,7 +1253,7 @@ describe('workspace authority and lineage redaction', () => {
 })
 
 describe('search paging, prior-history bounds, titles, and cancellation', () => {
-  it('drains hidden internal pages to the authorized non-self cap and masks an unauthorized parent id', async () => {
+  it('passes caller exclusion on every page, deduplicates session hits, and masks an unauthorized parent id', async () => {
     const mounted = await mount({ maxSearchResults: 2 })
     const outside = createSession(mounted.ctx, 'outside-parent-secret', '/outside')
     const a = createSession(mounted.ctx, 'a', '/work')
@@ -1264,10 +1265,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     FakeQuery.sessionSearch = (request) => {
       if (request.cursor === undefined) {
         return Promise.resolve({
-          items: [
-            sessionHit('caller', '/work'),
-            sessionHit('unauthorized', '/outside'),
-          ],
+          items: [sessionHit('unauthorized', '/outside')],
           nextCursor: c1,
         })
       }
@@ -1279,7 +1277,8 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
       }
       return Promise.resolve({
         items: [
-          sessionHit('b', '/work', 'second'),
+          sessionHit(a.id, '/work', 'duplicate from reranking'),
+          sessionHit(b.id, '/work', 'second'),
           sessionHit('additional-authorized', '/work', 'third'),
         ],
       })
@@ -1289,6 +1288,9 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const output = text(result)
     expect(FakeQuery.sessionRequests).toHaveLength(3)
     expect(FakeQuery.sessionRequests.every(request => request.limit === undefined)).toBe(true)
+    for (const request of FakeQuery.sessionRequests) {
+      expect(request.sessionFilters).toContainEqual({ kind: 'exclude-ids', values: [mounted.caller.id] })
+    }
     expect(FakeQuery.sessionRequests.map(request => request.cursor)).toEqual([undefined, c1, c2])
     expect(output).toContain('Session a — Alpha')
     expect(output).toContain('Session b — Beta')
@@ -1297,7 +1299,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     expect(output).toContain('Result cap reached')
   })
 
-  it('does not report a cap when only rejected hits remain after the authorized limit', async () => {
+  it('does not report a cap when only duplicate or rejected hits remain at the authorized limit', async () => {
     const mounted = await mount({ maxSearchResults: 1 })
     const cursor = SessionSearchCursor('rejected-tail')
     FakeQuery.sessionSearch = request => request.cursor === undefined
@@ -1307,7 +1309,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
       })
       : Promise.resolve({
         items: [
-          sessionHit(mounted.caller.id, '/work'),
+          sessionHit('authorized', '/work', 'duplicate from reranking'),
           sessionHit('outside', '/outside'),
         ],
       })
@@ -1561,15 +1563,15 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
-  it('preserves stale-cursor diagnostics without transparently restarting', async () => {
+  it('reports an invalid continuation without restarting or exposing provider diagnostics', async () => {
     const mounted = await mount({ maxSearchResults: 2 })
-    const cursor = SessionSearchCursor('stale-next')
+    const cursor = SessionSearchCursor('invalid-next')
     FakeQuery.sessionSearch = request => request.cursor === undefined
       ? Promise.resolve({ items: [], nextCursor: cursor })
-      : Promise.reject(new SessionQueryError('stale provider generation', 'SESSION_QUERY_STALE_CURSOR'))
+      : Promise.reject(new SessionQueryError('private provider diagnostic', 'SESSION_QUERY_INVALID_CURSOR'))
     const result = await mounted.call('session_search', { query: 'needle' })
-    expect(errorCode(result)).toBe('SESSION_QUERY_STALE_CURSOR')
-    expect(text(result)).toContain('retry the complete search call')
+    expect(errorCode(result)).toBe('SESSION_QUERY_INVALID_CURSOR')
+    expect(text(result)).toBe('Error: session search continuation is invalid')
     expect(FakeQuery.sessionRequests).toHaveLength(2)
   })
 
@@ -1657,13 +1659,15 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
       })
       : Promise.resolve({
         session: header(other.id, '/work'),
-        items: [eventHit(other.id, SessionSeq(2)), eventHit(other.id, SessionSeq(3))],
+        items: [eventHit(other.id, SessionSeq(1), 'duplicate from reranking'), eventHit(other.id, SessionSeq(2)), eventHit(other.id, SessionSeq(3))],
       })
     const result = await mounted.call('session_event_search', {
       session_id: other.id,
       query: 'q',
     })
     expect(FakeQuery.eventRequests.map(request => request.cursor)).toEqual([undefined, cursor])
+    expect(text(result)).toContain('seq 2')
+    expect(text(result)).not.toContain('duplicate from reranking')
     expect(text(result)).toContain('Result cap reached')
   })
 

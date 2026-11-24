@@ -21,29 +21,29 @@
   en: d77054a6e8023089
   zh: d44f9a5cd54dd43a
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/minimal-configuration:
-  en: 4088bcbd33692bc2
-  zh: b26c677d9a7d2278
+  en: 529dbe2eda78d108
+  zh: 4f69c94def1b52d4
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/search-behavior:
-  en: fc91ab82843918df
-  zh: dac848b4c15b95fa
+  en: 229625f537d0ff3b
+  zh: 445f4a5f08f7686e
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/when-to-defer-or-disable-search:
   en: 8df2c14374a1f3a6
   zh: e1dd3ff73de187c4
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/failures-and-recovery:
-  en: e306dc4d3687563d
-  zh: a9fb441348d5f999
+  en: d27d838ea3536a4f
+  zh: 7c5f083bcd2993de
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation:
   en: 1b4ba96f994a361d
   zh: 50148b7af190aa0c
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/design-philosophy:
-  en: 043fa4523076b44b
-  zh: 0349da28b5d46c0f
+  en: ecec7279ec2b6f02
+  zh: 79fc6b11022fbcd1
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/source-map:
   en: 6d9809f7025cdecf
   zh: e952063fd126aa55
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/index-lifecycle:
-  en: 06198276501f146c
-  zh: b15a5916db31d21f
+  en: ca946cdfc3af23fa
+  zh: d0f1a2ea9d63d63a
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/schema-ownership:
   en: a584af02e5e39695
   zh: 3e2ba6da1d62db62

@@ -288,11 +288,12 @@ export interface SessionResultRange {
 export type SessionAvailability = 'live' | 'persisted'
 
 /**
- * One logical-session predicate. A filter array is ANDed; `values` within a
- * clause are ORed.
+ * One logical-session predicate. Filters are ANDed. Inclusion lists match any
+ * supplied value; an exclusion list rejects every listed id and is a no-op when empty.
  */
 export type SessionResultFilter =
   | { kind: 'id'; values: readonly SessionId[] }
+  | { kind: 'exclude-ids'; values: readonly SessionId[] }
   | { kind: 'cwd'; values: readonly (string | null)[] }
   | ({ kind: 'created-at' } & SessionResultRange)
   | { kind: 'parent'; values: readonly (SessionId | null)[] }
@@ -328,7 +329,7 @@ export interface SessionSearchPage<T> {
 
 /** Event-search results bound to the indexed target-session observation. */
 export interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit> {
-  /** Cloned target header from the same indexed generation as `items`. */
+  /** Cloned target header from the same indexed observation as `items`. */
   session: SessionHeader
 }
 

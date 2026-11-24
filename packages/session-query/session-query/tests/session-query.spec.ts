@@ -234,6 +234,35 @@ describe('bounded session and event pages', () => {
     await ctx.fiber.dispose()
   })
 
+  it('excludes ids from metadata pages and exact-id filters', async () => {
+    const ctx = await liveContext()
+    try {
+      const oldest = ctx.sessions.create(SessionId('page-oldest'), { meta: { createdAt: 1 } })
+      const middle = ctx.sessions.create(SessionId('page-middle'), { meta: { createdAt: 2 } })
+      const newest = ctx.sessions.create(SessionId('page-newest'), { meta: { createdAt: 3 } })
+      const filters = [{ kind: 'exclude-ids', values: [newest.id] }] as const
+      const page = await ctx.sessionQuery.pageSessions({ filters, limit: 1 })
+      expect(page.items.map(record => record.header.id)).toEqual([middle.id])
+      expect(page.nextCursor).toBeDefined()
+      const next = await ctx.sessionQuery.pageSessions({ filters, limit: 1, cursor: page.nextCursor! })
+      expect(next.items.map(record => record.header.id)).toEqual([oldest.id])
+      expect(next.nextCursor).toBeUndefined()
+      await expect(ctx.sessionQuery.pageSessions({
+        filters: [{ kind: 'exclude-ids', values: [] }], limit: 1, cursor: page.nextCursor!,
+      })).rejects.toThrow(expectCode('SESSION_QUERY_INVALID_CURSOR'))
+
+      const include = { kind: 'id', values: [newest.id, middle.id] } as const
+      expect((await ctx.sessionQuery.filterSessions([include, ...filters])).map(record => record.header.id))
+        .toEqual([middle.id])
+      expect((await ctx.sessionQuery.filterSessions([include, { kind: 'exclude-ids', values: [] }]))
+        .map(record => record.header.id)).toEqual([newest.id, middle.id])
+      await expect(ctx.sessionQuery.filterSessions([{ kind: 'exclude-ids', values: [null as never] }]))
+        .rejects.toThrow(expectCode('SESSION_QUERY_INVALID_FILTER'))
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('shares fresh persisted metadata across list, filter and trace, refreshes after TTL, and overlays live sessions', async () => {
     TestPersistence.reset([{ meta: header('cached'), events: [] }])
     const ctx = await liveContext({ metadataCacheTtlMs: 5000 })

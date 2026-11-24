@@ -51,7 +51,7 @@ describe('tool-session-query with the real SQLite provider', () => {
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-    await ctx.plugin(SqliteSessionQueryEngine, { path: join(root, 'session-query.db') })
+    await ctx.plugin(SqliteSessionQueryEngine, { path: join(root, 'session-query.db'), defaultLimit: 1 })
     await ctx.plugin(ToolSessionQuery)
 
     const persisted = SessionId('persisted')
@@ -96,14 +96,11 @@ describe('tool-session-query with the real SQLite provider', () => {
       agent: fakeAgent(caller),
     })
 
-    await expect.poll(async () => {
-      const result = await execute('session_search', { query: 'persisted integration needle' })
-      return result.isError ? result.error?.info?.code : 'ready'
-    }, { timeout: 10_000 }).toBe('ready')
-    const sessions = await execute('session_search', { query: 'persisted integration needle' })
+    const sessions = await execute('session_search', { query: 'integration needle' })
     expect(sessions.isError).toBe(false)
-    expect(sessions.content.map(block => block.type === 'text' ? block.text : '').join('\n'))
-      .toContain('Session persisted')
+    const sessionText = sessions.content.map(block => block.type === 'text' ? block.text : '').join('\n')
+    expect(sessionText).toContain('Session persisted')
+    expect(sessionText).not.toContain('Session caller')
     const persistedEvents = await execute('session_event_search', {
       session_id: persisted,
       query: 'persisted integration needle',

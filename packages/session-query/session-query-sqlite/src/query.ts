@@ -150,6 +150,11 @@ export function buildSessionWhere(filters: readonly SessionResultFilter[]): SqlW
       case 'id':
         addList(clauses, params, 'session_id', filter.values)
         break
+      case 'exclude-ids':
+        if (filter.values.length > 0) {
+          clauses.push(`session_id NOT IN (${appendListBindings(params, filter.values)})`)
+        }
+        break
       case 'cwd':
         addNullableList(clauses, params, 'cwd', filter.values)
         break
@@ -237,7 +242,7 @@ export function sanitizeFtsText(text: string): string {
 }
 
 /**
- * Build the stable normalized request identity stored in opaque cursors.
+ * Serialize the normalized request identity used to derive search cursor digests.
  * @param request - normalized request whose filter ordering is canonicalized.
  * @returns deterministic JSON identity for cursor binding.
  */

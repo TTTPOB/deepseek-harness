@@ -12,7 +12,7 @@ import { SessionQueryError } from './config.ts'
 /**
  * Apply ANDed logical-session filters while preserving input order.
  * @param records - detached logical-session records to inspect.
- * @param filters - clauses whose list values are ORed within each clause.
+ * @param filters - inclusive and exclusive clauses combined with AND.
  * @returns records accepted by every clause.
  */
 export function filterSessionResults<T extends SessionRecord>(
@@ -49,6 +49,7 @@ export function materializeSessionResultFilters(
   return filters.map((filter) => {
     switch (filter.kind) {
       case 'id':
+      case 'exclude-ids':
         return { kind: filter.kind, values: copyStrings(filter.kind, filter.values) }
       case 'cwd':
         return { kind: filter.kind, values: copyNullableStrings(filter.kind, filter.values) }
@@ -121,6 +122,10 @@ function sessionPredicate(filter: SessionResultFilter): (record: SessionRecord) 
   switch (filter.kind) {
     case 'id':
       return record => filter.values.includes(record.header.id)
+    case 'exclude-ids': {
+      const excluded = new Set(filter.values)
+      return record => !excluded.has(record.header.id)
+    }
     case 'cwd':
       return record => filter.values.includes(record.header.cwd ?? null)
     case 'created-at': {

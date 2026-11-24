@@ -87,7 +87,7 @@ async function executeSessionSearch(
     if (parentValues.length === 0) return presentation.formatEmptySessionSearch()
     sessionFilters.push({ kind: 'parent', values: parentValues })
   }
-  sessionFilters.push({ kind: 'cwd', values: [cwd] })
+  sessionFilters.push({ kind: 'cwd', values: [cwd] }, { kind: 'exclude-ids', values: [caller.id] })
   const collected = await collectPages(
     maxResults,
     exec.signal,
@@ -98,7 +98,7 @@ async function executeSessionSearch(
         eventFilters,
         ...cursor === undefined ? {} : { cursor },
       }, { signal: exec.signal })),
-    hit => hit.header.id !== caller.id && workspaceAccess.recordAuthorized(hit, caller),
+    hit => workspaceAccess.recordAuthorized(hit, caller) ? hit.header.id : undefined,
   )
 
   const parentIds = collected.items
@@ -157,7 +157,7 @@ async function executeEventSearch(
       workspaceAccess.assertObservedTargetAuthorized(caller, sessionId, page.session)
       return page
     },
-    () => true,
+    hit => hit.seq,
   )
   return presentation.formatEventSearch(sessionId, title, collected)
 }
@@ -242,9 +242,10 @@ async function collectPages<T>(
     readonly items: readonly T[]
     readonly nextCursor?: SessionSearchCursor
   }>,
-  accept: (item: T) => boolean,
+  acceptedKey: (item: T) => string | number | undefined,
 ): Promise<SearchCollection<T>> {
   const items: T[] = []
+  const accepted = new Set<string | number>()
   const seen = new Set<SessionSearchCursor>()
   let cursor: SessionSearchCursor | undefined
   while (true) {
@@ -252,10 +253,10 @@ async function collectPages<T>(
     const page = await request(cursor)
     signal.throwIfAborted()
     for (const item of page.items) {
-      if (!accept(item)) continue
-      if (items.length === maxResults) {
-        return { items, capped: true }
-      }
+      const key = acceptedKey(item)
+      if (key === undefined || accepted.has(key)) continue
+      if (items.length === maxResults) return { items, capped: true }
+      accepted.add(key)
       items.push(item)
     }
     if (page.nextCursor === undefined) return { items, capped: false }

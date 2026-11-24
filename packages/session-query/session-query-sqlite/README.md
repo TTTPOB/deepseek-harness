@@ -45,6 +45,7 @@ Choose it when you want full-text recall over prior sessions with ranking and pa
 | `path` | required | Dedicated derived-index SQLite path, or `:memory:`; missing paths are created owner-only on POSIX |
 | `keysPath` | `<path>.keys.db` | Dedicated document-key sidecar path, or `:memory:` (the default when `path` is `:memory:`); must differ from `path` |
 | `openAt` | `startup` | `startup` opens at activation; `first-search` defers the SQLite module until the first search; `never` disables full-text search while inherited reads stay available |
+| `warmupWaitMs` | `3000` | Maximum wait for background warmup on a cross-session search, in milliseconds; `0` returns immediately |
 | `journalMode` | `wal` | `wal`, `delete`, `truncate`, or `persist` |
 | `synchronous` | `full` | `normal` is honored only with WAL, for both index files |
 | `defaultLimit` | `20` | Page size when a request omits `limit` |
@@ -62,11 +63,13 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 ### Search behavior
 
-With `openAt: startup`, the service starts background warmup at activation. With `openAt: first-search`, the first request starts the same service-owned operation. Cross-session search returns retryable `SESSION_QUERY_INDEX_WARMING` until history is ready; do not treat this as an empty page. Once document keys are ready, `searchEvents` can search its target without waiting for the full history. Aborting a request cancels only its own wait.
+With `openAt: startup`, the service starts background warmup at activation. With `openAt: first-search`, the first request starts the same service-owned operation. Cross-session search waits at most `warmupWaitMs` milliseconds; if history is still not ready, it returns retryable `SESSION_QUERY_INDEX_WARMING`, not an empty page. Once document keys are ready, `searchEvents` can search its target without waiting for the full history. Aborting a request cancels only its own wait.
 
-`searchSessions` searches the whole corpus and groups results by each session's strongest matching event; `searchEvents` searches one logical session. Queries are literal phrases: they are trimmed and whitespace-normalized, and FTS5 syntax such as quotes, `OR`, `NEAR`, and `*` is treated as data, never as executable query syntax. Metadata filters (session id, cwd, created-at, parent, availability, event seq/time/type/surface) narrow results before ranking. All `current`, `shadowed`, and `log-only` events are searchable by default; pass a surface filter to narrow.
+`searchSessions` searches the whole corpus and groups results by each session's strongest matching event; `searchEvents` searches one logical session. Queries are literal phrases: they are trimmed and whitespace-normalized, and FTS5 syntax such as quotes, `OR`, `NEAR`, and `*` is treated as data, never as executable query syntax. Metadata filters (session id, excluded session ids, cwd, created-at, parent, availability, event seq/time/type/surface) narrow results before ranking. All `current`, `shadowed`, and `log-only` events are searchable by default; pass a surface filter to narrow.
 
-Ranking uses BM25 with one historical background for persisted and live matches. Live bodies contribute their latest phrase frequency and token length, but do not change historical statistics; old persisted bodies of live-shadowed sessions remain background only. When history has no indexed tokens, ranking uses the live average token length and a common IDF of 1. A phrase absent from history also uses IDF 1. The common phrase IDF cancels for ranking; both sources round normalized scores to 12 decimal places so inversion noise does not override metadata ties. Event time, session id, and seq break score ties. Results carry plain-text snippets bounded by `snippetChars` Unicode code points, without numeric scores. Opaque cursors bind the exact normalized request; target changes or historical revisions invalidate event pages (`SESSION_QUERY_STALE_CURSOR`). Unrelated live changes preserve event cursors when a historical background exists; without one, live changes invalidate them too. Cross-session cursors invalidate on any corpus change.
+Ranking uses BM25 with one historical background for persisted and live matches. Live bodies contribute their latest phrase frequency and token length, but do not change historical statistics; old persisted bodies of live-shadowed sessions remain background only. When history has no indexed tokens, ranking uses the live average token length and a common IDF of 1. A phrase absent from history also uses IDF 1. The common phrase IDF cancels for ranking; both sources round normalized scores to 12 decimal places so inversion noise does not override metadata ties. Event time, session id, and seq break score ties. Results carry plain-text snippets bounded by `snippetChars` Unicode code points, without numeric scores.
+
+Each opaque cursor binds the normalized search request. A continuation ranks the current corpus and starts at the position recorded in the cursor. Corpus changes between pages can cause duplicate or skipped results.
 
 The `unicode61` tokenizer matches tokens and phrases, not arbitrary substrings: `AI` does not match the token `BRAID`. Use `ctx.sessionQuery.filterEvents()` with a `text` clause when a literal whitespace-flexible substring scan is required.
 
@@ -76,7 +79,7 @@ With `openAt: first-search`, the service activates without importing `node:sqlit
 
 ### Failures and recovery
 
-Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DISABLED` when search is configured off; `SESSION_QUERY_INDEX_FAILED` when the index cannot open or reconcile; `SESSION_QUERY_SESSION_NOT_FOUND` when a search target is absent; `SESSION_QUERY_STALE_CURSOR` when the corpus changed between pages — retry the complete search call; and `SESSION_QUERY_INVALID_CURSOR` for a cursor that does not belong to this request.
+Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DISABLED` when search is configured off; `SESSION_QUERY_INDEX_FAILED` when the index cannot open or reconcile; `SESSION_QUERY_SESSION_NOT_FOUND` when a search target is absent; and `SESSION_QUERY_INVALID_CURSOR` for malformed cursors or cursors from a different request.
 
 -----
 
@@ -90,11 +93,10 @@ This section explains the design decisions behind the backend and points at the 
 
 ### Design philosophy
 
-The backend is built on one separation and three commitments:
+The backend is built on one separation and two commitments:
 
 - **Derived index, never the source store.** The FTS rows live in a dedicated disposable database; the session-persistence database is never opened here.
 - **Live-preferred observation.** An attached live session takes precedence over its indexed historical body.
-- **Generation-bound cursors.** Every corpus change bumps a generation; cursors carry the generation they were created under and fail stale rather than returning a shifted page.
 - **Literal phrases as data.** Caller query text is quoted into one FTS5 phrase so query syntax stays inert, and reserved highlight markers are stripped from documents before indexing.
 
 The design history lives in the [SQLite FTS5 session search note](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md) and the [unified service decision](../../../.agents/notes/archived/architecture/2026-07-23-unified-session-query-service.md).
@@ -110,7 +112,7 @@ The design history lives in the [SQLite FTS5 session search note](../../../.agen
 
 ### Index lifecycle
 
-One worker owns SQLite and the JSONL reader. It reads, decompresses, and projects durable logs off the Host thread. Each changed session commits a new generation together with its revision, FTS rows, and keys; reopening skips committed revisions. Lifecycle events mark changed sessions dirty, and live projection yields between batches on the Host. Non-JSONL backends supply raw logs through the generic persistence interface on their owning thread.
+One worker owns SQLite and the JSONL reader. It reads, decompresses, and projects durable logs off the Host thread. Each changed stored session commits a new generation together with its revision, FTS rows, and keys; reopening skips committed revisions. Lifecycle events mark changed sessions dirty, and live projection yields between batches on the Host. Non-JSONL backends supply raw logs through the generic persistence interface on their owning thread.
 
 Ranking materializes complete MATCH candidates with metadata and native BM25 scores before filters, session-best selection, and pagination; it never truncates either source before merging. Event queries restrict both raw branches to the target session before materialization, while calibration and phrase statistics remain global. Full highlighting runs only for the bounded result page. A reusable TEMP unicode61 token probe measures changed live bodies, and a TEMP rowid-to-token-count table updates in the same transaction as live FTS rows. Unchanged bodies are not retokenized; retirement removes their counts.
 

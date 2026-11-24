@@ -45,6 +45,7 @@ kind: "package-reference"
 | `path` | 必填 | 专用派生索引 SQLite 路径，或 `:memory:`；POSIX 上缺失的路径会以仅所有者可访问的方式创建 |
 | `keysPath` | `<path>.keys.db` | 专用文档键旁路库路径，或 `:memory:`（`path` 为 `:memory:` 时的默认值）；必须与 `path` 不同 |
 | `openAt` | `startup` | `startup` 在激活时打开；`first-search` 把 SQLite 模块推迟到首次搜索；`never` 关闭全文搜索，继承的读取保持可用 |
+| `warmupWaitMs` | `3000` | 跨会话搜索等待后台预热的最长时间（毫秒）；`0` 表示立即返回 |
 | `journalMode` | `wal` | `wal`、`delete`、`truncate` 或 `persist` |
 | `synchronous` | `full` | 仅 WAL 模式支持 `normal`，应用于主库和旁路库 |
 | `defaultLimit` | `20` | 请求省略 `limit` 时的分页大小 |
@@ -62,11 +63,13 @@ kind: "package-reference"
 
 ### 搜索行为
 
-使用 `openAt: startup` 时在激活时启动后台预热；使用 `openAt: first-search` 时由首次搜索启动同一项服务级工作。全库未就绪时，跨会话搜索返回可重试的 `SESSION_QUERY_INDEX_WARMING`，不能当作空结果。文档键就绪后，`searchEvents` 只需处理目标会话。取消请求只取消该请求的等待。
+使用 `openAt: startup` 时在激活时启动后台预热；使用 `openAt: first-search` 时由首次搜索启动同一项服务级工作。跨会话搜索最多等待 `warmupWaitMs` 毫秒；到期仍未就绪时返回可重试的 `SESSION_QUERY_INDEX_WARMING`，而非空页。文档键就绪后，`searchEvents` 无需等待全库预热，只需处理目标会话。取消请求只取消该请求的等待。
 
-`searchSessions` 搜索整个语料库，并按每个会话匹配最强的事件分组结果；`searchEvents` 搜索一个逻辑会话。查询是字面短语：首尾空白会被移除、内部空白会被规范化，引号、`OR`、`NEAR` 和 `*` 等 FTS5 语法被视为数据，绝不作为可执行查询语法。元数据过滤器（会话 id、cwd、创建时间、父级、可用性、事件 seq/时间/类型/表层）在排序前缩小结果。默认搜索全部 `current`、`shadowed` 与 `log-only` 事件；传入表层过滤器可缩小范围。
+`searchSessions` 搜索整个语料库，并按每个会话匹配最强的事件分组结果；`searchEvents` 搜索一个逻辑会话。查询是字面短语：首尾空白会被移除、内部空白会被规范化，引号、`OR`、`NEAR` 和 `*` 等 FTS5 语法被视为数据，绝不作为可执行查询语法。元数据过滤器（会话 id、排除的会话 id、cwd、创建时间、父级、可用性、事件 seq/时间/类型/表层）在排序前缩小结果。默认搜索全部 `current`、`shadowed` 与 `log-only` 事件；传入表层过滤器可缩小范围。
 
-排序使用持久化与实时命中共享同一历史背景的 BM25。实时正文贡献最新短语频次与 token 长度，但不改变历史统计；被实时会话遮蔽的旧持久化正文只参与背景统计。历史没有已索引 token 时，排序采用实时平均 token 长度及共同 IDF=1；历史不存在该短语时，也采用 IDF=1。排序消去共同短语 IDF；两来源的归一化分数统一保留 12 位小数，避免反演舍入误差盖过元数据平局规则。事件时间、会话 id 与 seq 打破分数平局。结果携带按 `snippetChars` 个 Unicode 码点截断的纯文本摘录，不返回数值分数。不透明游标绑定规范化后的确切请求；目标变化或历史 revision 更新使事件分页失效（`SESSION_QUERY_STALE_CURSOR`）。存在历史背景时，无关实时变化不影响事件游标；没有历史背景时，实时变化也使其失效。跨会话游标在任何语料变化后失效。
+排序使用持久化与实时命中共享同一历史背景的 BM25。实时正文贡献最新短语频次与 token 长度，但不改变历史统计；被实时会话遮蔽的旧持久化正文只参与背景统计。历史没有已索引 token 时，排序采用实时平均 token 长度及共同 IDF=1；历史不存在该短语时，也采用 IDF=1。排序消去共同短语 IDF；两来源的归一化分数统一保留 12 位小数，避免反演舍入误差盖过元数据平局规则。事件时间、会话 id 与 seq 打破分数平局。结果携带按 `snippetChars` 个 Unicode 码点截断的纯文本摘录，不返回数值分数。
+
+每个不透明游标绑定规范化后的搜索请求。续页会对当前语料重新排名，从游标记录的位置开始返回。若两页之间语料发生变化，结果可能重复或遗漏。
 
 `unicode61` tokenizer 匹配 token 与短语，而非任意子字符串：`AI` 不匹配 token `BRAID`。需要执行字面、空白灵活的字符串子串扫描时，使用带 `text` 子句的 `ctx.sessionQuery.filterEvents()`。
 
@@ -76,7 +79,7 @@ kind: "package-reference"
 
 ### 失败与恢复
 
-带类型的 `SessionQueryError` 失败携带稳定代码：搜索配置为关闭时 `SESSION_QUERY_SEARCH_DISABLED`；索引无法打开或对账时 `SESSION_QUERY_INDEX_FAILED`；搜索目标不存在时 `SESSION_QUERY_SESSION_NOT_FOUND`；语料库在分页之间变化时 `SESSION_QUERY_STALE_CURSOR`——请重试完整的搜索调用；游标不属于该请求时 `SESSION_QUERY_INVALID_CURSOR`。
+带类型的 `SessionQueryError` 失败携带稳定代码：搜索配置为关闭时返回 `SESSION_QUERY_SEARCH_DISABLED`；索引无法打开或对账时返回 `SESSION_QUERY_INDEX_FAILED`；搜索目标不存在时返回 `SESSION_QUERY_SESSION_NOT_FOUND`；游标格式无效或不属于该请求时返回 `SESSION_QUERY_INVALID_CURSOR`。
 
 -----
 
@@ -90,11 +93,10 @@ kind: "package-reference"
 
 ### 设计理念
 
-本后端建立在一个分离与三项承诺之上：
+本后端建立在一个分离与两项承诺之上：
 
 - **派生索引，绝不动源存储。** FTS 行存放在专用可丢弃数据库中；这里的代码从不打开 session-persistence 数据库。
 - **实时优先的观察。** 已挂载的实时会话优先于同一会话的历史索引。
-- **世代绑定的游标。** 每次语料库变化都会递增世代；游标携带其创建时的世代，宁可陈旧失败也不返回偏移后的页面。
 - **字面短语即数据。** 调用方查询文本被引成一个 FTS5 短语，查询语法保持惰性；保留高亮标记在索引前从文档中剥离。
 
 设计历史记录在 [SQLite FTS5 会话搜索笔记](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md)与[统一服务决策](../../../.agents/notes/archived/architecture/2026-07-23-unified-session-query-service.md)中。
@@ -110,7 +112,7 @@ kind: "package-reference"
 
 ### 索引生命周期
 
-一个 worker 独占 SQLite 和 JSONL 读取器，在 Host 线程之外读取、解压和投影冷日志。每个变化的会话会在一次事务中提交其 revision、FTS 行、文档键及新世代；重开跳过已提交的 revision。生命周期事件标记变化的会话，实时投影在 Host 上分批让出。非 JSONL 后端仍在其服务所在的线程通过通用持久化接口提供原始日志。
+一个 worker 独占 SQLite 和 JSONL 读取器，在 Host 线程之外读取、解压和投影冷日志。每个变化的持久化会话会在一次事务中提交其 revision、FTS 行、文档键及新世代；重开跳过已提交的 revision。生命周期事件标记变化的会话，实时投影在 Host 上分批让出。非 JSONL 后端仍在其服务所在的线程通过通用持久化接口提供原始日志。
 
 排序先物化完整 MATCH 候选的元数据及原生 BM25 分数，再过滤、选取会话最佳事件和分页；合并前不截断任一来源。事件查询在物化前将两来源的候选限定为目标会话，但校准及短语统计仍基于全局。只有有界结果页生成完整高亮正文。可复用的 TEMP unicode61 token probe 测量变化的实时正文，TEMP rowid-token 数表与实时 FTS 行在同一事务中更新；不变正文不重新分词，退出实时索引时删除其计数。
 

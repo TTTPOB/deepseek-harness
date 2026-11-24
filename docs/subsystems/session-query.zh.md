@@ -108,15 +108,16 @@ interface SessionEventRecord {
 
 ## 与提供方无关的过滤器和文档
 
-会话和事件过滤器数组内的各项按逻辑与（AND）组合；单个列表子句中的各值按逻辑或（OR）组合。范围包含两端。事件的 `text` 子句会对提取出的语义文本执行正则表达式扫描：搜索文本按字面量处理，按 Unicode 规则执行不区分大小写的匹配，并允许灵活匹配空白字符；该过程与全文搜索提供方无关。
+会话和事件过滤器数组内的各项按逻辑与（AND）组合；包含列表匹配其中任一值。`exclude-ids` 排除所有列出的会话 id，空排除列表不排除任何会话。范围包含两端。事件的 `text` 子句会对提取出的语义文本执行正则表达式扫描：搜索文本按字面量处理，按 Unicode 规则执行不区分大小写的匹配，并允许灵活匹配空白字符；该过程与全文搜索提供方无关。
 
 ```ts type-equiv
 /**
- * One logical-session predicate. A filter array is ANDed; `values` within a
- * clause are ORed.
+ * One logical-session predicate. Filters are ANDed. Inclusion lists match any
+ * supplied value; an exclusion list rejects every listed id and is a no-op when empty.
  */
 type SessionResultFilter =
   | { kind: 'id'; values: readonly SessionId[] }
+  | { kind: 'exclude-ids'; values: readonly SessionId[] }
   | { kind: 'cwd'; values: readonly (string | null)[] }
   | ({ kind: 'created-at' } & SessionResultRange)
   | { kind: 'parent'; values: readonly (SessionId | null)[] }
@@ -202,7 +203,7 @@ interface SessionSearchPage<T> {
 ```ts type-equiv
 /** Event-search results bound to the indexed target-session observation. */
 interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit> {
-  /** Cloned target header from the same indexed generation as `items`. */
+  /** Cloned target header from the same indexed observation as `items`. */
   session: SessionHeader
 }
 ```
@@ -349,6 +350,7 @@ type SessionQueryErrorCode =
   | 'SESSION_QUERY_CORRUPT_SESSION'
   | 'SESSION_QUERY_EVENT_NOT_FOUND'
   | 'SESSION_QUERY_INDEX_FAILED'
+  | 'SESSION_QUERY_INDEX_WARMING'
   | 'SESSION_QUERY_INVALID_CONFIG'
   | 'SESSION_QUERY_INVALID_CURSOR'
   | 'SESSION_QUERY_INVALID_FILTER'
@@ -378,7 +380,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 Unified live-preferred session query service.
 
-Exact reads, filters, and traces are backend-independent concrete behavior. A backend implements full-text observation, reconciliation, ranking, cursor generations, and query execution on the same `ctx.sessionQuery` service.
+Exact reads, filters, and traces are backend-independent concrete behavior. A backend implements full-text observation, reconciliation, ranking, and pagination on the same `ctx.sessionQuery` service.
 
 ```ts cordis-catalog
 /**
@@ -411,7 +413,7 @@ abstract searchSessions( request: SessionSearchRequest, exec?: SessionSearchExec
  * Search events within one live-preferred logical session.
  * @param request - target session, query text, filters, page size, and cursor.
  * @param exec - optional cancellation control.
- * @returns matching event hits and their target header from one indexed generation.
+ * @returns matching event hits and their target header from one indexed observation.
  */
 abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionEventSearchPage>
 

@@ -36,7 +36,7 @@ async function dispatch(command: Command): Promise<Result[keyof Result]> {
     const prior = reader
     epoch = command.epoch
     snapshots = []
-    store?.bind(epoch)
+    store?.resetObservedRevisions()
     if (command.jsonl === undefined) reader = undefined
     else {
       const ctx = new Context()
@@ -68,10 +68,7 @@ async function dispatch(command: Command): Promise<Result[keyof Result]> {
   }
   if (command.kind === 'stat') return (await reader?.promise)?.stat(command.id)
   if (!keysReady) throw new SessionQueryError('session search document keys are rebuilding; retry shortly', 'SESSION_QUERY_INDEX_WARMING')
-  if (store === undefined) {
-    store = new SearchStore(db, config.snippetChars)
-    store.bind(epoch)
-  }
+  store ??= new SearchStore(db, config.snippetChars)
   switch (command.kind) {
     case 'stored': {
       const { snapshot } = command

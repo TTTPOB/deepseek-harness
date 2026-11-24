@@ -3258,7 +3258,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'sessionQuery',
     summary: 'Unified live-preferred session query service.',
-    description: 'Unified live-preferred session query service.\n\nExact reads, filters, and traces are backend-independent concrete behavior. A backend implements full-text observation, reconciliation, ranking, cursor generations, and query execution on the same `ctx.sessionQuery` service.',
+    description: 'Unified live-preferred session query service.\n\nExact reads, filters, and traces are backend-independent concrete behavior. A backend implements full-text observation, reconciliation, ranking, and pagination on the same `ctx.sessionQuery` service.',
     methods: [
       {
         signature: 'observeSession( sessionId: SessionId, options: SessionObservationOptions = {}, ): Promise<SessionObservation>',
@@ -3282,7 +3282,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionEventSearchPage>',
         description: 'Search events within one live-preferred logical session.',
         parameters: [{ name: 'request', description: 'target session, query text, filters, page size, and cursor.' }, { name: 'exec', description: 'optional cancellation control.' }],
-        returns: 'matching event hits and their target header from one indexed generation.',
+        returns: 'matching event hits and their target header from one indexed observation.',
       },
       {
         signature: 'listSessions(signal?: AbortSignal): Promise<SessionRecord[]>',
