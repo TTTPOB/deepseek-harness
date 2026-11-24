@@ -2755,23 +2755,65 @@ describe('schema DSL optional and nested contracts', () => {
     expect(result.content[0]).toMatchObject({ text: 'Error: kaboom' })
   })
 
-  it('reports messages from throws of objects without message property', async () => {
+  it.each([
+    { code: 'INDEX_UNAVAILABLE', reason: 'store is offline' },
+    { code: 500, message: { reason: 'store is offline' } },
+  ])('reports thrown objects without a string message as JSON: $code', async (thrown) => {
     const ctx = await setup()
     ctx.tools.register({
       ...echoTool,
-      name: 'object-no-message',
-      async execute() {
-        // testing object throw without .message
-        throw { code: 500 }
-      },
+      name: 'object-thrower',
+      async execute() { throw thrown },
     })
-    const result = await executeToolFixture(ctx, { signal: testToolSignal, callId: ToolCallId('c1'), name: 'object-no-message', arguments: {} })
+    const result = await executeToolFixture(ctx, { signal: testToolSignal, callId: ToolCallId('c1'), name: 'object-thrower', arguments: {} })
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: 'Error: ' + JSON.stringify(thrown) }],
+    })
+  })
+
+  it.each(['', ' '])('marks oversized thrown-object previews as truncated (reason prefix %j)', async (padding) => {
+    const ctx = await setup()
+    const thrown = { code: 'INDEX_UNAVAILABLE', reason: padding + '📚'.repeat(8_192), tail: 'omitted detail' }
+    ctx.tools.register({
+      ...echoTool,
+      name: 'object-thrower',
+      async execute() { throw thrown },
+    })
+    const result = await executeToolFixture(ctx, { signal: testToolSignal, callId: ToolCallId('c1'), name: 'object-thrower', arguments: {} })
     expect(result.isError).toBe(true)
-    const firstContent = result.content[0]!
-    expect(firstContent.type).toBe('text')
-    if (firstContent.type === 'text') {
-      expect(firstContent.text).toBe('Error: [object Object]')
-    }
+    const content = result.content[0]!
+    expect(content.type).toBe('text')
+    if (content.type !== 'text') return
+    const marker = '… [truncated]'
+    expect(content.text).toMatch(/^Error: \{"code":"INDEX_UNAVAILABLE","reason":" ?📚/u)
+    expect(content.text.endsWith(marker)).toBe(true)
+    expect(content.text.length).toBeLessThan(thrown.reason.length / 8)
+    expect(content.text).not.toContain(thrown.tail)
+    expect(content.text.isWellFormed()).toBe(true)
+  })
+
+  it.each([
+    ['cyclic', () => {
+      const value = { self: {} }
+      value.self = value
+      return value
+    }],
+    ['BigInt-bearing', () => ({ id: 9007199254740993n })],
+    ['without a JSON representation', () => ({ toJSON: () => undefined })],
+  ])('uses ordinary string coercion when a thrown object is %s', async (_label, createThrown) => {
+    const ctx = await setup()
+    const thrown = Object.assign(createThrown(), { toString: () => 'index unavailable' })
+    ctx.tools.register({
+      ...echoTool,
+      name: 'object-thrower',
+      async execute() { throw thrown },
+    })
+    const result = await executeToolFixture(ctx, { signal: testToolSignal, callId: ToolCallId('c1'), name: 'object-thrower', arguments: {} })
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: 'Error: index unavailable' }],
+    })
   })
 })
 

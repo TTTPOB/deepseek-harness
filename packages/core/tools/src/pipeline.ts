@@ -645,20 +645,33 @@ function snapshotToolValue(toolName: string, candidate: unknown): JsonValue {
   }
 }
 
+/** Maximum UTF-16 length of a thrown object's JSON preview, including its truncation marker. */
+const TOOL_ERROR_JSON_PREVIEW_LIMIT = 1_024
+
 /**
- * Best-effort human-readable message from an arbitrary thrown value: Error
- * instances use `.message`; non-Error objects with a string `message`
- * property (e.g. `throw { message: 'denied' }`) use it too; everything else
- * is stringified.
+ * Format a thrown value as failure text. Errors and objects with a string `message`
+ * use that message. Other objects use a bounded JSON preview, marked if truncated.
+ * Objects without a JSON representation and non-objects use string coercion.
  * @param error - thrown value from a tool or policy callback.
- * @returns a printable failure message, including for hostile thrown values.
+ * @returns failure text, or a placeholder if inspection or string coercion throws.
  */
 export function toolErrorMessage(error: unknown): string {
   try {
     if (error instanceof Error) return error.message
-    if (typeof error === 'object' && error !== null
-      && 'message' in error && typeof error.message === 'string') {
-      return error.message
+    if (typeof error === 'object' && error !== null) {
+      if ('message' in error && typeof error.message === 'string') return error.message
+      let json: string | undefined
+      try {
+        json = JSON.stringify(error)
+      } catch (_serializationError) {
+        // Cycles, BigInt, and throwing JSON hooks can still permit string coercion.
+      }
+      if (json !== undefined) {
+        if (json.length <= TOOL_ERROR_JSON_PREVIEW_LIMIT) return json
+        const marker = '… [truncated]'
+        const prefix = json.slice(0, TOOL_ERROR_JSON_PREVIEW_LIMIT - marker.length).replace(/[\uD800-\uDBFF]$/u, '')
+        return `${prefix}${marker}`
+      }
     }
     return String(error)
   } catch {

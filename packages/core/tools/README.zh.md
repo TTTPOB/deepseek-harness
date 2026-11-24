@@ -176,7 +176,7 @@ Agent 步骤的并发上限使用 [agent-loop 配置](../agent-loop/README.zh.md
 
 #### 模型看到什么
 
-循环会保留模型发出的参数与注册表的最终内容。任何抛出异常或遭到拒绝的调用，都会转换为确切的 `Error: <message>`；结构化的用户可见失败详情不会加入该消息。PTC mode 只返回外层程序打印的行与呈现后的返回值；两者都为空时返回 `(run_code completed with no output)`；失败时返回 `Error: code run failed (<kind>): <message>`，并根据是否存在已捕获内容，在其后附加 `Captured output:` 与捕获的行。内部分发事件只保留在日志中；成功且含图片的子结果会在外层结果之后作为带来源归属的上下文追加。
+循环会保留模型发出的参数与注册表的最终内容。任何抛出异常或遭到拒绝的调用，都会转换为确切的 `Error: <message>`；结构化的用户可见失败详情不会加入该消息。若抛出的对象不是 `Error` 且没有字符串类型的 `message`，则显示 JSON 摘要，最多 1,024 个 UTF-16 码元（含截断时追加的 `… [truncated]`）。若 JSON 序列化失败或没有生成文本，则转为普通字符串。PTC mode 只返回外层程序打印的行与呈现后的返回值；两者都为空时返回 `(run_code completed with no output)`；失败时返回 `Error: code run failed (<kind>): <message>`，并根据是否存在已捕获内容，在其后附加 `Captured output:` 与捕获的行。内部分发事件只保留在日志中；成功且含图片的子结果会在外层结果之后作为带来源归属的上下文追加。
 
 #### Token 影响
 

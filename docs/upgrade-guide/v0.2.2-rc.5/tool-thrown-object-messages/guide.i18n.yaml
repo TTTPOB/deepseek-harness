@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-rc.5/tool-thrown-object-messages/guide.md
+/:
+  en: 29845c9e741060d2
+  zh: 59b06b3a18d885ec
+/tool-failure-text-for-thrown-objects:
+  en: 9b8b9eb6ad8afc21
+  zh: 340ed20896de1ca3
+/tool-failure-text-for-thrown-objects/change:
+  en: 2ed7840e50d8dc8c
+  zh: ae89a198e3119017
+/tool-failure-text-for-thrown-objects/migration:
+  en: ee5312c4ab779d5f
+  zh: b14351268ce445b9

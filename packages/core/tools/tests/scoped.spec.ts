@@ -717,7 +717,10 @@ describe('scoped execution dispatch', () => {
       seen.push(result.isError)
     })
     ctx.on('tools/result', () => {
-      throw { toString: () => { throw new Error('coercion trap') } }
+      throw {
+        toJSON: () => { throw new Error('serialization trap') },
+        toString: () => { throw new Error('coercion trap') },
+      }
     })
     ctx.on('tools/result', () => Promise.reject(new Error('async observer failure')) as never)
     ctx.on('tools/result', (_exec, result) => { seen.push(result.isError) })
