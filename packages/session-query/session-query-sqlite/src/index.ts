@@ -234,6 +234,41 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const signal = exec?.signal
     assertNotAborted(signal)
     const binding = this.start()
+    await this.refreshCorpus(binding, signal)
+    assertNotAborted(signal)
+    this.assertBinding(binding)
+    return waitWithAbort(this.requireWorker().call({
+      kind: 'sessions', epoch: binding.epoch, request: normalized, persisted: binding.source !== undefined,
+    }), signal)
+  }
+
+  override async searchEvents(
+    request: SessionEventSearchRequest, exec?: SessionSearchExecContext,
+  ): Promise<SessionEventSearchPage> {
+    this.assertEnabled()
+    const normalized = normalizeEventRequest(request, this.config)
+    const signal = exec?.signal
+    assertNotAborted(signal)
+    const binding = this.start()
+    const idFilters = normalized.sessionFilters.filter(filter => filter.kind === 'id')
+    const [first, ...rest] = idFilters
+    if (first === undefined) await this.refreshCorpus(binding, signal)
+    else {
+      const ids = new Set(first.values)
+      for (const filter of rest) {
+        const allowed = new Set(filter.values)
+        for (const id of ids) if (!allowed.has(id)) ids.delete(id)
+      }
+      await this.refreshTargets(binding, ids, signal)
+    }
+    assertNotAborted(signal)
+    this.assertBinding(binding)
+    return waitWithAbort(this.requireWorker().call({
+      kind: 'events', epoch: binding.epoch, request: normalized, persisted: binding.source !== undefined,
+    }), signal)
+  }
+
+  private async refreshCorpus(binding: Binding, signal: AbortSignal | undefined): Promise<void> {
     if (!binding.ready) {
       const { warmupWaitMs } = this.config
       const failure = binding.failure ?? (binding.warm !== undefined && warmupWaitMs > 0
@@ -250,35 +285,18 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     for (const id of [...this.dirty.keys()]) {
       await waitWithAbort(this.refresh(binding, id), signal)
     }
-    assertNotAborted(signal)
-    this.assertBinding(binding)
-    return waitWithAbort(this.requireWorker().call({
-      kind: 'sessions', epoch: binding.epoch, request: normalized, persisted: binding.source !== undefined,
-    }), signal)
   }
 
-  override async searchEvents(
-    request: SessionEventSearchRequest, exec?: SessionSearchExecContext,
-  ): Promise<SessionEventSearchPage> {
-    this.assertEnabled()
-    const normalized = normalizeEventRequest(request, this.config)
-    const signal = exec?.signal
-    assertNotAborted(signal)
-    const binding = this.start()
+  private async refreshTargets(binding: Binding, ids: ReadonlySet<SessionId>, signal: AbortSignal | undefined): Promise<void> {
     await waitWithAbort(this.opening ?? Promise.resolve(), signal)
     if (!this.keysReady) throw warming()
     await waitWithAbort(this.bind(binding), signal)
     this.assertBinding(binding)
-    const id = normalized.sessionId
-    if (!binding.ready || this.dirty.has(id)) {
+    for (const id of ids) {
+      if (binding.ready && !this.dirty.has(id)) continue
       if (!binding.ready) binding.points.add(id)
       await waitWithAbort(this.refresh(binding, id), signal)
     }
-    assertNotAborted(signal)
-    this.assertBinding(binding)
-    return waitWithAbort(this.requireWorker().call({
-      kind: 'events', epoch: binding.epoch, request: normalized, persisted: binding.source !== undefined,
-    }), signal)
   }
 
   /** Stop accepted work and release the worker connection. */

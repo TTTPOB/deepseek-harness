@@ -135,17 +135,15 @@ export class SearchStore {
   }
 
   /**
-   * @param request - normalized single-session search request.
+   * @param request - normalized event search request.
    * @param persisted - whether to include stored history.
-   * @returns the target's header and one ranked event page over the current corpus.
+   * @returns one ranked event page over the current corpus.
    */
   searchEvents(request: NormalizedEventRequest, persisted: boolean): SessionEventSearchPage {
     const digest = requestDigest(request)
     const offset = request.cursor === undefined ? 0 : decodeCursor(request.cursor, digest)
-    return {
-      session: this._targetHeader(request.sessionId, persisted),
-      ...page(this._queryEvents(request, offset, persisted), request.limit, row => this._eventHit(row), digest, offset),
-    }
+    const rows = this._queryEvents(request, offset, persisted)
+    return page(rows, request.limit, row => ({ ...this._eventHit(row), session: rowHeader(row) }), digest, offset)
   }
 
   private durableTransaction(write: (generation: number) => void): void {
@@ -323,15 +321,14 @@ export class SearchStore {
     offset: number,
     persisted: boolean,
   ): SearchRow[] {
-    const selected = selectedDocumentsSql(true)
+    const selected = selectedDocumentsSql()
+    const sessionWhere = buildSessionWhere(request.sessionFilters)
     const eventWhere = buildEventWhere(request.filters)
-    assertFts5OuterPredicateCount(1 + eventWhere.predicateCount)
-    const where = ['session_id = ?', eventWhere.sql].filter(Boolean).join(' AND ')
+    assertFts5OuterPredicateCount(sessionWhere.predicateCount + eventWhere.predicateCount)
+    const where = [sessionWhere.sql, eventWhere.sql].filter(Boolean).join(' AND ')
     const bindings = [
-      ...selectedDocumentsParams(
-        request.query, persisted, this._bm25.parameters(request.query), request.sessionId,
-      ),
-      request.sessionId,
+      ...selectedDocumentsParams(request.query, persisted, this._bm25.parameters(request.query)),
+      ...sessionWhere.params,
       ...eventWhere.params,
       request.limit + 1,
       offset,
@@ -340,39 +337,15 @@ export class SearchStore {
     assertPortableBindingCount(bindings.length)
     return this.db.prepare(`
       ${selected.sql},
-      filtered AS MATERIALIZED (SELECT * FROM matched WHERE ${where}),
+      filtered AS MATERIALIZED (SELECT * FROM matched ${where === '' ? '' : `WHERE ${where}`}),
       page AS (
         SELECT * FROM filtered
-        ORDER BY score ASC, time DESC, seq DESC
+        ORDER BY score ASC, time DESC, session_id ASC, seq DESC
         LIMIT ? OFFSET ?
       )
       SELECT page.*, ${pageHighlightSql()} AS marked_text FROM page
-      ORDER BY score ASC, time DESC, seq DESC
+      ORDER BY score ASC, time DESC, session_id ASC, seq DESC
     `).all(...bindings) as unknown as SearchRow[]
-  }
-
-  private _targetHeader(sessionId: SessionId, persisted: boolean): SessionHeader {
-    const db = this.db
-    const live = db.prepare(
-      `SELECT
-        id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset
-      FROM temp.live_sessions
-      WHERE id = ?`,
-    ).get(sessionId) as SessionHeaderRow | undefined
-    if (live !== undefined) return rowHeader(live)
-    if (persisted) {
-      const stored = db.prepare(
-        `SELECT
-          id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset
-        FROM persisted_sessions
-        WHERE id = ?`,
-      ).get(sessionId) as SessionHeaderRow | undefined
-      if (stored !== undefined) return rowHeader(stored)
-    }
-    throw new SessionQueryError(
-      `session "${sessionId}" not found`,
-      'SESSION_QUERY_SESSION_NOT_FOUND',
-    )
   }
 
   private _sessionHit(row: SearchRow): SessionSearchHit {
@@ -420,7 +393,7 @@ function documentTables(source: 'persisted' | 'live'): { docs: string; keys: str
     : { docs: 'persisted_docs', keys: 'keys.persisted_doc_keys' }
 }
 
-function selectedDocumentsSql(target = false): { sql: string } {
+function selectedDocumentsSql(): { sql: string } {
   const metadata = (d: string, s: string) => `${d}.rowid AS document_rowid, ${d}.session_id,
     ${s}.version, ${s}.created_at, ${s}.cwd, ${s}.parent_session,
     ${s}.seed_length, ${s}.delegation_depth, ${s}.agent_preset`
@@ -434,14 +407,14 @@ function selectedDocumentsSql(target = false): { sql: string } {
       SELECT ${metadata('pd', 'ps')}, 0 live, 1 persisted, ${event('pd')},
         bm25(persisted_docs) native_score
       FROM persisted_docs pd JOIN persisted_sessions ps ON ps.id=pd.session_id
-      WHERE persisted_docs MATCH ? AND ?=1${target ? ' AND pd.session_id=?' : ''}
+      WHERE persisted_docs MATCH ? AND ?=1
         AND NOT EXISTS(SELECT 1 FROM temp.live_sessions ls WHERE ls.id=pd.session_id)
     ),
     lraw AS MATERIALIZED (
       SELECT ${metadata('ld', 'ls')}, 1 live, CASE WHEN ?=1 THEN ls.persisted ELSE 0 END persisted,
         ${event('ld')}, bm25(live_docs) native_score
       FROM temp.live_docs ld JOIN temp.live_sessions ls ON ls.id=ld.session_id
-      WHERE live_docs MATCH ?${target ? ' AND ld.session_id=?' : ''}
+      WHERE live_docs MATCH ?
     ),
     matched AS (
       SELECT hraw.*,round(native_score/b.idf_history,12) score FROM hraw CROSS JOIN background b
@@ -452,12 +425,11 @@ function selectedDocumentsSql(target = false): { sql: string } {
 }
 
 function selectedDocumentsParams(
-  query: string, persistenceVisible: boolean, background: number[], sessionId?: SessionId,
+  query: string, persistenceVisible: boolean, background: number[],
 ): Array<string | number> {
   const expression = quoteFtsData(query)
   const visible = persistenceVisible ? 1 : 0
-  const target = sessionId === undefined ? [] : [sessionId]
-  return [...background, expression, visible, ...target, visible, expression, ...target]
+  return [...background, expression, visible, visible, expression]
 }
 
 // Full highlighted text is produced only for the bounded result page, not window-sort rows.

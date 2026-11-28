@@ -70,6 +70,10 @@ pageEvents({ sessionId, afterSeq?, types?, limit, includeText? }) 每页只观�
 
 文本子句是对所提取语义文本的字面、不区分大小写、空白灵活的扫描——而非全文查询。需要任意子字符串召回时使用它；需要带排名的全文结果时使用挂载后端的搜索方法。
 
+### 全文搜索
+
+`searchSessions({ query, sessionFilters?, eventFilters?, limit?, cursor? })` 按各会话匹配度最高的事件排序。`searchEvents({ query, sessionFilters?, filters?, limit?, cursor? })` 返回单条事件命中，每条携带来自同一索引观察的 `session` 头信息。两种方法都可通过 `sessionFilters: [{ kind: 'id', values: ids }]` 限定会话；省略则搜索全库，不存在的 ID 不产生结果。查询语法和相关性排序由[挂载的提供方](../session-query-sqlite/README.zh.md#search-behavior)实现。
+
 ### 配置
 
 继承的旋钮通过挂载后端的配置设置：

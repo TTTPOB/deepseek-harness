@@ -327,11 +327,8 @@ export interface SessionSearchPage<T> {
   nextCursor?: SessionSearchCursor
 }
 
-/** Event-search results bound to the indexed target-session observation. */
-export interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit> {
-  /** Cloned target header from the same indexed observation as `items`. */
-  session: SessionHeader
-}
+/** A ranked page of matching events with their indexed session metadata. */
+export type SessionEventSearchPage = SessionSearchPage<SessionEventSearchResult>
 
 /** Controls shared by cross-session and within-session search calls. */
 export interface SessionSearchExecContext {
@@ -341,7 +338,7 @@ export interface SessionSearchExecContext {
 
 /** Cross-session full-text search request. */
 export interface SessionSearchRequest {
-  /** Full-text query interpreted as data, never executable FTS syntax. */
+  /** Full-text query parsed by the provider; native FTS syntax is not accepted. */
   query: string
   /** Logical-session predicates applied before event ranking. */
   sessionFilters?: readonly SessionResultFilter[]
@@ -353,12 +350,12 @@ export interface SessionSearchRequest {
   cursor?: SessionSearchCursor
 }
 
-/** Within-session full-text search request. */
+/** Full-text search request returning individual events. */
 export interface SessionEventSearchRequest {
-  /** Session whose live-preferred logical log is searched. */
-  sessionId: SessionId
-  /** Full-text query interpreted as data, never executable FTS syntax. */
+  /** Full-text query parsed by the provider; native FTS syntax is not accepted. */
   query: string
+  /** Logical-session predicates applied before ranking; omit to search all sessions. */
+  sessionFilters?: readonly SessionResultFilter[]
   /** Event predicates applied before ranking. */
   filters?: readonly SessionEventMetadataFilter[]
   /** Maximum events in this page. */
@@ -371,6 +368,12 @@ export interface SessionEventSearchRequest {
 export interface SessionEventSearchHit extends SessionEventRecord {
   /** Plain text excerpt selected around the match. */
   snippet: string
+}
+
+/** One event result with its session header from the same indexed observation. */
+export interface SessionEventSearchResult extends SessionEventSearchHit {
+  /** Indexed header of the session that contains the event. */
+  session: SessionHeader
 }
 
 /** One grouped cross-session hit, ranked by its strongest matching event. */

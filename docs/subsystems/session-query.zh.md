@@ -149,7 +149,7 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 ## 全文搜索结果页
 
-整合后的 `ctx.sessionQuery` seam 提供两个全文搜索范围。`searchSessions()` 按匹配度最强的事件对语料库分组；`searchEvents()` 搜索单个会话。请求将不透明游标与规范化后的查询、元数据过滤器和结果数量上限绑定。提供方的元数据过滤器有意不包含事件文本扫描。
+`ctx.sessionQuery` 提供两种全文搜索方法。`searchSessions()` 按每个会话匹配度最高的事件对命中分组；`searchEvents()` 对同一语料库中的单条事件排序。两者都可指定会话过滤器。不透明游标绑定到规范化的查询、过滤器和结果数量上限。文本扫描不是全文搜索元数据过滤器。
 
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
@@ -159,7 +159,7 @@ type SessionSearchCursor = Branded<'SessionSearchCursor'>
 ```ts type-equiv
 /** Cross-session full-text search request. */
 interface SessionSearchRequest {
-  /** Full-text query interpreted as data, never executable FTS syntax. */
+  /** Full-text query parsed by the provider; native FTS syntax is not accepted. */
   query: string
   /** Logical-session predicates applied before event ranking. */
   sessionFilters?: readonly SessionResultFilter[]
@@ -173,12 +173,12 @@ interface SessionSearchRequest {
 ```
 
 ```ts type-equiv
-/** Within-session full-text search request. */
+/** Full-text search request returning individual events. */
 interface SessionEventSearchRequest {
-  /** Session whose live-preferred logical log is searched. */
-  sessionId: SessionId
-  /** Full-text query interpreted as data, never executable FTS syntax. */
+  /** Full-text query parsed by the provider; native FTS syntax is not accepted. */
   query: string
+  /** Logical-session predicates applied before ranking; omit to search all sessions. */
+  sessionFilters?: readonly SessionResultFilter[]
   /** Event predicates applied before ranking. */
   filters?: readonly SessionEventMetadataFilter[]
   /** Maximum events in this page. */
@@ -198,14 +198,11 @@ interface SessionSearchPage<T> {
 }
 ```
 
-与跨会话分组 hit 不同，会话内搜索结果即使没有命中项，也必须公开搜索时观测到的目标 header。
+每条命中包括来自同一索引观察的会话头信息。不存在的 ID 不产生结果。
 
 ```ts type-equiv
-/** Event-search results bound to the indexed target-session observation. */
-interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit> {
-  /** Cloned target header from the same indexed observation as `items`. */
-  session: SessionHeader
-}
+/** A ranked page of matching events with their indexed session metadata. */
+type SessionEventSearchPage = SessionSearchPage<SessionEventSearchResult>
 ```
 
 ```ts type-equiv
@@ -213,6 +210,14 @@ interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit
 interface SessionEventSearchHit extends SessionEventRecord {
   /** Plain text excerpt selected around the match. */
   snippet: string
+}
+```
+
+```ts type-equiv
+/** One event result with its session header from the same indexed observation. */
+interface SessionEventSearchResult extends SessionEventSearchHit {
+  /** Indexed header of the session that contains the event. */
+  session: SessionHeader
 }
 ```
 

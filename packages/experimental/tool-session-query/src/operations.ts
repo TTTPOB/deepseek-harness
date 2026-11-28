@@ -149,12 +149,14 @@ async function executeEventSearch(
     async (cursor): Promise<SessionEventSearchPage> => {
       const page = await serviceBoundary.call(ctx, exec.signal, 'event search', () =>
         ctx.sessionQuery.searchEvents({
-          sessionId,
+          sessionFilters: [{ kind: 'id', values: [sessionId] }],
           query,
           filters,
           ...cursor === undefined ? {} : { cursor },
         }, { signal: exec.signal }))
-      workspaceAccess.assertObservedTargetAuthorized(caller, sessionId, page.session)
+      for (const hit of page.items) {
+        workspaceAccess.assertObservedTargetAuthorized(caller, sessionId, hit.session)
+      }
       return page
     },
     hit => hit.seq,

@@ -217,10 +217,10 @@ export abstract class SessionQueryEngine extends Service {
   ): Promise<SessionSearchPage<SessionSearchHit>>
 
   /**
-   * Search events within one live-preferred logical session.
-   * @param request - target session, query text, filters, page size, and cursor.
+   * Search individual events in the live-preferred logical corpus.
+   * @param request - query text, session and event filters, page size, and cursor.
    * @param exec - optional cancellation control.
-   * @returns matching event hits and their target header from one indexed observation.
+   * @returns ranked event hits, each with the header of its indexed session.
    */
   abstract searchEvents(
     request: SessionEventSearchRequest,

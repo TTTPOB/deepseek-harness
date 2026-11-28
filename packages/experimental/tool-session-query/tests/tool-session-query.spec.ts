@@ -135,10 +135,7 @@ class FakeQuery extends SessionQueryEngine {
   static eventSearch: (
     request: SessionEventSearchRequest,
     exec?: SessionSearchExecContext,
-  ) => Promise<SessionEventSearchPage> = request => Promise.resolve({
-    session: header(request.sessionId, '/work'),
-    items: [],
-  })
+  ) => Promise<SessionEventSearchPage> = () => Promise.resolve({ items: [] })
 
   static sessionRequests: SessionSearchRequest[] = []
   static eventRequests: SessionEventSearchRequest[] = []
@@ -147,10 +144,7 @@ class FakeQuery extends SessionQueryEngine {
 
   static reset(): void {
     this.sessionSearch = () => Promise.resolve({ items: [] })
-    this.eventSearch = request => Promise.resolve({
-      session: header(request.sessionId, '/work'),
-      items: [],
-    })
+    this.eventSearch = () => Promise.resolve({ items: [] })
     this.sessionRequests = []
     this.eventRequests = []
     this.searchSignals = []
@@ -1168,8 +1162,7 @@ describe('workspace authority and lineage redaction', () => {
     const movedHeader = header(target.id, '/outside')
 
     FakeQuery.eventSearch = () => Promise.resolve({
-      session: movedHeader,
-      items: [eventHit(target.id, SessionSeq(0), 'secret event hit')],
+      items: [{ ...eventHit(target.id, SessionSeq(0), 'secret event hit'), session: movedHeader }],
     })
     const search = await mounted.call('session_event_search', {
       session_id: target.id,
@@ -1607,15 +1600,12 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
 
   it('intersects current-session search with the event before the latest step and leaves other targets unchanged', async () => {
     const mounted = await mount()
-    FakeQuery.eventSearch = request => Promise.resolve({
-      session: header(request.sessionId, '/work'),
-      items: [eventHit(request.sessionId, SessionSeq(1))],
-    })
     await mounted.call('session_event_search', {
       query: 'prior',
       seq_from: 0,
       seq_to: 99,
     })
+    expect(FakeQuery.eventRequests[0]?.sessionFilters).toEqual([{ kind: 'id', values: [mounted.caller.id] }])
     expect(FakeQuery.eventRequests[0]?.filters).toContainEqual({ kind: 'seq', from: 0, to: 1 })
 
     const other = createSession(mounted.ctx, 'other', '/work')
@@ -1625,6 +1615,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
       seq_from: 0,
       seq_to: 99,
     })
+    expect(FakeQuery.eventRequests[1]?.sessionFilters).toEqual([{ kind: 'id', values: [other.id] }])
     expect(FakeQuery.eventRequests[1]?.filters).toContainEqual({ kind: 'seq', from: 0, to: 99 })
   })
 
@@ -1651,16 +1642,10 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
 
     const other = createSession(mounted.ctx, 'paged-events', '/work')
     const cursor = SessionSearchCursor('events-next')
+    const hit = (seq: number, snippet?: string) => ({ ...eventHit(other.id, SessionSeq(seq), snippet), session: other.header })
     FakeQuery.eventSearch = request => request.cursor === undefined
-      ? Promise.resolve({
-        session: header(other.id, '/work'),
-        items: [eventHit(other.id, SessionSeq(1))],
-        nextCursor: cursor,
-      })
-      : Promise.resolve({
-        session: header(other.id, '/work'),
-        items: [eventHit(other.id, SessionSeq(1), 'duplicate from reranking'), eventHit(other.id, SessionSeq(2)), eventHit(other.id, SessionSeq(3))],
-      })
+      ? Promise.resolve({ items: [hit(1)], nextCursor: cursor })
+      : Promise.resolve({ items: [hit(1, 'duplicate from reranking'), hit(2), hit(3)] })
     const result = await mounted.call('session_event_search', {
       session_id: other.id,
       query: 'q',

@@ -61,11 +61,12 @@ kind: "package-reference"
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-query-sqlite)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
+<a id="search-behavior"></a>
 ### 搜索行为
 
-使用 `openAt: startup` 时在激活时启动后台预热；使用 `openAt: first-search` 时由首次搜索启动同一项服务级工作。跨会话搜索最多等待 `warmupWaitMs` 毫秒；到期仍未就绪时返回可重试的 `SESSION_QUERY_INDEX_WARMING`，而非空页。文档键就绪后，`searchEvents` 无需等待全库预热，只需处理目标会话。取消请求只取消该请求的等待。
+`openAt: startup` 在激活时启动后台预热；`openAt: first-search` 在首次搜索时启动。全库搜索最多等待 `warmupWaitMs` 毫秒；索引仍未就绪时返回可重试的 `SESSION_QUERY_INDEX_WARMING`。文档键就绪后，带 `id` 过滤器的 `searchEvents` 可直接刷新并搜索指定会话，无需等待全库预热。取消请求只取消该请求的等待。
 
-`searchSessions` 搜索整个语料库，并按每个会话匹配最强的事件分组结果；`searchEvents` 搜索一个逻辑会话。查询是字面短语：首尾空白会被移除、内部空白会被规范化，引号、`OR`、`NEAR` 和 `*` 等 FTS5 语法被视为数据，绝不作为可执行查询语法。元数据过滤器（会话 id、排除的会话 id、cwd、创建时间、父级、可用性、事件 seq/时间/类型/表层）在排序前缩小结果。默认搜索全部 `current`、`shadowed` 与 `log-only` 事件；传入表层过滤器可缩小范围。
+`searchSessions` 按每个会话匹配度最高的事件对命中分组；`searchEvents` 返回单条事件以及同一索引观察的 `session` 头信息。两种方法都支持 `sessionFilters: [{ kind: 'id', values: ids }]`；省略会话过滤器时搜索全库，不存在的 ID 不产生结果。查询是字面短语：首尾空白会被移除、内部空白会被规范化。元数据过滤器在排序前缩小结果；默认搜索全部 `current`、`shadowed` 与 `log-only` 事件。
 
 排序使用持久化与实时命中共享同一历史背景的 BM25。实时正文贡献最新短语频次与 token 长度，但不改变历史统计；被实时会话遮蔽的旧持久化正文只参与背景统计。历史没有已索引 token 时，排序采用实时平均 token 长度及共同 IDF=1；历史不存在该短语时，也采用 IDF=1。排序消去共同短语 IDF；两来源的归一化分数统一保留 12 位小数，避免反演舍入误差盖过元数据平局规则。事件时间、会话 id 与 seq 打破分数平局。结果携带按 `snippetChars` 个 Unicode 码点截断的纯文本摘录，不返回数值分数。
 
@@ -75,11 +76,11 @@ kind: "package-reference"
 
 ### 何时推迟或关闭搜索
 
-使用 `openAt: first-search` 时，服务在不导入 `node:sqlite`、不打开索引的情况下激活，把 SQLite 的实验性警告推迟到首次实际搜索；无效数据库让首次搜索失败，而不是服务激活失败。使用 `openAt: never` 时，全文搜索对该部署关闭：`searchSessions` 与 `searchEvents` 在任何请求规范化之前就以 `SESSION_QUERY_SEARCH_DISABLED` 失败，而继承的全部精确读取、过滤与追踪保持可用。请求超过编译谓词预算（跨会话 14 个组合谓词、会话内 13 个）或 SQLite 可移植的 32,766 绑定上限时，会在准备语句前以 `SESSION_QUERY_INVALID_FILTER` 失败。
+使用 `openAt: first-search` 时，服务在不导入 `node:sqlite`、不打开索引的情况下激活，把 SQLite 的实验性警告推迟到首次实际搜索；无效数据库让首次搜索失败，而不是服务激活失败。使用 `openAt: never` 时，全文搜索对该部署关闭：`searchSessions` 与 `searchEvents` 在任何请求规范化之前就以 `SESSION_QUERY_SEARCH_DISABLED` 失败，而继承的全部精确读取、过滤与追踪保持可用。请求超过编译谓词预算（会话和事件谓词合计 14 个）或 SQLite 可移植的 32,766 绑定上限时，会在准备语句前以 `SESSION_QUERY_INVALID_FILTER` 失败。
 
 ### 失败与恢复
 
-带类型的 `SessionQueryError` 失败携带稳定代码：搜索配置为关闭时返回 `SESSION_QUERY_SEARCH_DISABLED`；索引无法打开或对账时返回 `SESSION_QUERY_INDEX_FAILED`；搜索目标不存在时返回 `SESSION_QUERY_SESSION_NOT_FOUND`；游标格式无效或不属于该请求时返回 `SESSION_QUERY_INVALID_CURSOR`。
+带类型的 `SessionQueryError` 失败携带稳定代码：搜索配置为关闭时返回 `SESSION_QUERY_SEARCH_DISABLED`；索引无法打开或对账时返回 `SESSION_QUERY_INDEX_FAILED`；游标格式无效或不属于该请求时返回 `SESSION_QUERY_INVALID_CURSOR`。
 
 -----
 

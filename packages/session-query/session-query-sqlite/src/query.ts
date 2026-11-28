@@ -72,9 +72,9 @@ export interface NormalizedSessionRequest {
   cursor?: SessionSearchCursor
 }
 
-/** Normalized within-session request. */
+/** Normalized request returning individual events. */
 export interface NormalizedEventRequest {
-  sessionId: SessionEventSearchRequest['sessionId']
+  sessionFilters: readonly SessionResultFilter[]
   query: string
   filters: readonly SessionEventMetadataFilter[]
   limit: number
@@ -114,22 +114,20 @@ export function normalizeSessionRequest(
 }
 
 /**
- * Validate and canonicalize a within-session request.
- * @param request - caller-provided target, query, filters, limit, and cursor.
+ * Validate and canonicalize an event search request.
+ * @param request - caller-provided query, session and event filters, limit, and cursor.
  * @param limits - configured default and maximum page sizes.
- * @returns normalized request with an explicit filter array and limit.
+ * @returns normalized request with explicit filter arrays and limit.
  */
 export function normalizeEventRequest(
   request: SessionEventSearchRequest,
   limits: QueryLimits,
 ): NormalizedEventRequest {
-  if (typeof request.sessionId !== 'string') {
-    throw new SessionQueryError('session-search session id must be text', 'SESSION_QUERY_INVALID_FILTER')
-  }
+  const sessionFilters = materializeSessionResultFilters(request.sessionFilters ?? [])
   const filters = materializeMetadataFilters(request.filters ?? [])
   const cursor = materializeCursor(request.cursor)
   return {
-    sessionId: request.sessionId,
+    sessionFilters,
     query: normalizeQuery(request.query),
     filters,
     limit: normalizeLimit(request.limit, limits),
@@ -247,10 +245,10 @@ export function sanitizeFtsText(text: string): string {
  * @returns deterministic JSON identity for cursor binding.
  */
 export function requestFingerprint(request: NormalizedSessionRequest | NormalizedEventRequest): string {
-  if ('sessionId' in request) {
+  if ('filters' in request) {
     return JSON.stringify({
       scope: 'events',
-      sessionId: request.sessionId,
+      sessionFilters: canonicalFilters(request.sessionFilters),
       query: request.query,
       filters: canonicalFilters(request.filters),
       limit: request.limit,

@@ -70,6 +70,10 @@ The [sampling reference](../../../docs/subsystems/session-query.md#synchronous-s
 
 The text clause is a literal, case-insensitive, whitespace-flexible scan of extracted semantic text — not a full-text query. Use it for arbitrary substring recall; use the mounted backend's search methods when you need ranked full-text results.
 
+### Full-text search
+
+`searchSessions({ query, sessionFilters?, eventFilters?, limit?, cursor? })` ranks sessions by their strongest matching event. `searchEvents({ query, sessionFilters?, filters?, limit?, cursor? })` ranks individual events; each hit includes its `session` header from the same indexed observation. To restrict either search to specific sessions, pass `sessionFilters: [{ kind: 'id', values: ids }]`; omit it to search the whole corpus. Missing ids produce no hits. The [mounted provider](../session-query-sqlite/README.md#search-behavior) defines query syntax and relevance scoring.
+
 ### Configuration
 
 The inherited knobs are set through the mounted backend's config:

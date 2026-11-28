@@ -734,6 +734,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SessionEventSearchHit: 'session-query.md',
   SessionEventSearchPage: 'session-query.md',
   SessionEventSearchRequest: 'session-query.md',
+  SessionEventSearchResult: 'session-query.md',
   SessionEventTrace: 'session-query.md',
   SessionEventTraceObservation: 'session-query.md',
   SessionEventTraceRequest: 'session-query.md',

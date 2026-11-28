@@ -44,19 +44,19 @@ describe('SQLite search request normalization', () => {
       limit: 3,
       cursor: SessionSearchCursor('next'),
     })
-    expect(normalizeEventRequest({ sessionId: SessionId('s'), query: 'needle' }, limits)).toEqual({
-      sessionId: SessionId('s'),
+    expect(normalizeEventRequest({ query: 'needle' }, limits)).toEqual({
+      sessionFilters: [],
       query: 'needle',
       filters: [],
       limit: 2,
     })
     expect(normalizeEventRequest({
-      sessionId: SessionId('s'),
+      sessionFilters: [{ kind: 'id', values: [SessionId('s')] }],
       query: 'needle',
       filters: [{ kind: 'seq', from: 1 }],
       cursor: SessionSearchCursor('next'),
     }, limits)).toEqual({
-      sessionId: SessionId('s'),
+      sessionFilters: [{ kind: 'id', values: [SessionId('s')] }],
       query: 'needle',
       filters: [{ kind: 'seq', from: 1 }],
       limit: 2,
@@ -71,10 +71,10 @@ describe('SQLite search request normalization', () => {
       .toThrow(expectCode('SESSION_QUERY_INVALID_QUERY'))
     expect(() => normalizeSessionRequest({ query: 'bad\0query' }, limits))
       .toThrow(expectCode('SESSION_QUERY_INVALID_QUERY'))
-    expect(() => normalizeEventRequest({ sessionId: 1 as never, query: 'x' }, limits))
+    expect(() => normalizeEventRequest({ sessionFilters: [{ kind: 'id', values: [1 as never] }], query: 'x' }, limits))
       .toThrow(expectCode('SESSION_QUERY_INVALID_FILTER'))
     expect(() => normalizeEventRequest({
-      sessionId: SessionId('s'),
+      sessionFilters: [{ kind: 'id', values: [SessionId('s')] }],
       query: 'x',
       cursor: 1 as never,
     }, limits)).toThrow(expectCode('SESSION_QUERY_INVALID_CURSOR'))
@@ -87,11 +87,11 @@ describe('SQLite search request normalization', () => {
       eventFilters: [{} as never],
     }, limits)).toThrow(expectCode('SESSION_QUERY_INVALID_FILTER'))
     for (const limit of [1.5, 0, 4]) {
-      expect(() => normalizeEventRequest({ sessionId: SessionId('s'), query: 'x', limit }, limits))
+      expect(() => normalizeEventRequest({ sessionFilters: [{ kind: 'id', values: [SessionId('s')] }], query: 'x', limit }, limits))
         .toThrow(expectCode('SESSION_QUERY_INVALID_LIMIT'))
     }
     expect(() => normalizeEventRequest({
-      sessionId: SessionId('s'),
+      sessionFilters: [{ kind: 'id', values: [SessionId('s')] }],
       query: 'x',
       limit: SQLITE_MAX_PAGE_LIMIT + 1,
     }, { defaultLimit: 1, maxLimit: SQLITE_MAX_PAGE_LIMIT + 1 }))
@@ -233,19 +233,19 @@ describe('SQLite query identity and presentation', () => {
     expect(requestFingerprint(sessionA)).toBe(requestFingerprint(sessionB))
 
     const eventA: NormalizedEventRequest = {
-      sessionId: SessionId('s'),
+      sessionFilters: [{ kind: 'id', values: [SessionId('s')] }],
       query: 'needle',
       limit: 2,
       filters: [{ kind: 'seq' }, { kind: 'surface', values: ['shadowed', 'current'] }],
     }
     const eventB: NormalizedEventRequest = {
-      sessionId: SessionId('s'),
+      sessionFilters: [{ kind: 'id', values: [SessionId('s')] }],
       query: 'needle',
       limit: 2,
       filters: [{ kind: 'surface', values: ['current', 'shadowed'] }, { kind: 'seq' }],
     }
     expect(requestFingerprint(eventA)).toBe(requestFingerprint(eventB))
-    expect(requestFingerprint(eventA)).not.toBe(requestFingerprint({ ...eventB, sessionId: SessionId('other') }))
+    expect(requestFingerprint(eventA)).not.toBe(requestFingerprint({ ...eventB, sessionFilters: [{ kind: 'id', values: [SessionId('other')] }] }))
   })
 
   it('normalizes, bounds, and positions snippets by Unicode code point', () => {

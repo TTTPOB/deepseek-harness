@@ -17,13 +17,10 @@ export class TestSessionQueryEngine extends SessionQueryEngine {
     return Promise.resolve({ items: [] })
   }
 
-  override async searchEvents(
-    request: SessionEventSearchRequest,
+  override searchEvents(
+    _request: SessionEventSearchRequest,
     _exec?: SessionSearchExecContext,
   ): Promise<SessionEventSearchPage> {
-    return {
-      session: (await this.readSurface(request.sessionId)).session,
-      items: [],
-    }
+    return Promise.resolve({ items: [] })
   }
 }

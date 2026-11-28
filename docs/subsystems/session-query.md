@@ -149,7 +149,7 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 ## Full-text search pages
 
-The combined `ctx.sessionQuery` seam has two full-text scopes. `searchSessions()` groups the corpus by strongest matching event; `searchEvents()` searches one session. Requests bind an opaque cursor to the normalized query, metadata filters, and limit. The event text scan is intentionally absent from provider metadata filters.
+`ctx.sessionQuery` has two full-text methods. `searchSessions()` groups hits by the strongest event per session; `searchEvents()` ranks individual events across the same corpus. Both accept optional session filters. The opaque cursor binds to the normalized query, filters, and limit. The event text-scan clause is not a full-text metadata filter.
 
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
@@ -159,7 +159,7 @@ type SessionSearchCursor = Branded<'SessionSearchCursor'>
 ```ts type-equiv
 /** Cross-session full-text search request. */
 interface SessionSearchRequest {
-  /** Full-text query interpreted as data, never executable FTS syntax. */
+  /** Full-text query parsed by the provider; native FTS syntax is not accepted. */
   query: string
   /** Logical-session predicates applied before event ranking. */
   sessionFilters?: readonly SessionResultFilter[]
@@ -173,12 +173,12 @@ interface SessionSearchRequest {
 ```
 
 ```ts type-equiv
-/** Within-session full-text search request. */
+/** Full-text search request returning individual events. */
 interface SessionEventSearchRequest {
-  /** Session whose live-preferred logical log is searched. */
-  sessionId: SessionId
-  /** Full-text query interpreted as data, never executable FTS syntax. */
+  /** Full-text query parsed by the provider; native FTS syntax is not accepted. */
   query: string
+  /** Logical-session predicates applied before ranking; omit to search all sessions. */
+  sessionFilters?: readonly SessionResultFilter[]
   /** Event predicates applied before ranking. */
   filters?: readonly SessionEventMetadataFilter[]
   /** Maximum events in this page. */
@@ -198,14 +198,11 @@ interface SessionSearchPage<T> {
 }
 ```
 
-Unlike grouped cross-session hits, a within-session search must also expose its observed target header even when the page contains no hits.
+Each event hit includes its own session header from the same indexed observation. An exact id that is absent produces no hits.
 
 ```ts type-equiv
-/** Event-search results bound to the indexed target-session observation. */
-interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit> {
-  /** Cloned target header from the same indexed observation as `items`. */
-  session: SessionHeader
-}
+/** A ranked page of matching events with their indexed session metadata. */
+type SessionEventSearchPage = SessionSearchPage<SessionEventSearchResult>
 ```
 
 ```ts type-equiv
@@ -213,6 +210,14 @@ interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit
 interface SessionEventSearchHit extends SessionEventRecord {
   /** Plain text excerpt selected around the match. */
   snippet: string
+}
+```
+
+```ts type-equiv
+/** One event result with its session header from the same indexed observation. */
+interface SessionEventSearchResult extends SessionEventSearchHit {
+  /** Indexed header of the session that contains the event. */
+  session: SessionHeader
 }
 ```
 
