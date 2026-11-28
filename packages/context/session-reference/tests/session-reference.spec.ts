@@ -35,12 +35,9 @@ class TestSessionQueryEngine extends SessionQueryEngine {
   }
 
   override searchEvents(
-    ...args: Parameters<SessionQueryEngine['searchEvents']>
+    ..._args: Parameters<SessionQueryEngine['searchEvents']>
   ): ReturnType<SessionQueryEngine['searchEvents']> {
-    return this.readSurface(args[0].sessionId).then(surface => ({
-      session: surface.session,
-      items: [],
-    }))
+    return Promise.resolve({ items: [] })
   }
 }
 

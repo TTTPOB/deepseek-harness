@@ -4,6 +4,9 @@ import { normalizeEventRequest } from '../src/query.ts'
 import { openSearchDatabase } from '../src/schema.ts'
 import { SearchStore } from '../src/store.ts'
 
+// Built declarations omit private member types, so name the row fields these tests read.
+type RankedRow = { session_id: string; score: number }
+
 async function scoreTwins(text: string, before: string[], after: string[]) {
   using db = await openSearchDatabase(':memory:', 'wal', ':memory:')
   const stored = SessionId('stored')
@@ -22,7 +25,7 @@ async function scoreTwins(text: string, before: string[], after: string[]) {
 
   const store = new SearchStore(db, 80)
   const request = normalizeEventRequest({ query: 'alpha beta' }, { defaultLimit: 10, maxLimit: 10 })
-  return store['_queryPage'](request, 0, true)
+  return store['_queryPage'](request, 0, true) as RankedRow[]
 }
 
 it('breaks compound score ties by time when term counts and average length are asymmetric', async () => {
@@ -63,7 +66,7 @@ it('adds historical-IDF phrase scores and gives identical live and stored docume
   const store = new SearchStore(db, 80)
   const scoreRows = (query: string) => store['_queryPage'](normalizeEventRequest({
     query, sessionFilters: [{ kind: 'id', values: [stored, live, onlyAlpha] }],
-  }, { defaultLimit: 10, maxLimit: 10 }), 0, true)
+  }, { defaultLimit: 10, maxLimit: 10 }), 0, true) as RankedRow[]
   const nativeScores = (id: string, phrase: string) => Number(db.prepare(
     'SELECT bm25(persisted_docs) score FROM persisted_docs WHERE persisted_docs MATCH ? AND session_id = ?',
   ).get(phrase, id)?.score)
