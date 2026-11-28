@@ -77,11 +77,11 @@ kind: "package-reference"
 | `alpha -beta`、`alpha -"beta gamma"`、`alpha -(beta OR gamma)` | 排除紧贴 `-` 的项；单独写的 `-` 不作运算符 |
 | `alph*` | 裸词末尾 `*` 匹配最后一个词元的前缀 |
 
-其他标点按字面文本分词：`reveal.js`、`academic-source` 和路径要求各自分出的词元按顺序相邻。小写 `and`、`or`、`not` 是普通词。没有词元的项被忽略。引号或括号不配对、缺少 `OR` 操作数、子组或分支只有排除项、或没有词元时返回 `SESSION_QUERY_INVALID_QUERY`。整个查询只有排除项时返回 `SESSION_QUERY_EXCLUSION_ONLY`；Web 会话列表在收到该码后将原输入作为一个字面短语重搜。
+其他标点按字面文本分词：`reveal.js`、`academic-source` 和路径要求各自分出的词元按顺序相邻。小写 `and`、`or`、`not` 是普通词。没有词元的项被忽略。引号或括号不配对、空括号组、括号嵌套超过 16 层、缺少 `OR` 操作数、子组或分支只有排除项、或没有词元时返回 `SESSION_QUERY_INVALID_QUERY`。整个查询只有排除项时返回 `SESSION_QUERY_EXCLUSION_ONLY`；Web 会话列表在收到该码后将原输入作为一个字面短语重搜。
 
 排序使用同一个历史 BM25 背景。单短语排序除去两来源共用的 IDF，保持原有结果顺序。复合查询累加去重后的正向短语得分；两部分用相同的历史平均文档长度与各短语的历史 IDF。没有出现的 OR 项和排除项不计分。被实时副本遮蔽的历史正文只参与背景统计。历史没有词元时使用实时平均长度；历史没有匹配的短语使用 IDF 1。分数相同时依次按事件时间、会话 ID 和事件序号排序。完整表达式确定最长为 `snippetChars` 个 Unicode 码点的摘录，不返回分数。
 
-每个不透明游标绑定规范化后的搜索请求。续页会对当前语料重新排名，从游标记录的位置开始返回。若两页之间语料发生变化，结果可能重复或遗漏。
+每个不透明的 v3 游标绑定规范化后的搜索请求。如果游标由旧搜索语义生成，请重新开始搜索。续页会对当前语料重新排名，从游标记录的位置开始返回。若两页之间语料发生变化，结果可能重复或遗漏。
 
 `unicode61` tokenizer 匹配 token 与短语，而非任意子字符串：`AI` 不匹配 token `BRAID`。需要执行字面、空白灵活的字符串子串扫描时，使用带 `text` 子句的 `ctx.sessionQuery.filterEvents()`。
 
@@ -91,7 +91,7 @@ kind: "package-reference"
 
 ### 失败与恢复
 
-带类型的 `SessionQueryError` 失败携带稳定代码：搜索配置为关闭时返回 `SESSION_QUERY_SEARCH_DISABLED`；索引无法打开或对账时返回 `SESSION_QUERY_INDEX_FAILED`；游标格式无效或不属于该请求时返回 `SESSION_QUERY_INVALID_CURSOR`。
+带类型的 `SessionQueryError` 失败携带稳定代码：搜索配置为关闭时返回 `SESSION_QUERY_SEARCH_DISABLED`；索引无法打开或对账时返回 `SESSION_QUERY_INDEX_FAILED`；游标格式无效、版本过旧或不属于该请求时返回 `SESSION_QUERY_INVALID_CURSOR`。
 
 -----
 
@@ -129,7 +129,7 @@ kind: "package-reference"
 
 复合查询先把完整表达式选出的两份候选保存在连接内的临时表，再对每个正向短语在各来源走一次 MATCH。交叉连接以 FTS 游标为外循环，先按文档 rowid 过滤候选再调用 `bm25`。只有有界结果页执行完整表达式高亮。修改实时正文时，同一写入更新其 FTS 记录及词元数。
 
-公开 `bm25` 在权重 1 和 2 的分数用于恢复短语 IDF 和实际词频，包括重叠匹配。历史平均长度取自一个有词元的历史文档及其探测词频，不扫描历史词表。每次成功提交历史写入后失效该校准。
+公开 `bm25` 在权重 1 和 2 的分数用于恢复短语 IDF 和词频，包括重叠匹配。复合评分将反推词频四舍五入为整数，并用 FTS5 的历史词元总数除以文档数得到平均长度。单短语评分仍从一个含词元的历史文档校准长度；每次成功提交历史写入后失效该校准。
 
 ### Schema 归属
 

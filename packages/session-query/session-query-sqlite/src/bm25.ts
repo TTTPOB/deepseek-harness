@@ -10,6 +10,28 @@ function phraseIdf(scores: WeightedScores): number {
   return 1 / (2.2 * (2 / -scores.s2 - 1 / -scores.s1))
 }
 
+// The FTS5 averages record stores the row count followed by one token total per
+// column as SQLite varints: https://sqlite.org/fts5.html#the_data_table
+// Only the first column is indexed.
+function indexedAverage(db: DatabaseSync): number | null {
+  const { block } = db.prepare('SELECT block FROM persisted_docs_data WHERE id = 1').get() as { block: Uint8Array }
+  if (block.length === 0) return null
+  const bytes = new DataView(block.buffer, block.byteOffset, block.byteLength)
+  let offset = 0
+  const readVarint = (): number => {
+    let value = 0n
+    for (let i = 0; i < 8; i++) {
+      const byte = bytes.getUint8(offset++)
+      value = (value << 7n) | BigInt(byte & 0x7f)
+      if (byte < 0x80) return Number(value)
+    }
+    return Number((value << 8n) | BigInt(bytes.getUint8(offset++)))
+  }
+  const rows = readVarint()
+  const tokens = readVarint()
+  return tokens === 0 ? null : tokens / rows
+}
+
 /** Connection-owned calibration; invalidated after each successful historical transaction. */
 export class SharedBm25 {
   private average: number | null | undefined
@@ -45,10 +67,11 @@ export class SharedBm25 {
    * Shared scoring parameters for one phrase. No historical match uses IDF=1;
    * no historical tokens uses the live average, with IDF=1 for every live candidate.
    * @param expression - Compiled FTS5 expression for a single phrase.
+   * @param compound - Use exact index totals for compound ranking; preserve single-phrase calibration otherwise.
    * @returns Live average, shared average, shared IDF and live IDF, in SQL binding order.
    */
-  parameters(expression: string): number[] {
-    const historyAverage = this.historyAverage()
+  parameters(expression: string, compound = false): number[] {
+    const historyAverage = compound ? indexedAverage(this.db) : this.historyAverage()
     const live = this.db.prepare('SELECT avg(token_count) average FROM temp.live_token_lengths').get() as {
       average: number | null
     }

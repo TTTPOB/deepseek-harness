@@ -78,11 +78,11 @@ With `openAt: startup`, activation starts background warmup. With `openAt: first
 | `alpha -beta`, `alpha -"beta gamma"`, `alpha -(beta OR gamma)` | Exclude the item immediately after `-`; a standalone `-` is not an operator |
 | `alph*` | A trailing `*` on a bare term makes its last token a prefix |
 
-Other punctuation is literal text for tokenization: `reveal.js`, `academic-source`, and paths match their component tokens in adjacent order. Lowercase `and`, `or`, and `not` are ordinary words. Search ignores items without tokens. Unbalanced quotes or parentheses, missing `OR` operands, a negative-only subgroup or branch, and tokenless queries return `SESSION_QUERY_INVALID_QUERY`. A wholly negative query returns `SESSION_QUERY_EXCLUSION_ONLY`; the Web session list retries this case as one literal phrase.
+Other punctuation is literal text for tokenization: `reveal.js`, `academic-source`, and paths match their component tokens in adjacent order. Lowercase `and`, `or`, and `not` are ordinary words. Search ignores items without tokens. Unbalanced quotes or parentheses, empty groups, more than 16 nested parenthesis levels, missing `OR` operands, a negative-only subgroup or branch, and tokenless queries return `SESSION_QUERY_INVALID_QUERY`. A wholly negative query returns `SESSION_QUERY_EXCLUSION_ONLY`; the Web session list retries this case as one literal phrase.
 
 Ranking uses a common historical BM25 background. Single-phrase ranking divides out its shared IDF and keeps the same result order. Compound queries add distinct positive phrase scores, using historical average document length and each phrase's historical IDF for both sources. Absent OR terms and exclusions add nothing. Historical bodies superseded by live copies contribute only to background statistics. With no historical tokens, ranking uses the live average length; phrases absent from history use IDF 1. Event time, session id, and event sequence break ties. The complete query selects excerpts of up to `snippetChars` Unicode code points; scores are not returned.
 
-Each opaque cursor binds the normalized search request. A continuation ranks the current corpus and starts at the position recorded in the cursor. Corpus changes between pages can cause duplicate or skipped results.
+Each opaque v3 cursor binds the normalized search request. Start the search again if a cursor was issued under older search semantics. A continuation ranks the current corpus and starts at the position recorded in the cursor. Corpus changes between pages can cause duplicate or skipped results.
 
 The `unicode61` tokenizer matches tokens and phrases, not arbitrary substrings: `AI` does not match the token `BRAID`. Use `ctx.sessionQuery.filterEvents()` with a `text` clause when a literal whitespace-flexible substring scan is required.
 
@@ -92,7 +92,7 @@ With `openAt: first-search`, the service activates without importing `node:sqlit
 
 ### Failures and recovery
 
-Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DISABLED` when search is configured off; `SESSION_QUERY_INDEX_FAILED` when the index cannot open or reconcile; and `SESSION_QUERY_INVALID_CURSOR` for malformed cursors or cursors from a different request.
+Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DISABLED` when search is configured off; `SESSION_QUERY_INDEX_FAILED` when the index cannot open or reconcile; and `SESSION_QUERY_INVALID_CURSOR` for malformed cursors, older cursor versions, or cursors from a different request.
 
 -----
 
@@ -130,7 +130,7 @@ One worker owns SQLite and the JSONL reader. It reads, decompresses, and project
 
 Compound queries first store candidates from the complete expression in a connection-local table. Each positive phrase has one scoring MATCH cursor per source. A cross join puts that cursor on the outside and checks candidate rowids before computing `bm25`. The complete expression highlights only the bounded result page. Changed live bodies update their FTS rows and token lengths together.
 
-Public `bm25` scores at text-column weights 1 and 2 recover the phrase IDF and actual term frequency, including overlaps. One token-bearing historical document and its measured term frequency calibrate historical average length without scanning the historical vocabulary. Each successful historical write transaction invalidates that calibration.
+Public `bm25` scores at text-column weights 1 and 2 recover the phrase IDF and term frequency, including overlaps. Compound scoring rounds the recovered frequency to an integer and divides FTS5's historical token total by its document count for the average length. Single-phrase scoring instead keeps its historical length calibration from one token-bearing document; each successful historical write transaction invalidates that calibration.
 
 ### Schema ownership
 

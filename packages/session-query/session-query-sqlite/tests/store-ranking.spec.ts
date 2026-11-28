@@ -4,6 +4,44 @@ import { normalizeEventRequest } from '../src/query.ts'
 import { openSearchDatabase } from '../src/schema.ts'
 import { SearchStore } from '../src/store.ts'
 
+async function scoreTwins(text: string, before: string[], after: string[]) {
+  using db = await openSearchDatabase(':memory:', 'wal', ':memory:')
+  const stored = SessionId('stored')
+  const live = SessionId('live')
+  db.exec(`INSERT INTO persisted_sessions(id,version,created_at,revision,generation)
+    VALUES('stored',1,0,'test',0),('background',1,0,'test',0)`)
+  const history = db.prepare(`INSERT INTO persisted_docs(text,session_id,seq,type,time,surface)
+    VALUES(?,?,0,'user/message',0,'current')`)
+  for (const body of before) history.run(body, 'background')
+  history.run(text, stored)
+  for (const body of after) history.run(body, 'background')
+  db.exec("INSERT INTO temp.live_sessions(id,version,created_at,fingerprint,persisted) VALUES('live',1,0,'test',0)")
+  db.prepare('INSERT INTO temp.live_token_lengths VALUES(1,?)').run(text.trim().split(' ').length)
+  db.prepare(`INSERT INTO temp.live_docs(rowid,text,session_id,seq,type,time,surface)
+    VALUES(1,?,?,0,'user/message',1,'current')`).run(text, live)
+
+  const store = new SearchStore(db, 80)
+  const request = normalizeEventRequest({ query: 'alpha beta' }, { defaultLimit: 10, maxLimit: 10 })
+  return store['_queryPage'](request, 0, true)
+}
+
+it('breaks compound score ties by time when term counts and average length are asymmetric', async () => {
+  const text = 'alpha ' + 'beta '.repeat(10) + 'filler '.repeat(14)
+  const rows = await scoreTwins(text, ['background'], Array<string>(5).fill('background'))
+  expect(rows.map(row => row.session_id)).toEqual([SessionId('live'), SessionId('stored')])
+  expect(rows[0]!.score).toBe(rows[1]!.score)
+})
+
+it('keeps compound scores close across sources at an IDF rounding boundary', async () => {
+  const text = 'alpha '.repeat(407) + 'beta ' + 'filler '.repeat(134)
+  const background = Array.from({ length: 485 }, (_, i) => (i < 14 ? 'alpha ' : 'background ') + 'filler '.repeat(19))
+  const rows = await scoreTwins(text, [], background)
+  expect(rows).toHaveLength(2)
+  expect(new Set(rows.map(row => row.session_id))).toEqual(new Set([SessionId('live'), SessionId('stored')]))
+  // A one-ULP error in the recovered historical IDF can cross the decimal rounding boundary.
+  expect(Math.abs(rows[0]!.score - rows[1]!.score)).toBeLessThan(1e-9)
+})
+
 it('adds historical-IDF phrase scores and gives identical live and stored documents identical scores', async () => {
   using db = await openSearchDatabase(':memory:', 'wal', ':memory:')
   const text = 'alpha bridge alpha beta'

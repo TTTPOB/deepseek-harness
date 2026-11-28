@@ -3,6 +3,9 @@
 import { SessionQueryError } from '@deepseek-ai/dsh-session-query'
 import { quoteFtsData, sanitizeFtsText } from './query.ts'
 
+// Keeps the compiled query within FTS5's parser stack, even with mixed operators.
+const MAX_GROUP_DEPTH = 16
+
 interface Token {
   kind: 'word' | 'phrase' | 'and' | 'or' | 'open' | 'close' | 'minus'
   text: string
@@ -27,6 +30,7 @@ export interface SearchSyntax {
  * @param query - caller text, with surrounding whitespace and NUL already checked.
  * @param tokenKey - returns the indexed token sequence identity, or undefined for no tokens.
  * @returns full FTS expression and one expression per distinct positive phrase.
+ * @throws {SessionQueryError} Invalid syntax, including empty or overly nested groups, or an exclusion-only query.
  */
 export function parseSearchQuery(query: string, tokenKey: (text: string) => string | undefined): SearchSyntax {
   const root = new Parser(lex(query), tokenKey).parse()
@@ -66,39 +70,45 @@ class Parser {
   constructor(private readonly tokens: readonly Token[], private readonly tokenKey: (text: string) => string | undefined) {}
 
   parse(): Node {
-    const node = this.and(false)
+    const node = this.and(0)
     if (node === undefined) invalid('contains no searchable text')
     return node
   }
 
-  private and(group: boolean): Node | undefined {
+  private and(depth: number): Node | undefined {
+    const group = depth > 0
+    let hasOperand = false
     const include: Node[] = []
     const exclude: Node[] = []
     for (;;) {
       const kind = this.tokens[this.offset]?.kind
       if (kind === 'close' || kind === undefined) {
         if ((kind === 'close') !== group) invalid('has an unmatched parenthesis')
-        if (group) this.offset++
+        if (group) {
+          if (!hasOperand) invalid('contains an empty parenthesized group')
+          this.offset++
+        }
         break
       }
       if (kind === 'and') {
         this.offset++
         continue
       }
-      const part = this.or()
+      const part = this.or(depth)
+      hasOperand = true
       if (part !== undefined) (part.negative ? exclude : include).push(part.node)
     }
     const positive = include.length === 0 ? undefined : combine('and', include)
     return exclude.length === 0 ? positive : { kind: 'not', include: positive, exclude: combine('or', exclude) }
   }
 
-  private or(): Clause | undefined {
-    const first = this.clause()
+  private or(depth: number): Clause | undefined {
+    const first = this.clause(depth)
     if (this.tokens[this.offset]?.kind !== 'or') return first
     const branches = first === undefined ? [] : [first]
     while (this.tokens[this.offset]?.kind === 'or') {
       this.offset++
-      const branch = this.clause()
+      const branch = this.clause(depth)
       if (branch !== undefined) branches.push(branch)
     }
     if (branches.length === 0) return undefined
@@ -110,12 +120,13 @@ class Parser {
     }
   }
 
-  private clause(): Clause | undefined {
+  private clause(depth: number): Clause | undefined {
     const negative = this.tokens[this.offset]?.kind === 'minus'
     if (negative) this.offset++
     const token = this.tokens[this.offset++]
     if (token?.kind === 'open') {
-      const node = this.and(true)
+      if (depth === MAX_GROUP_DEPTH) invalid(`supports at most ${MAX_GROUP_DEPTH} levels of parentheses`)
+      const node = this.and(depth + 1)
       return node === undefined ? undefined : { node, negative }
     }
     if (token?.kind !== 'word' && token?.kind !== 'phrase') invalid('requires an operand on both sides of OR')
@@ -135,17 +146,24 @@ function combine(kind: 'and' | 'or', children: Node[]): Node {
   return first !== undefined && second === undefined ? first : { kind, children }
 }
 
-function compile(node: Node, phrases: Map<string, string> | undefined): string {
-  switch (node.kind) {
-    case 'phrase':
-      if (phrases !== undefined && !phrases.has(node.key)) phrases.set(node.key, node.expression)
-      return node.expression
-    case 'and': case 'or':
-      return `(${node.children.map(child => compile(child, phrases)).join(node.kind === 'and' ? ' AND ' : ' OR ')})`
-    case 'not':
-      if (node.include === undefined) invalid('needs a positive term in each AND group and OR branch')
-      return `(${compile(node.include, phrases)} NOT ${compile(node.exclude, undefined)})`
+// FTS5's precedence is NOT > AND > OR, unlike the input query's AND and OR.
+const ftsPrecedence = { or: 1, and: 2, not: 3 }
+
+function compile(node: Node, phrases: Map<string, string> | undefined, minimum = 0): string {
+  if (node.kind === 'phrase') {
+    if (phrases !== undefined && !phrases.has(node.key)) phrases.set(node.key, node.expression)
+    return node.expression
   }
+  const precedence = ftsPrecedence[node.kind]
+  let expression: string
+  if (node.kind === 'not') {
+    if (node.include === undefined) invalid('needs a positive term in each AND group and OR branch')
+    expression = `${compile(node.include, phrases, precedence)} NOT ${compile(node.exclude, undefined, precedence + 1)}`
+  } else {
+    // Equal-precedence children join the same AND or OR chain.
+    expression = node.children.map(child => compile(child, phrases, precedence)).join(node.kind === 'and' ? ' AND ' : ' OR ')
+  }
+  return precedence < minimum ? `(${expression})` : expression
 }
 
 function invalid(issue: string): never {

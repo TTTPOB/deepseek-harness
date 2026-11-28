@@ -665,6 +665,77 @@ describe('SQLite session search', () => {
       .resolves.toMatchObject({ items: [{ seq: 2 }] })
   })
 
+  it('searches at the parenthesis limit and rejects deeper queries before FTS5', async () => {
+    const ctx = await liveContext()
+    try {
+      const session = ctx.sessions.create(SessionId('nested-query'), { seed: messageEvents('alpha') })
+      const alternating = Array.from({ length: 16 }).reduceRight<string>((rest, _, index) =>
+        `alpha ${index % 2 === 0 ? 'AND' : 'OR'} (${rest})`, 'alpha AND alpha')
+      const mixed = 'alpha missing OR ('.repeat(16) + 'alpha' + ') -excluded'.repeat(16)
+      for (const query of [alternating, mixed]) {
+        await expect(searchSessions(ctx, { query }))
+          .resolves.toMatchObject({ items: [{ header: { id: session.id } }] })
+      }
+      for (const depth of [17, 40]) {
+        await expect(searchSessions(ctx, { query: 'alpha ('.repeat(depth) + 'alpha' + ')'.repeat(depth) }))
+          .rejects.toThrow(expectCode('SESSION_QUERY_INVALID_QUERY'))
+      }
+    } finally { await (ctx.sessionQuery as SqliteSessionQueryEngine).close() }
+  })
+
+  it('continues a compound event search across session ids and a dirty session', async () => {
+    const ctx = await liveContext()
+    try {
+      const one = ctx.sessions.create(SessionId('compound-one'), { seed: [
+        ...messageEvents('alpha beta', 40),
+        { ...messageEvents('alpha gamma', 20)[0]!, seq: SessionSeq(1) },
+      ] })
+      const two = ctx.sessions.create(SessionId('compound-two'), { seed: [
+        ...messageEvents('alpha gamma', 30),
+        { ...messageEvents('alpha beta', 10)[0]!, seq: SessionSeq(1) },
+      ] })
+      ctx.sessions.create(SessionId('compound-excluded'), { seed: messageEvents('alpha beta gamma', 100) })
+      const request = { query: 'alpha beta OR gamma', sessionFilters: sessionIds(one.id, two.id) }
+      const first = await searchEvents(ctx, { ...request, limit: 1 })
+      const expected = [[one.id, 0], [two.id, 0], [one.id, 1], [two.id, 1]]
+      const identity = (hit: { sessionId: SessionId; seq: number }) => [hit.sessionId, Number(hit.seq)]
+      const collect = async (count: number) => {
+        const hits = first.items.map(identity)
+        let cursor = first.nextCursor
+        for (let i = 1; i < count; i++) {
+          expect(cursor).toBeDefined()
+          const page = await searchEvents(ctx, { ...request, limit: 1, cursor: cursor! })
+          expect(page.items).toHaveLength(1)
+          hits.push(...page.items.map(identity))
+          cursor = page.nextCursor
+        }
+        expect(cursor).toBeUndefined()
+        return hits
+      }
+      expect(await collect(expected.length)).toEqual(expected)
+      const appended = two.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: 'alpha gamma ' + 'filler '.repeat(20) }], source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      expect(await collect(expected.length + 1)).toEqual([...expected, [two.id, appended.seq]])
+    } finally { await (ctx.sessionQuery as SqliteSessionQueryEngine).close() }
+  })
+
+  it('rejects a v2 cursor bound to the same compound event request', async () => {
+    const ctx = await liveContext()
+    try {
+      const session = ctx.sessions.create(SessionId('compound-legacy-cursor'), { seed: [
+        ...messageEvents('one two', 10),
+        { ...messageEvents('one two', 20)[0]!, seq: SessionSeq(1) },
+      ] })
+      const request = { query: 'one two', limit: 1, sessionFilters: sessionIds(session.id) }
+      const first = await searchEvents(ctx, request)
+      expect(first.nextCursor).toBeDefined()
+      const legacyCursor = SessionSearchCursor(first.nextCursor!.replace(/^[^.]+/u, 'v2'))
+      await expect(searchEvents(ctx, { ...request, cursor: legacyCursor }))
+        .rejects.toThrow(expectCode('SESSION_QUERY_INVALID_CURSOR'))
+    } finally { await (ctx.sessionQuery as SqliteSessionQueryEngine).close() }
+  })
+
   it('binds compact cursors to the normalized request, not the query length', async () => {
     const ctx = await liveContext()
     const longPhrase = 'long '.repeat(100).trim()

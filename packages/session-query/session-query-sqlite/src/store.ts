@@ -318,7 +318,7 @@ export class SearchStore {
       const sources = (this.db.prepare('SELECT DISTINCT live FROM temp.search_matches').all() as Array<{ live: number }>)
         .map(({ live }) => this.db.prepare(phraseScoreSql(live === 1)))
       for (const phrase of query.positivePhrases) {
-        const parameters = this._bm25.parameters(phrase)
+        const parameters = this._bm25.parameters(phrase, true)
         for (const statement of sources) statement.run(...parameters, phrase)
       }
       return this.db.prepare(`WITH filtered AS (SELECT * FROM temp.search_matches), ${pageSql}`)
@@ -377,9 +377,15 @@ function liveTermFrequency(native: string): string {
   return `(1.2*(0.25+0.75*l.token_count/b.avg_live)*(-${native})/(2.2*b.idf_live+${native}))`
 }
 
-function sharedLiveScore(native: string, idf: string): string {
+function singlePhraseLiveScore(native: string): string {
   const tf = liveTermFrequency(native)
-  return `round(-2.2*${idf}*${tf}/(${tf}+1.2*(0.25+0.75*l.token_count/b.avg_history)),12)`
+  return `round(-2.2*${tf}/(${tf}+1.2*(0.25+0.75*l.token_count/b.avg_history)),12)`
+}
+
+function compoundLiveScore(native: string): string {
+  const tf = `round(${liveTermFrequency(native)})`
+  // Keep the arithmetic order of SQLite's fts5Bm25Function.
+  return `round(-1.0*(b.idf_history*((${tf}*2.2)/(${tf}+1.2*(0.25+0.75*l.token_count/b.avg_history)))),12)`
 }
 
 const backgroundSql = 'background(avg_live,avg_history,idf_history,idf_live) AS (VALUES(?,?,?,?))'
@@ -409,7 +415,7 @@ function selectedDocumentsSql(singlePhrase: boolean): string {
       ${singlePhrase ? `
       SELECT hraw.*,round(native_score/b.idf_history,12) score FROM hraw CROSS JOIN background b
       UNION ALL
-      SELECT lraw.*,${sharedLiveScore('native_score', '1.0')} score
+      SELECT lraw.*,${singlePhraseLiveScore('native_score')} score
       FROM lraw JOIN temp.live_token_lengths l ON l.rowid=lraw.document_rowid CROSS JOIN background b` : `
       SELECT hraw.*, 0.0 score FROM hraw
       UNION ALL
@@ -427,7 +433,7 @@ function phraseScoreSql(live: boolean): string {
     WHERE ${table} MATCH ? AND c.live = ${set} AND c.document_rowid = ${table}.rowid
   )
   UPDATE temp.search_matches AS c
-  SET score = c.score + ${live ? sharedLiveScore('p.native_score', 'b.idf_history') : 'round(p.native_score,12)'}
+  SET score = c.score + ${live ? compoundLiveScore('p.native_score') : 'round(p.native_score,12)'}
   FROM native p CROSS JOIN background b
   ${live ? 'JOIN temp.live_token_lengths l ON l.rowid=p.document_rowid' : ''}
   WHERE c.live = ${set} AND c.document_rowid = p.document_rowid`
@@ -471,7 +477,7 @@ function page<Row, Item>(
 ): SessionSearchPage<Item> {
   return {
     items: rows.slice(0, limit).map(convert),
-    ...rows.length > limit ? { nextCursor: SessionSearchCursor(`v2.${digest}.${offset + limit}`) } : {},
+    ...rows.length > limit ? { nextCursor: SessionSearchCursor(`v3.${digest}.${offset + limit}`) } : {},
   }
 }
 
@@ -480,7 +486,7 @@ function requestDigest(request: NormalizedSessionRequest | NormalizedEventReques
 }
 
 function decodeCursor(cursor: SessionSearchCursorValue, digest: string): number {
-  const match = /^v2\.([A-Za-z0-9_-]{16})\.(0|[1-9][0-9]*)$/u.exec(cursor)
+  const match = /^v3\.([A-Za-z0-9_-]{16})\.(0|[1-9][0-9]*)$/u.exec(cursor)
   const offset = Number(match?.[2])
   if (match?.[1] !== digest || !Number.isSafeInteger(offset)) {
     throw new SessionQueryError('session-search cursor is invalid for this request', 'SESSION_QUERY_INVALID_CURSOR')

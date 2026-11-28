@@ -11,7 +11,7 @@ English | [中文](guide.zh.md)
 
 Multi-word queries previously matched one contiguous phrase. Spaces and uppercase `AND` now require all terms within the same event, in any order. Double quotes match an exact phrase; parentheses group; uppercase `OR` binds more tightly than AND; and a trailing `*` on a bare term matches a prefix. An attached leading `-` now excludes an item. Queries need a positive term; the Web session list retries an all-exclusion query as a literal phrase.
 
-SQLite `searchSessions` and `searchEvents` reject cursors issued before this upgrade with `SESSION_QUERY_INVALID_CURSOR`. New cursors continue at the same offset in the current ranking. A changed corpus can repeat or skip hits rather than returning `SESSION_QUERY_STALE_CURSOR`. Metadata-only `pageSessions` retains its separate snapshot and expiry behavior.
+SQLite `searchSessions` and `searchEvents` issue v3 cursors and reject older cursors, including v2, with `SESSION_QUERY_INVALID_CURSOR`. A v3 cursor continues at the same offset in the current ranking. A changed corpus can repeat or skip hits rather than returning `SESSION_QUERY_STALE_CURSOR`. Metadata-only `pageSessions` retains its separate snapshot and expiry behavior.
 
 Event search callers pass `sessionFilters` instead of `sessionId`, and read the indexed session header from each hit instead of `page.session`. Omitting `sessionFilters` searches all sessions. An absent id in a filter produces no hits.
 

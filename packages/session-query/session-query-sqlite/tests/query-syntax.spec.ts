@@ -47,6 +47,7 @@ describe('query syntax on the unicode61 index', () => {
     expect(f.match('alpha -blue')).toEqual(['alpha green', 'alpha clear'])
     expect(f.match('alpha -"red blue"')).toEqual(['alpha blue red', 'alpha blue green', 'alpha green', 'alpha clear'])
     expect(f.match('alpha -(blue green)')).toEqual(['alpha red blue', 'alpha blue red', 'alpha green', 'alpha clear'])
+    expect(f.match('alpha -(blue -green)')).toEqual(['alpha blue green', 'alpha green', 'alpha clear'])
     expect(f.match('alpha -blue -green')).toEqual(['alpha clear'])
     expect(f.match('alpha - blue')).toEqual(['alpha red blue', 'alpha blue red', 'alpha blue green'])
   })
@@ -54,10 +55,26 @@ describe('query syntax on the unicode61 index', () => {
   it('ignores tokenless items and deduplicates positive token sequences only for scoring', async () => {
     using f = await fixture(['café clear', 'café food'])
     expect(f.match('café OR 🚀 - !!!')).toEqual(['café clear', 'café food'])
+    expect(f.match('café OR (🚀)')).toEqual(['café clear', 'café food'])
     const parsed = f.compile('café OR CAFE caf* -food')
     expect(parsed.positivePhrases).toHaveLength(2)
     expect(f.match('café OR CAFE caf* -food')).toEqual(['café clear'])
     expect(() => f.compile('🚀 ... - "!!!" (*)')).toThrow(expect.objectContaining({ code: 'SESSION_QUERY_INVALID_QUERY' }))
+  })
+
+  it('rejects empty groups instead of dropping them from a query', async () => {
+    using f = await fixture()
+    for (const query of ['alpha OR ()', '() OR alpha', 'alpha OR (AND)', 'alpha OR (())', 'alpha ()', '()']) {
+      expect(() => f.compile(query)).toThrow(expect.objectContaining({
+        code: 'SESSION_QUERY_INVALID_QUERY', message: expect.stringMatching(/empty parenthesized group/u),
+      }))
+    }
+  })
+
+  it('compiles nested conjunctions and disjunctions like their flat equivalents', async () => {
+    using f = await fixture()
+    expect(f.compile('a (b AND (c d))')).toEqual(f.compile('a b c d'))
+    expect(f.compile('a OR (b OR (c OR d))')).toEqual(f.compile('a OR b OR c OR d'))
   })
 
   it('reports unbalanced syntax, missing OR operands and negative-only scopes', async () => {
