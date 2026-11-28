@@ -376,7 +376,7 @@ export class ClientSessions implements ISessions {
   /**
    * Search the Host's visible message-content index. Results stay
    * request-local; the list snapshot remains the metadata authority.
-   * @param query - non-blank literal phrase.
+   * @param query - non-blank full-text query.
    * @param signal - cancellation for a superseded search.
    * @returns bounded results or a business/transport error.
    */

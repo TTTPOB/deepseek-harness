@@ -335,7 +335,7 @@ function normalizeQuery(value: string): string {
       'SESSION_QUERY_INVALID_QUERY',
     )
   }
-  return sanitizeFtsText(query)
+  return query
 }
 
 function materializeCursor(cursor: SessionSearchCursor | undefined): SessionSearchCursor | undefined {

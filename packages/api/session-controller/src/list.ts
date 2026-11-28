@@ -195,12 +195,13 @@ export class ApiSessionList {
 
   /**
    * Search current visible message content without activating any matching Session.
-   * @param query - literal message-content query.
+   * @param query - message-content query using the search provider's query syntax.
    * @param signal - cancellation for list and search reads.
    * @returns authorized bounded Session search results.
    */
   async search(query: string, signal: AbortSignal): Promise<SessionSearchValue> {
     const normalizedQuery = normalizeSearchQuery(query)
+    let providerQuery = normalizedQuery
     signal.throwIfAborted()
     const provider = this.ctx.get('sessionQuery')
     if (provider === undefined) {
@@ -234,7 +235,7 @@ export class ApiSessionList {
         let page
         try {
           page = await provider.searchSessions({
-            query: normalizedQuery,
+            query: providerQuery,
             eventFilters: [
               { kind: 'type', values: ['user/message', 'assistant/message'] },
               { kind: 'surface', values: ['current'] },
@@ -245,6 +246,13 @@ export class ApiSessionList {
           signal.throwIfAborted()
         } catch (error: unknown) {
           signal.throwIfAborted()
+          if (requestedCursor === undefined
+            && error instanceof SessionQueryError
+            && error.code === 'SESSION_QUERY_EXCLUSION_ONLY'
+            && providerQuery === normalizedQuery) {
+            providerQuery = `"${normalizedQuery.replaceAll('"', '""')}"`
+            continue
+          }
           if (requestedCursor === undefined
             && error instanceof SessionQueryError
             && error.code === 'SESSION_QUERY_INVALID_LIMIT'

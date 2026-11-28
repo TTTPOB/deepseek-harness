@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-rc.5/session-search-continuations/guide.md
 /:
-  en: 3cafb76500fe8d49
-  zh: cd1df50b03eb38b4
+  en: cbfd6fbd5e9d623a
+  zh: c3711653ef9778a5
 /sqlite-full-text-search:
   en: 3738ceae18b2b5fe
   zh: fc46994fa093acf9
 /sqlite-full-text-search/change:
-  en: 974490684a00c728
-  zh: 7c3928449812f31d
+  en: 46fb7be1498485cd
+  zh: e4d87127f8e4650b
 /sqlite-full-text-search/migration:
-  en: 8448ec78c958bdb0
-  zh: 2b505b95ab0cb372
+  en: 3766e8073ab7201f
+  zh: 3a1216de9f05aff1

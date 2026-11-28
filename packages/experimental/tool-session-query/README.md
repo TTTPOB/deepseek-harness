@@ -44,11 +44,13 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 | Tool | What the model gets |
 |---|---|
-| `session_search` | Sessions matching a literal query, ranked, with title and best-match excerpt; always omits the caller session |
-| `session_event_search` | Events matching a literal query inside one authorized session; for the current session it stops before the step that invoked it |
+| `session_search` | Sessions matching a full-text query, ranked, with title and best-match excerpt; always omits the caller session |
+| `session_event_search` | Events matching a full-text query inside one authorized session; for the current session it stops before the step that invoked it |
 | `session_trace` | The authorized ancestor chain and descendant tree of one session; unauthorized boundaries appear as markers without hidden ids |
 | `session_event_trace` | One event's positional replacements and cited source-event relationships |
 | `session_event_read` | One full unabridged event as JSON, plus optional neighboring event summaries |
+
+Terms match within the same event. See [SQLite query syntax](../../session-query/session-query-sqlite/README.md#search-behavior) for quotes, `OR`, exclusions, and prefixes.
 
 Workspace authority is conservative: cross-session access requires exact `cwd` equality between target and caller session, and a caller without `cwd` can inspect only itself. Requested parent ids are deduplicated and authority-checked before search; missing and cross-workspace guesses behave identically. Search results are cursor-free: a capped result asks the model to narrow its query, and never exposes provider cursors, offsets, page sizes, or a model-controlled limit. Timestamps at the tool boundary are timezone-qualified ISO 8601 and become inclusive epoch-millisecond filters.
 

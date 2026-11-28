@@ -42,8 +42,14 @@ interface EventFilterInput {
   readonly surfaces?: SessionEventSurface[] | undefined
 }
 
+const querySyntax = 'Space-separated terms must all appear in the same event (AND), in any order. ' +
+  'Use double quotes for an exact phrase. Uppercase OR binds tighter than spaces: a b OR c means a AND (b OR c). ' +
+  'Use parentheses to group, a leading - to exclude a term, phrase or group, and a trailing * for a word prefix. ' +
+  'Each AND group and OR branch needs a positive term. Other punctuation separates adjacent tokens: ' +
+  'reveal.js, a-b and paths match as phrases. Matching is token-based, not regex.'
+
 const sessionSearchParameters = {
-  query: { type: 'string', required: true, description: 'Literal full-text query over prior session history.' },
+  query: { type: 'string', required: true, description: querySyntax },
   session_ids: { type: 'array', items: { type: 'string' }, description: 'Optional session ids to include.' },
   created_at_from: { type: 'string', description: 'Inclusive timezone-qualified ISO 8601 creation-time lower bound.' },
   created_at_to: { type: 'string', description: 'Inclusive timezone-qualified ISO 8601 creation-time upper bound.' },
@@ -68,7 +74,7 @@ const sessionSearchParameters = {
 
 const eventSearchParameters = {
   session_id: { type: 'string', description: 'Target session id. Omit for the current session.' },
-  query: { type: 'string', required: true, description: 'Literal full-text query over the target session.' },
+  query: { type: 'string', required: true, description: querySyntax },
   seq_from: { type: 'integer', description: 'Inclusive event sequence lower bound.' },
   seq_to: { type: 'integer', description: 'Inclusive event sequence upper bound.' },
   time_from: { type: 'string', description: 'Inclusive timezone-qualified ISO 8601 event-time lower bound.' },

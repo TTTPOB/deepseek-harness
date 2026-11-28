@@ -3280,9 +3280,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionEventSearchPage>',
-        description: 'Search events within one live-preferred logical session.',
-        parameters: [{ name: 'request', description: 'target session, query text, filters, page size, and cursor.' }, { name: 'exec', description: 'optional cancellation control.' }],
-        returns: 'matching event hits and their target header from one indexed observation.',
+        description: 'Search individual events in the live-preferred logical corpus.',
+        parameters: [{ name: 'request', description: 'query text, session and event filters, page size, and cursor.' }, { name: 'exec', description: 'optional cancellation control.' }],
+        returns: 'ranked event hits, each with the header of its indexed session.',
       },
       {
         signature: 'listSessions(signal?: AbortSignal): Promise<SessionRecord[]>',
@@ -8914,11 +8914,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionEventSearchPage',
-    declaration: 'export interface SessionEventSearchPage extends SessionSearchPage<SessionEventSearchHit> {\n    session: SessionHeader;\n}',
+    declaration: 'export type SessionEventSearchPage = SessionSearchPage<SessionEventSearchResult>;',
   },
   {
     name: 'SessionEventSearchRequest',
-    declaration: 'export interface SessionEventSearchRequest {\n    sessionId: SessionId;\n    query: string;\n    filters?: readonly SessionEventMetadataFilter[];\n    limit?: number;\n    cursor?: SessionSearchCursor;\n}',
+    declaration: 'export interface SessionEventSearchRequest {\n    query: string;\n    sessionFilters?: readonly SessionResultFilter[];\n    filters?: readonly SessionEventMetadataFilter[];\n    limit?: number;\n    cursor?: SessionSearchCursor;\n}',
+  },
+  {
+    name: 'SessionEventSearchResult',
+    declaration: 'export interface SessionEventSearchResult extends SessionEventSearchHit {\n    session: SessionHeader;\n}',
   },
   {
     name: 'SessionEventsPage',

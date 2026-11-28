@@ -184,6 +184,46 @@ describe('session.search', () => {
     expect(exec.signal).toBe(signal)
   })
 
+  it('retries an exclusion-only query as one escaped phrase and uses that phrase for continuation', async () => {
+    const ctx = await baseContext()
+    const found = hit('literal-exclusion')
+    ctx.sessions.create(found.header.id, { meta: found.header })
+    const query = '-"needle phrase"'
+    const literal = '"-""needle phrase"""'
+    const cursor = 'literal-next' as NonNullable<SessionSearchRequest['cursor']>
+    const searchSessions = vi.fn((request: SessionSearchRequest) => {
+      if (request.query === query) throw new SessionQueryError('add a positive term', 'SESSION_QUERY_EXCLUSION_ONLY')
+      if (request.query !== literal) return Promise.resolve({ items: [] })
+      return Promise.resolve(request.cursor === undefined
+        ? { items: [], nextCursor: cursor }
+        : { items: [found] })
+    })
+    installSearchQuery(ctx, searchSessions)
+    const remote = await createSessionTestRemote(ctx, defaults)
+
+    await expect(remote.search(request(query), new AbortController().signal)).resolves.toEqual({
+      ok: true,
+      value: { items: [{ sessionId: found.header.id, snippet: found.bestMatch.snippet }], hasMore: false },
+    })
+    expect(searchSessions.mock.calls.map(([request]) => [request.query, request.cursor])).toEqual([
+      [query, undefined], [literal, undefined], [literal, cursor],
+    ])
+    await ctx.fiber.dispose()
+  })
+
+  it('does not retry a syntax error in a query with a positive term', async () => {
+    const ctx = await baseContext()
+    ctx.sessions.create(sid('visible'), { meta: header('visible') })
+    const searchSessions = vi.fn().mockRejectedValue(new SessionQueryError('OR branch needs a positive term', 'SESSION_QUERY_INVALID_QUERY'))
+    installSearchQuery(ctx, searchSessions)
+    const remote = await createSessionTestRemote(ctx, defaults)
+
+    await expect(remote.search(request('alpha OR -beta'), new AbortController().signal))
+      .resolves.toMatchObject({ ok: false, error: { code: 'gateway/internal' } })
+    expect(searchSessions).toHaveBeenCalledOnce()
+    await ctx.fiber.dispose()
+  })
+
   it('rejects invalid wire queries before invoking the search provider', async () => {
     const ctx = await baseContext()
     ctx.sessions.create(sid('visible'), { meta: header('visible') })

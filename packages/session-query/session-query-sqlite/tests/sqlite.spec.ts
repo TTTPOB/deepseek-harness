@@ -514,15 +514,34 @@ describe('SQLite session search', () => {
     ctx.sessions.create(SessionId('only'), { seed: messageEvents('needle only', 10), meta: { createdAt: 1 } })
     ctx.sessions.create(SessionId('quote'), { seed: messageEvents('say "needle" exactly', 10), meta: { createdAt: 1 } })
 
-    const phrase = await searchSessions(ctx, { query: 'alpha beta' })
+    const phrase = await searchSessions(ctx, { query: '"alpha beta"' })
     expect(phrase.items.map(item => item.header.id)).toEqual([SessionId('b'), SessionId('d'), SessionId('a')])
     expect(phrase.items.every(item => Array.from(item.bestMatch.snippet).length <= 5)).toBe(true)
     await expect(searchSessions(ctx, { query: 'AI' })).resolves.toEqual({ items: [] })
-    await expect(searchSessions(ctx, { query: 'needle OR absent' }))
+    await expect(searchSessions(ctx, { query: '"needle OR absent"' }))
       .resolves.toMatchObject({ items: [{ header: { id: SessionId('operator') } }] })
     await expect(searchSessions(ctx, { query: 'say "needle"' }))
       .resolves.toMatchObject({ items: [{ header: { id: SessionId('quote') } }] })
-    await expect(searchSessions(ctx, { query: '*' })).resolves.toEqual({ items: [] })
+    await expect(searchSessions(ctx, { query: '*' })).rejects.toThrow(expectCode('SESSION_QUERY_INVALID_QUERY'))
+  })
+
+  it('matches nonadjacent terms in the same event, honors OR, and excludes phrase and group matches', async () => {
+    const ctx = await liveContext()
+    const a = ctx.sessions.create(SessionId('and-alpha'), { seed: messageEvents('beta middle alpha', 20) })
+    const b = ctx.sessions.create(SessionId('and-beta'), { seed: messageEvents('alpha gamma red blue', 20) })
+    ctx.sessions.create(SessionId('or-only'), { seed: messageEvents('gamma only', 20) })
+    ctx.sessions.create(SessionId('split'), { seed: [
+      ...messageEvents('alpha only', 10),
+      { ...messageEvents('beta only', 20)[0]!, seq: SessionSeq(1) },
+    ] })
+    const query = 'alpha beta OR gamma'
+    const matched = await searchEvents(ctx, { query })
+    expect(new Set(matched.items.map(hit => hit.sessionId))).toEqual(new Set([a.id, b.id]))
+    expect(matched.items.find(hit => hit.sessionId === a.id)?.snippet).toBe('beta middle alpha')
+    for (const exclusion of ['-"red blue"', '-(red blue)']) {
+      const page = await searchSessions(ctx, { query: query + ' ' + exclusion })
+      expect(page.items.map(hit => hit.header.id)).toEqual([a.id])
+    }
   })
 
   it('refreshes each selected session and all remaining dirty sessions for corpus event searches', async () => {
@@ -533,10 +552,10 @@ describe('SQLite session search', () => {
     const one = create('multi-one', '/work')
     const two = create('multi-two', '/work')
     const outside = create('multi-outside', '/elsewhere')
-    const query = 'needle'
+    const query = 'alpha beta'
     expect((await searchEvents(ctx, { query })).items).toEqual([])
     for (const session of [one, two, outside]) session.append('user/message', createUserMessage({
-      content: [{ type: 'text', text: 'new needle' }], source: { kind: 'user' },
+      content: [{ type: 'text', text: 'alpha bridge beta' }], source: { kind: 'user' },
     }), { surfaceOp: 'append' })
 
     const narrowed = await searchEvents(ctx, { query, sessionFilters: sessionIds(two.id, one.id, SessionId('absent')) })
@@ -560,13 +579,13 @@ describe('SQLite session search', () => {
     ctx.sessions.create(SessionId('markers'), {
       seed: messageEvents('alpha alpha ﷐﷑', 10),
     })
-    const page = await searchSessions(ctx, { query: 'alpha alpha' })
+    const page = await searchSessions(ctx, { query: '"alpha alpha"' })
     expect(page.items.map(item => [item.header.id, item.bestMatch.snippet])).toEqual([
       [SessionId('overlap'), 'alpha alpha alpha'],
       [persisted.id, 'alpha alpha gap alpha alpha'],
       [SessionId('markers'), 'alpha alpha ��'],
     ])
-    const events = await searchEvents(ctx, { sessionFilters: sessionIds(SessionId('overlap')), query: 'alpha alpha' })
+    const events = await searchEvents(ctx, { sessionFilters: sessionIds(SessionId('overlap')), query: '"alpha alpha"' })
     expect(events.items[0]?.snippet).toBe('alpha alpha alpha')
   })
 

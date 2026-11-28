@@ -57,7 +57,11 @@ const SAFE_SESSION_QUERY_FAILURES = {
   },
   SESSION_QUERY_INVALID_QUERY: {
     code: 'SESSION_QUERY_INVALID_QUERY',
-    message: 'session query was rejected',
+    message: 'session query was rejected; check quotes, parentheses, and OR operands',
+  },
+  SESSION_QUERY_EXCLUSION_ONLY: {
+    code: 'SESSION_QUERY_EXCLUSION_ONLY',
+    message: 'session query needs a positive term',
   },
   SESSION_QUERY_INVALID_LINEAGE: {
     code: 'SESSION_QUERY_INVALID_LINEAGE',

@@ -670,7 +670,7 @@ export class TestSessions implements ISessions {
    * Content search over the fixture corpus (recorded). The default answers an
    * empty page: content ranking is Host behavior, so a scenario that asserts
    * hits declares them through {@link TestSessions.stubSearch}.
-   * @param query - non-blank literal phrase.
+   * @param query - non-blank full-text query.
    * @param signal - cancellation for a superseded search (recorded and forwarded).
    * @returns the stubbed or empty result page.
    */

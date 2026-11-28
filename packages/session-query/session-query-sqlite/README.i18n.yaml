@@ -24,8 +24,11 @@
   en: 424b66ea87f5d09a
   zh: 59b25ed488d28d65
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/search-behavior:
-  en: 4e7885691461fdd8
-  zh: 8c2caef3e00387d7
+  en: c6213c403d5bbb7a
+  zh: 339d091d555d0d9a
+/deepseek-ai-dsh-session-query-sqlite/use-this-package/search-behavior/query-syntax:
+  en: 09a70adf7b7e31d0
+  zh: dcb627fe1e8c22f1
 /deepseek-ai-dsh-session-query-sqlite/use-this-package/when-to-defer-or-disable-search:
   en: 688edaf020a62cbb
   zh: ff1f81fd222471f9
@@ -36,14 +39,14 @@
   en: 1b4ba96f994a361d
   zh: 50148b7af190aa0c
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/design-philosophy:
-  en: ecec7279ec2b6f02
-  zh: 79fc6b11022fbcd1
+  en: 668771454e5ef73a
+  zh: 0cdc4335a9484b07
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/source-map:
-  en: 6d9809f7025cdecf
-  zh: e952063fd126aa55
+  en: 407f4e829ce08795
+  zh: d09337868917db4d
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/index-lifecycle:
-  en: 5d19465299a55e56
-  zh: d0f1a2ea9d63d63a
+  en: 085c275ad2a1a5ed
+  zh: b2269fbf1b0e89a2
 /deepseek-ai-dsh-session-query-sqlite/understand-the-implementation/schema-ownership:
   en: a584af02e5e39695
   zh: 3e2ba6da1d62db62
@@ -51,14 +54,14 @@
   en: b563921a29050088
   zh: 9a0b3d365b38bbb8
 /deepseek-ai-dsh-session-query-sqlite/model-experience:
-  en: ff9dc9f0f67efd4d
-  zh: ad284a65c2091e0f
+  en: 6da72e1b7f39d9da
+  zh: 8011536ce0309f0e
 /deepseek-ai-dsh-session-query-sqlite/model-experience/kv-cache-effect:
   en: ca75c51c89c2c9b0
   zh: f57cc48a1b5cbfa9
 /deepseek-ai-dsh-session-query-sqlite/known-limitations-and-deferred-work:
-  en: b7e9e2cec896d2ce
-  zh: 40cf6400b5bf2ca2
+  en: 59d2fb399b020aa5
+  zh: bc54072820f8afad
 /deepseek-ai-dsh-session-query-sqlite/known-limitations-and-deferred-work/dev-note:
   en: d2f0d68fe29fb750
   zh: 323d21ee73a9e3f6

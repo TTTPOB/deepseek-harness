@@ -31,18 +31,28 @@ export class SharedBm25 {
   }
 
   /**
-   * Shared scoring parameters for one literal phrase. No historical match uses IDF=1;
+   * Identify a phrase by the tokens FTS5 actually indexes, including case and accent folding.
+   * @param text - Sanitized phrase text.
+   * @returns A sequence key, or undefined if there are no tokens.
+   */
+  tokenKey(text: string): string | undefined {
+    this.probe(text)
+    const tokens = this.db.prepare('SELECT term FROM temp.token_vocab ORDER BY offset').all()
+    return tokens.length === 0 ? undefined : JSON.stringify(tokens.map(row => row.term))
+  }
+
+  /**
+   * Shared scoring parameters for one phrase. No historical match uses IDF=1;
    * no historical tokens uses the live average, with IDF=1 for every live candidate.
-   * @param query - Normalized literal phrase.
+   * @param expression - Compiled FTS5 expression for a single phrase.
    * @returns Live average, shared average, shared IDF and live IDF, in SQL binding order.
    */
-  parameters(query: string): number[] {
+  parameters(expression: string): number[] {
     const historyAverage = this.historyAverage()
     const live = this.db.prepare('SELECT avg(token_count) average FROM temp.live_token_lengths').get() as {
       average: number | null
     }
     const liveAverage = live.average || 1
-    const expression = quoteFtsData(query)
     const historical = historyAverage === null ? undefined : this.scores('persisted_docs', expression)
     const current = this.scores('live_docs', expression)
     return [liveAverage, historyAverage ?? liveAverage,

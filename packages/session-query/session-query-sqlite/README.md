@@ -66,9 +66,21 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 With `openAt: startup`, activation starts background warmup. With `openAt: first-search`, the first request starts it. Corpus-wide search waits up to `warmupWaitMs`; if the index is not ready, it returns retryable `SESSION_QUERY_INDEX_WARMING`. Once document keys are ready, `searchEvents` with an `id` filter can refresh and search the selected sessions without waiting for corpus warmup. Aborting a request cancels only its own wait.
 
-`searchSessions` groups hits by each session's strongest matching event; `searchEvents` returns individual hits with the `session` header from the same indexed observation. Both accept `sessionFilters: [{ kind: 'id', values: ids }]`; omit session filters to search the whole corpus. Missing ids produce no hits. Queries match one literal phrase after whitespace normalization. Metadata filters narrow results before ranking, and all `current`, `shadowed`, and `log-only` events are searchable by default.
+`searchSessions` groups hits by each session's strongest matching event; `searchEvents` returns individual hits with the `session` header from the same indexed observation. Both accept `sessionFilters: [{ kind: 'id', values: ids }]`; omit session filters to search the whole corpus. Missing ids produce no hits. Metadata filters narrow results before ranking, and all `current`, `shadowed`, and `log-only` events are searchable by default.
 
-Ranking uses BM25 with one historical background for persisted and live matches. Live bodies contribute their latest phrase frequency and token length, but do not change historical statistics; old persisted bodies of live-shadowed sessions remain background only. When history has no indexed tokens, ranking uses the live average token length and a common IDF of 1. A phrase absent from history also uses IDF 1. The common phrase IDF cancels for ranking; both sources round normalized scores to 12 decimal places so inversion noise does not override metadata ties. Event time, session id, and seq break score ties. Results carry plain-text snippets bounded by `snippetChars` Unicode code points, without numeric scores.
+#### Query syntax
+
+| Input | Match |
+|---|---|
+| `alpha beta` or `alpha AND beta` | Every term appears in the same event, in any order and without requiring adjacency |
+| `alpha beta OR gamma` | Equivalent to `alpha AND (beta OR gamma)`; only standalone uppercase `OR` is an operator |
+| `"alpha beta"` | Adjacent tokens in order; write `""` for a literal double quote inside the phrase |
+| `alpha -beta`, `alpha -"beta gamma"`, `alpha -(beta OR gamma)` | Exclude the item immediately after `-`; a standalone `-` is not an operator |
+| `alph*` | A trailing `*` on a bare term makes its last token a prefix |
+
+Other punctuation is literal text for tokenization: `reveal.js`, `academic-source`, and paths match their component tokens in adjacent order. Lowercase `and`, `or`, and `not` are ordinary words. Search ignores items without tokens. Unbalanced quotes or parentheses, missing `OR` operands, a negative-only subgroup or branch, and tokenless queries return `SESSION_QUERY_INVALID_QUERY`. A wholly negative query returns `SESSION_QUERY_EXCLUSION_ONLY`; the Web session list retries this case as one literal phrase.
+
+Ranking uses a common historical BM25 background. Single-phrase ranking divides out its shared IDF and keeps the same result order. Compound queries add distinct positive phrase scores, using historical average document length and each phrase's historical IDF for both sources. Absent OR terms and exclusions add nothing. Historical bodies superseded by live copies contribute only to background statistics. With no historical tokens, ranking uses the live average length; phrases absent from history use IDF 1. Event time, session id, and event sequence break ties. The complete query selects excerpts of up to `snippetChars` Unicode code points; scores are not returned.
 
 Each opaque cursor binds the normalized search request. A continuation ranks the current corpus and starts at the position recorded in the cursor. Corpus changes between pages can cause duplicate or skipped results.
 
@@ -98,7 +110,7 @@ The backend is built on one separation and two commitments:
 
 - **Derived index, never the source store.** The FTS rows live in a dedicated disposable database; the session-persistence database is never opened here.
 - **Live-preferred observation.** An attached live session takes precedence over its indexed historical body.
-- **Literal phrases as data.** Caller query text is quoted into one FTS5 phrase so query syntax stays inert, and reserved highlight markers are stripped from documents before indexing.
+- **Provider-owned query syntax.** The parser emits only its supported logical operators; FTS5 receives each user query term as quoted text.
 
 The design history lives in the [SQLite FTS5 session search note](../../../.agents/notes/archived/feature/2026-07-10-sqlite-session-query-provider.md) and the [unified service decision](../../../.agents/notes/archived/architecture/2026-07-23-unified-session-query-service.md).
 
@@ -108,6 +120,7 @@ The design history lives in the [SQLite FTS5 session search note](../../../.agen
 |---|---|
 | [`src/index.ts`](src/index.ts) | Service: config, openAt lifecycle, background warmup and dirty tracking |
 | [`src/query.ts`](src/query.ts) | Request normalization, parameterized predicates, snippets, predicate and binding budgets |
+| [`src/query-syntax.ts`](src/query-syntax.ts) | Lexer, query tree, FTS expressions, and distinct positive phrases |
 | [`src/bm25.ts`](src/bm25.ts) | Connection-local token probe and historical BM25 calibration |
 | [`src/schema.ts`](src/schema.ts) | Database schema, application-id ownership, in-place reset, owner-only file creation |
 
@@ -115,9 +128,9 @@ The design history lives in the [SQLite FTS5 session search note](../../../.agen
 
 One worker owns SQLite and the JSONL reader. It reads, decompresses, and projects durable logs off the Host thread. Each changed stored session commits a new generation together with its revision, FTS rows, and keys; reopening skips committed revisions. Lifecycle events mark changed sessions dirty, and live projection yields between batches on the Host. Non-JSONL backends supply raw logs through the generic persistence interface on their owning thread.
 
-Ranking materializes complete MATCH candidates with metadata and native BM25 scores before filters, session-best selection, and pagination; it never truncates either source before merging. Full highlighting runs only for the bounded result page. A reusable TEMP unicode61 token probe measures changed live bodies, and a TEMP rowid-to-token-count table updates in the same transaction as live FTS rows. Unchanged bodies are not retokenized; retirement removes their counts.
+Compound queries first store candidates from the complete expression in a connection-local table. Each positive phrase has one scoring MATCH cursor per source. A cross join puts that cursor on the outside and checks candidate rowids before computing `bm25`. The complete expression highlights only the bounded result page. Changed live bodies update their FTS rows and token lengths together.
 
-For one literal phrase in the single indexed text column, public `bm25` calls at weights 1 and 2 recover the phrase IDF. One token-bearing historical body and its probe term frequency calibrate historical average length, without a historical vocabulary scan or persistent schema change. Every successful historical transaction invalidates that calibration, including partial reconciliation progress. Live native scores recover actual phrase frequency (including overlapping occurrences), then use the shared historical average and IDF. This mechanism must be replaced if queries become multiple phrases or additional columns become indexed.
+Public `bm25` scores at text-column weights 1 and 2 recover the phrase IDF and actual term frequency, including overlaps. One token-bearing historical document and its measured term frequency calibrate historical average length without scanning the historical vocabulary. Each successful historical write transaction invalidates that calibration.
 
 ### Schema ownership
 
@@ -145,7 +158,7 @@ Read these pages when the package-level contract is not enough. They move from t
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the search backend returns hits only to callers and registers nothing model-facing.
+None, as the backend returns ranked hits to its callers without registering model-visible context.
 
 #### KV Cache effect
 
@@ -161,6 +174,7 @@ These limits define when this package is a poor fit or needs special operational
 - **No caller authorization** — this is a trusted context-wide service; a model tool or UI must enforce its own access policy.
 - **Synchronous worker queries** — a large MATCH can queue other work on the index worker, but does not block the Host event loop.
 - **Token recall, not arbitrary substrings** — the `unicode61` tokenizer does not match substrings inside a larger token; use `filterEvents()` for literal scans.
+- **AND operates within one event** — terms spread across different events in one session do not form a match.
 - **Single-owner derived index** — one service in one process must own each index path; external writers and multi-process sharing are unsupported.
 - **External file changes are not discovered in real time** — another process editing persisted files emits no local lifecycle notification; restart the query service or replace the persistence service to rescan metadata on the first search.
 - **Oversized sessions stay out of search** — the index never reads a stored log artifact above `maxIndexedSessionBytes`; it warns through `ctx.logger.warn` for each one and keeps the rest of the corpus searchable. Crossing the bound also evicts a session that is already indexed, so a query never answers from a row its stored log has outgrown, and lowering the bound evicts every session above it. Raise the limit to include such a session, and expect build cost proportional to its size. A backend that omits `SessionPersistenceSnapshot.sizeBytes` is indexed without this bound.

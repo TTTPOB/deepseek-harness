@@ -1973,7 +1973,7 @@ lsp 工具将提供方选择和语言服务器子进程置于 ctx.lsp 之后，�
     },
     "query": {
       "type": "string",
-      "description": "Literal full-text query over the target session."
+      "description": "Space-separated terms must all appear in the same event (AND), in any order. Use double quotes for an exact phrase. Uppercase OR binds tighter than spaces: a b OR c means a AND (b OR c). Use parentheses to group, a leading - to exclude a term, phrase or group, and a trailing * for a word prefix. Each AND group and OR branch needs a positive term. Other punctuation separates adjacent tokens: reveal.js, a-b and paths match as phrases. Matching is token-based, not regex."
     },
     "seq_from": {
       "type": "integer",
@@ -2054,7 +2054,7 @@ lsp 工具将提供方选择和语言服务器子进程置于 ctx.lsp 之后，�
   "properties": {
     "query": {
       "type": "string",
-      "description": "Literal full-text query over prior session history."
+      "description": "Space-separated terms must all appear in the same event (AND), in any order. Use double quotes for an exact phrase. Uppercase OR binds tighter than spaces: a b OR c means a AND (b OR c). Use parentheses to group, a leading - to exclude a term, phrase or group, and a trailing * for a word prefix. Each AND group and OR branch needs a positive term. Other punctuation separates adjacent tokens: reveal.js, a-b and paths match as phrases. Matching is token-based, not regex."
     },
     "session_ids": {
       "type": "array",

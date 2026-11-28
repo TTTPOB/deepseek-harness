@@ -1967,7 +1967,7 @@ Search prior events in one authorized session; the current session excludes the 
     },
     "query": {
       "type": "string",
-      "description": "Literal full-text query over the target session."
+      "description": "Space-separated terms must all appear in the same event (AND), in any order. Use double quotes for an exact phrase. Uppercase OR binds tighter than spaces: a b OR c means a AND (b OR c). Use parentheses to group, a leading - to exclude a term, phrase or group, and a trailing * for a word prefix. Each AND group and OR branch needs a positive term. Other punctuation separates adjacent tokens: reveal.js, a-b and paths match as phrases. Matching is token-based, not regex."
     },
     "seq_from": {
       "type": "integer",
@@ -2048,7 +2048,7 @@ Search prior sessions in the caller workspace and return the strongest matching 
   "properties": {
     "query": {
       "type": "string",
-      "description": "Literal full-text query over prior session history."
+      "description": "Space-separated terms must all appear in the same event (AND), in any order. Use double quotes for an exact phrase. Uppercase OR binds tighter than spaces: a b OR c means a AND (b OR c). Use parentheses to group, a leading - to exclude a term, phrase or group, and a trailing * for a word prefix. Each AND group and OR branch needs a positive term. Other punctuation separates adjacent tokens: reveal.js, a-b and paths match as phrases. Matching is token-based, not regex."
     },
     "session_ids": {
       "type": "array",

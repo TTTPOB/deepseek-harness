@@ -184,6 +184,7 @@ prepared 条目仅在持久化 identity、revision 及 preparation mode 相同�
 - **无提供方协调器或回退**——服务在搜索上是抽象的，组合必须挂载具体后端；没有搜索提供方注册表或回退实现。
 - **冷缓存未命中仍检查完整日志**——首次 cold 读取和 revision 改变仍加载并恢复完整日志。`readSurface` 与事件 trace 复用 owner 持有的分析；`readSession`、`listEvents` 与 `filterEvents` 仍每次检查完整日志。[合成诊断](tests/performance/README.zh.md)量测复用成本，不构成部署保证。
 - **字面文本扫描，而非全文搜索**——`text` 过滤器用正则表达式扫描提取出的文档且不提供排名；带排名的搜索需要挂载后端。
+- **全文搜索的 AND 以单条事件为单位**——即使结果页按会话分组，SQLite 提供方也不跨事件合并词项。
 
 <a id="dev-note"></a>
 ### 开发备注

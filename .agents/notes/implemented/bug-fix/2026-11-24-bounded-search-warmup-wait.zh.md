@@ -10,7 +10,7 @@ SQLite 提供方在后台 worker 中预热索引。在预热完成前，跨会�
 
 ## 决策
 
-`searchSessions` 最多等待 [`warmupWaitMs`](../../../../packages/session-query/session-query-sqlite/README.zh.md) 毫秒，等的是已在进行的预热；默认 3000，设为 `0` 时立即返回。等待只观察服务自己持有的那次预热，不会另起扫描。预热在等待期内完成，搜索照常进行；预热失败，搜索报告该失败；等待超时，搜索以 `SESSION_QUERY_INDEX_WARMING` 失败。取消请求只结束该请求自己的等待。使用 `openAt: first-search` 时，首次搜索先启动预热，再按同样方式等待。`searchEvents` 不变：文档键就绪后，它只刷新目标会话，不等待全部历史。该配置接受 0 到 2,147,483,647 的整数，上限是 `setTimeout` 能接受的最长延迟。
+`searchSessions` 最多等待 [`warmupWaitMs`](../../../../packages/session-query/session-query-sqlite/README.zh.md) 毫秒，等的是已在进行的预热；默认 3000，设为 `0` 时立即返回。等待只观察服务自己持有的那次预热，不会另起扫描。预热在等待期内完成，搜索照常进行；预热失败，搜索报告该失败；等待超时，搜索以 `SESSION_QUERY_INDEX_WARMING` 失败。取消请求只结束该请求自己的等待。使用 `openAt: first-search` 时，首次搜索先启动预热，再按同样方式等待。`searchEvents` 在未用确切 ID 过滤时也遵循这一等待规则；指定确切 ID 时，文档键就绪后只刷新这些会话（[事件搜索](../architecture/2026-11-28-session-search-query-syntax.zh.md)）。该配置接受 0 到 2,147,483,647 的整数，上限是 `setTimeout` 能接受的最长延迟。
 
 ## 考虑过的替代方案
 

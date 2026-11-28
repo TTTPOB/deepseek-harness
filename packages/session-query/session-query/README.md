@@ -184,6 +184,7 @@ These limits define when this package is a poor fit or needs special operational
 - **No provider coordinator or fallback** — the service is abstract over search, so a composition must mount a concrete backend; there is no search-provider registry or fallback implementation.
 - **Cold misses inspect whole logs** — first cold reads and changed revisions still load and restore the complete log. `readSurface` and event traces reuse owner-held analysis; `readSession`, `listEvents`, and `filterEvents` still inspect complete logs per call. The [synthetic diagnostic](tests/performance/README.md) measures reuse costs, not deployment guarantees.
 - **Literal text scan, not full-text search** — the `text` filter scans extracted documents with a regular expression and does not rank; ranked search requires the mounted backend.
+- **Full-text AND matches one event** — the SQLite provider does not combine terms from different events, even when the result page groups by session.
 
 <a id="dev-note"></a>
 ### Dev Note

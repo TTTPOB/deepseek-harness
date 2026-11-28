@@ -1,7 +1,7 @@
 /** Worker-owned FTS, live overlays, document keys and search cursors. */
 
 import { createHash } from 'node:crypto'
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync, SQLOutputValue } from 'node:sqlite'
 import { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
@@ -12,10 +12,11 @@ import type {
 } from '@deepseek-ai/dsh-session-query'
 import { SharedBm25 } from './bm25.ts'
 import type { ObservedLiveSession, ObservedSession } from './protocol.ts'
+import { parseSearchQuery } from './query-syntax.ts'
 import {
   type NormalizedEventRequest, type NormalizedSessionRequest, FTS_HIGHLIGHT_END, FTS_HIGHLIGHT_START,
   assertFts5OuterPredicateCount, assertPortableBindingCount, buildEventWhere, buildSessionWhere,
-  makeSnippet, quoteFtsData, requestFingerprint, sanitizeFtsText,
+  makeSnippet, requestFingerprint, sanitizeFtsText,
 } from './query.ts'
 
 interface SessionHeaderRow {
@@ -29,7 +30,7 @@ interface SessionHeaderRow {
   agent_preset: string | null
 }
 
-interface SearchRow extends SessionHeaderRow {
+interface SearchRow extends SessionHeaderRow, Record<string, SQLOutputValue> {
   live: number
   persisted: number
   seq: number
@@ -130,7 +131,7 @@ export class SearchStore {
   searchSessions(request: NormalizedSessionRequest, persisted: boolean): SessionSearchPage<SessionSearchHit> {
     const digest = requestDigest(request)
     const offset = request.cursor === undefined ? 0 : decodeCursor(request.cursor, digest)
-    const rows = this._querySessions(request, offset, persisted)
+    const rows = this._queryPage(request, offset, persisted)
     return page(rows, request.limit, row => this._sessionHit(row), digest, offset)
   }
 
@@ -142,7 +143,7 @@ export class SearchStore {
   searchEvents(request: NormalizedEventRequest, persisted: boolean): SessionEventSearchPage {
     const digest = requestDigest(request)
     const offset = request.cursor === undefined ? 0 : decodeCursor(request.cursor, digest)
-    const rows = this._queryEvents(request, offset, persisted)
+    const rows = this._queryPage(request, offset, persisted)
     return page(rows, request.limit, row => ({ ...this._eventHit(row), session: rowHeader(row) }), digest, offset)
   }
 
@@ -274,78 +275,57 @@ export class SearchStore {
     }
   }
 
-  private _querySessions(
-    request: NormalizedSessionRequest,
+  private _queryPage(
+    request: NormalizedSessionRequest | NormalizedEventRequest,
     offset: number,
     persisted: boolean,
   ): SearchRow[] {
-    const selected = selectedDocumentsSql()
+    const grouped = 'eventFilters' in request
     const sessionWhere = buildSessionWhere(request.sessionFilters)
-    const eventWhere = buildEventWhere(request.eventFilters)
+    const eventWhere = buildEventWhere(grouped ? request.eventFilters : request.filters)
     assertFts5OuterPredicateCount(sessionWhere.predicateCount + eventWhere.predicateCount)
     const where = [sessionWhere.sql, eventWhere.sql].filter(Boolean).join(' AND ')
-    const bindings = [
-      ...selectedDocumentsParams(request.query, persisted, this._bm25.parameters(request.query)),
-      ...sessionWhere.params,
-      ...eventWhere.params,
-      request.limit + 1,
-      offset,
-      ...pageHighlightParams(request.query),
-    ]
-    assertPortableBindingCount(bindings.length)
-    return this.db.prepare(`
-      ${selected.sql},
-      filtered AS MATERIALIZED (
-        SELECT * FROM matched ${where.length === 0 ? '' : `WHERE ${where}`}
-      ),
-      ranked AS (
+    const query = parseSearchQuery(request.query, text => this._bm25.tokenKey(text))
+    const visible = Number(persisted)
+    const filterBindings = [...sessionWhere.params, ...eventWhere.params]
+    const pageBindings = [request.limit + 1, offset, ...pageHighlightParams(query.expression)]
+    const sourceBindings = [query.expression, visible, visible, query.expression, ...filterBindings]
+    const filtered = `filtered AS MATERIALIZED (SELECT * FROM matched ${where === '' ? '' : `WHERE ${where}`})`
+    const pageSql = `
+      ${grouped ? `ranked AS (
         SELECT *, ROW_NUMBER() OVER (
-          PARTITION BY session_id
-          ORDER BY score ASC, time DESC, seq DESC
-        ) AS event_rank
-        FROM filtered
-      ),
+          PARTITION BY session_id ORDER BY score ASC, time DESC, seq DESC
+        ) AS event_rank FROM filtered
+      ),` : ''}
       page AS (
-        SELECT * FROM ranked
-        WHERE event_rank = 1
+        SELECT * FROM ${grouped ? 'ranked WHERE event_rank = 1' : 'filtered'}
         ORDER BY score ASC, time DESC, session_id ASC, seq DESC
         LIMIT ? OFFSET ?
       )
       SELECT page.*, ${pageHighlightSql()} AS marked_text FROM page
-      ORDER BY score ASC, time DESC, session_id ASC, seq DESC
-    `).all(...bindings) as unknown as SearchRow[]
-  }
+      ORDER BY score ASC, time DESC, session_id ASC, seq DESC`
+    if (query.singlePhrase) {
+      const bindings = [...this._bm25.parameters(query.expression), ...sourceBindings, ...pageBindings]
+      assertPortableBindingCount(bindings.length)
+      return this.db.prepare(`${selectedDocumentsSql(true)}, ${filtered}, ${pageSql}`).all(...bindings) as SearchRow[]
+    }
 
-  private _queryEvents(
-    request: NormalizedEventRequest,
-    offset: number,
-    persisted: boolean,
-  ): SearchRow[] {
-    const selected = selectedDocumentsSql()
-    const sessionWhere = buildSessionWhere(request.sessionFilters)
-    const eventWhere = buildEventWhere(request.filters)
-    assertFts5OuterPredicateCount(sessionWhere.predicateCount + eventWhere.predicateCount)
-    const where = [sessionWhere.sql, eventWhere.sql].filter(Boolean).join(' AND ')
-    const bindings = [
-      ...selectedDocumentsParams(request.query, persisted, this._bm25.parameters(request.query)),
-      ...sessionWhere.params,
-      ...eventWhere.params,
-      request.limit + 1,
-      offset,
-      ...pageHighlightParams(request.query),
-    ]
-    assertPortableBindingCount(bindings.length)
-    return this.db.prepare(`
-      ${selected.sql},
-      filtered AS MATERIALIZED (SELECT * FROM matched ${where === '' ? '' : `WHERE ${where}`}),
-      page AS (
-        SELECT * FROM filtered
-        ORDER BY score ASC, time DESC, session_id ASC, seq DESC
-        LIMIT ? OFFSET ?
-      )
-      SELECT page.*, ${pageHighlightSql()} AS marked_text FROM page
-      ORDER BY score ASC, time DESC, session_id ASC, seq DESC
-    `).all(...bindings) as unknown as SearchRow[]
+    assertPortableBindingCount(sourceBindings.length)
+    try {
+      const { changes } = this.db.prepare(`${selectedDocumentsSql(false)}, ${filtered}
+        INSERT INTO temp.search_matches SELECT * FROM filtered`).run(...sourceBindings)
+      if (changes === 0) return []
+      const sources = (this.db.prepare('SELECT DISTINCT live FROM temp.search_matches').all() as Array<{ live: number }>)
+        .map(({ live }) => this.db.prepare(phraseScoreSql(live === 1)))
+      for (const phrase of query.positivePhrases) {
+        const parameters = this._bm25.parameters(phrase)
+        for (const statement of sources) statement.run(...parameters, phrase)
+      }
+      return this.db.prepare(`WITH filtered AS (SELECT * FROM temp.search_matches), ${pageSql}`)
+        .all(...pageBindings) as SearchRow[]
+    } finally {
+      this.db.exec('DELETE FROM temp.search_matches')
+    }
   }
 
   private _sessionHit(row: SearchRow): SessionSearchHit {
@@ -393,43 +373,64 @@ function documentTables(source: 'persisted' | 'live'): { docs: string; keys: str
     : { docs: 'persisted_docs', keys: 'keys.persisted_doc_keys' }
 }
 
-function selectedDocumentsSql(): { sql: string } {
+function liveTermFrequency(native: string): string {
+  return `(1.2*(0.25+0.75*l.token_count/b.avg_live)*(-${native})/(2.2*b.idf_live+${native}))`
+}
+
+function sharedLiveScore(native: string, idf: string): string {
+  const tf = liveTermFrequency(native)
+  return `round(-2.2*${idf}*${tf}/(${tf}+1.2*(0.25+0.75*l.token_count/b.avg_history)),12)`
+}
+
+const backgroundSql = 'background(avg_live,avg_history,idf_history,idf_live) AS (VALUES(?,?,?,?))'
+
+function selectedDocumentsSql(singlePhrase: boolean): string {
   const metadata = (d: string, s: string) => `${d}.rowid AS document_rowid, ${d}.session_id,
     ${s}.version, ${s}.created_at, ${s}.cwd, ${s}.parent_session,
     ${s}.seed_length, ${s}.delegation_depth, ${s}.agent_preset`
   const event = (d: string) => `CAST(${d}.seq AS INTEGER) seq, ${d}.type,
     CAST(${d}.time AS INTEGER) time, ${d}.surface`
-  // FTS auxiliary functions run in their MATCH SELECT, before outer arithmetic/window sorting.
-  // Common IDF cancels for a single phrase. Round normalized scores to preserve cross-source metadata ties.
-  const tf = '(1.2*(0.25+0.75*l.token_count/b.avg_live)*(-native_score)/(2.2*b.idf_live+native_score))'
-  return { sql: `WITH background(avg_live,avg_history,idf_history,idf_live) AS (VALUES(?,?,?,?)),
+  // FTS auxiliary functions must run inside the MATCH SELECT, before outer arithmetic.
+  return `WITH ${singlePhrase ? `${backgroundSql},` : ''}
     hraw AS MATERIALIZED (
-      SELECT ${metadata('pd', 'ps')}, 0 live, 1 persisted, ${event('pd')},
-        bm25(persisted_docs) native_score
+      SELECT ${metadata('pd', 'ps')}, 0 live, 1 persisted, ${event('pd')}
+        ${singlePhrase ? ', bm25(persisted_docs) native_score' : ''}
       FROM persisted_docs pd JOIN persisted_sessions ps ON ps.id=pd.session_id
       WHERE persisted_docs MATCH ? AND ?=1
         AND NOT EXISTS(SELECT 1 FROM temp.live_sessions ls WHERE ls.id=pd.session_id)
     ),
     lraw AS MATERIALIZED (
       SELECT ${metadata('ld', 'ls')}, 1 live, CASE WHEN ?=1 THEN ls.persisted ELSE 0 END persisted,
-        ${event('ld')}, bm25(live_docs) native_score
+        ${event('ld')} ${singlePhrase ? ', bm25(live_docs) native_score' : ''}
       FROM temp.live_docs ld JOIN temp.live_sessions ls ON ls.id=ld.session_id
       WHERE live_docs MATCH ?
     ),
     matched AS (
+      ${singlePhrase ? `
       SELECT hraw.*,round(native_score/b.idf_history,12) score FROM hraw CROSS JOIN background b
       UNION ALL
-      SELECT lraw.*,round(-2.2*${tf}/(${tf}+1.2*(0.25+0.75*l.token_count/b.avg_history)),12) score
-      FROM lraw JOIN temp.live_token_lengths l ON l.rowid=lraw.document_rowid CROSS JOIN background b
-    )` }
+      SELECT lraw.*,${sharedLiveScore('native_score', '1.0')} score
+      FROM lraw JOIN temp.live_token_lengths l ON l.rowid=lraw.document_rowid CROSS JOIN background b` : `
+      SELECT hraw.*, 0.0 score FROM hraw
+      UNION ALL
+      SELECT lraw.*, 0.0 score FROM lraw`}
+    )`
 }
 
-function selectedDocumentsParams(
-  query: string, persistenceVisible: boolean, background: number[],
-): Array<string | number> {
-  const expression = quoteFtsData(query)
-  const visible = persistenceVisible ? 1 : 0
-  return [...background, expression, visible, visible, expression]
+function phraseScoreSql(live: boolean): string {
+  const table = live ? 'live_docs' : 'persisted_docs'
+  const set = live ? 1 : 0
+  // Scan each posting once, checking candidates by primary key before calling bm25().
+  return `WITH ${backgroundSql}, native AS MATERIALIZED (
+    SELECT c.document_rowid, bm25(${table}) native_score
+    FROM ${table} CROSS JOIN temp.search_matches c
+    WHERE ${table} MATCH ? AND c.live = ${set} AND c.document_rowid = ${table}.rowid
+  )
+  UPDATE temp.search_matches AS c
+  SET score = c.score + ${live ? sharedLiveScore('p.native_score', 'b.idf_history') : 'round(p.native_score,12)'}
+  FROM native p CROSS JOIN background b
+  ${live ? 'JOIN temp.live_token_lengths l ON l.rowid=p.document_rowid' : ''}
+  WHERE c.live = ${set} AND c.document_rowid = p.document_rowid`
 }
 
 // Full highlighted text is produced only for the bounded result page, not window-sort rows.
@@ -443,8 +444,7 @@ function pageHighlightSql(): string {
   ) END`
 }
 
-function pageHighlightParams(query: string): Array<string | number> {
-  const expression = quoteFtsData(query)
+function pageHighlightParams(expression: string): string[] {
   return [FTS_HIGHLIGHT_START, FTS_HIGHLIGHT_END, expression,
     FTS_HIGHLIGHT_START, FTS_HIGHLIGHT_END, expression]
 }

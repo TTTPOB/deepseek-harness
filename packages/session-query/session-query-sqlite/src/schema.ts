@@ -263,7 +263,26 @@ export function rebuildDocumentKeysBatch(db: DatabaseSync): boolean {
 }
 
 function ensureTemporarySchema(db: DatabaseSync): void {
-  db.exec(`CREATE TEMP TABLE live_token_lengths(rowid INTEGER PRIMARY KEY, token_count INTEGER NOT NULL);
+  db.exec(`CREATE TEMP TABLE search_matches (
+      document_rowid INTEGER NOT NULL,
+      session_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      cwd TEXT,
+      parent_session TEXT,
+      seed_length INTEGER,
+      delegation_depth INTEGER,
+      agent_preset TEXT,
+      live INTEGER NOT NULL,
+      persisted INTEGER NOT NULL,
+      seq INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      surface TEXT NOT NULL,
+      score REAL NOT NULL,
+      PRIMARY KEY(live, document_rowid)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TEMP TABLE live_token_lengths(rowid INTEGER PRIMARY KEY, token_count INTEGER NOT NULL);
     CREATE VIRTUAL TABLE temp.token_probe USING fts5(text, tokenize='unicode61');
     CREATE VIRTUAL TABLE temp.token_vocab USING fts5vocab(temp,token_probe,instance);
     CREATE TEMP TABLE live_doc_keys(doc_rowid INTEGER PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL);

@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-11-28-session-search-query-syntax.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-28-session-search-query-syntax.md
+/agent-note-session-search-query-syntax-and-ranking:
+  en: 78a0ebcb28fee6bb
+  zh: 0e5e034f99fb5aea
+/agent-note-session-search-query-syntax-and-ranking/problem:
+  en: a6f004ea9674d9f6
+  zh: 2bcd5a32a18aaea4
+/agent-note-session-search-query-syntax-and-ranking/decision:
+  en: 31819c369107859f
+  zh: 876cfdb100527ac6
+/agent-note-session-search-query-syntax-and-ranking/decision/ranking:
+  en: ae0cbe3f27201323
+  zh: 5aba2c2de16ec2bb
+/agent-note-session-search-query-syntax-and-ranking/alternatives-considered:
+  en: 44ebe9668165d6b4
+  zh: 90cd744d7b2e8bbe
+/agent-note-session-search-query-syntax-and-ranking/consequences:
+  en: e6597cecba60d723
+  zh: 80c69825d27921e0

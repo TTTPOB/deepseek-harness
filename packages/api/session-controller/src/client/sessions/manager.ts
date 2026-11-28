@@ -461,7 +461,7 @@ export class SessionManager {
   /**
    * Search visible session message content without adding transient query
    * state to the list snapshot.
-   * @param query - non-blank literal phrase.
+   * @param query - non-blank full-text query.
    * @param signal - cancellation for superseded UI queries.
    * @returns the Host result or a folded transport error.
    */

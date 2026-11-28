@@ -30,9 +30,9 @@ describe('public FTS5 BM25 calibration', () => {
       db.prepare('INSERT INTO temp.live_docs(rowid,text) VALUES(100,?)').run('unrelated '.repeat(1000))
       db.prepare('INSERT INTO temp.live_token_lengths VALUES(100,1000)').run()
       for (const query of ['alpha', 'alpha alpha', 'CAFE', '新词']) {
-        const parameters = scorer.parameters(query)
-        expect(parameters[1]).toBeCloseTo(lengths.reduce((sum, dl) => sum + dl, 0) / bodies.length, 9)
         const expression = quoteFtsData(query)
+        const parameters = scorer.parameters(expression)
+        expect(parameters[1]).toBeCloseTo(lengths.reduce((sum, dl) => sum + dl, 0) / bodies.length, 9)
         const native = db.prepare('SELECT rowid,bm25(persisted_docs) score FROM persisted_docs WHERE persisted_docs MATCH ?').all(expression)
         const live = db.prepare('SELECT rowid,bm25(live_docs) score FROM temp.live_docs WHERE live_docs MATCH ?').all(expression)
         expect(live.map(row => row['rowid'])).toEqual(native.map(row => row['rowid']))
@@ -43,15 +43,15 @@ describe('public FTS5 BM25 calibration', () => {
       }
       db.exec('DELETE FROM persisted_docs')
       scorer.invalidate()
-      const [liveAverage, sharedAverage, sharedIdf] = scorer.parameters('alpha')
+      const [liveAverage, sharedAverage, sharedIdf] = scorer.parameters('"alpha"')
       expect(sharedAverage).toBe(liveAverage)
       expect(sharedIdf).toBe(1)
       db.prepare('INSERT INTO persisted_docs(text) VALUES(?)').run('😀 !!!')
       scorer.invalidate()
-      expect(scorer.parameters('alpha')).toEqual([liveAverage, sharedAverage, sharedIdf, expect.any(Number)])
+      expect(scorer.parameters('"alpha"')).toEqual([liveAverage, sharedAverage, sharedIdf, expect.any(Number)])
       db.prepare('INSERT INTO persisted_docs(text) VALUES(?)').run('new background '.repeat(100))
       scorer.invalidate()
-      expect(scorer.parameters('new')[1]).toBeCloseTo(100, 9)
+      expect(scorer.parameters('"new"')[1]).toBeCloseTo(100, 9)
     } finally { db.close() }
   })
 
@@ -64,7 +64,7 @@ describe('public FTS5 BM25 calibration', () => {
       const dl = scorer.tokenCount(body)
       db.prepare('INSERT INTO temp.live_docs(rowid,text) VALUES(1,?)').run(body)
       db.prepare('INSERT INTO temp.live_token_lengths VALUES(1,?)').run(dl)
-      const parameters = scorer.parameters('alpha alpha')
+      const parameters = scorer.parameters('"alpha alpha"')
       const scores = db.prepare('SELECT bm25(live_docs) s1,bm25(live_docs,2.0) s2 FROM temp.live_docs WHERE live_docs MATCH ?').get('"alpha alpha"')!
       expect(idf(Number(scores['s1']), Number(scores['s2']))).toBeCloseTo(0.000001, 10)
       const actual = sharedScore(Number(scores['s1']), dl, parameters)
