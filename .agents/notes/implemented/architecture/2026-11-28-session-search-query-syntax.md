@@ -18,7 +18,14 @@ Unmatched quotes or parentheses, empty groups, nesting beyond 16 parenthesis lev
 
 ### Ranking
 
-A single phrase keeps the existing ordering. For a compound query, the complete expression and metadata filters select candidates in each index. One scoring `MATCH` cursor per positive phrase and source traverses the posting list; a `CROSS JOIN` checks each matching rowid against the candidate set before calling `bm25`. Each phrase uses the historical IDF and average document length for both sources. Live native scores yield the integer term frequency for that recalculation. A rounding error in the recovered historical IDF can make identical bodies from different sources differ in score at the 1e-12 scale, so their relative order does not always follow event time. Scores from distinct positive phrases add; missing OR terms and exclusions add zero. Highlighting uses the complete expression.
+A single-phrase query keeps the existing ordering. A compound query is ranked as the sum of its distinct positive phrases' BM25 scores, so persisted and live events are scored against one set of statistics:
+
+1. The complete expression and the metadata filters select the candidates in each index.
+2. Each positive phrase opens one scoring `MATCH` cursor per index. A `CROSS JOIN` keeps the cursor on the outside and looks up each matching rowid in the candidates before `bm25` runs.
+3. Both indexes use the historical IDF of the phrase and the historical average document length. For live events, the phrase frequency is recovered from the native score and rounded to an integer.
+4. A phrase absent from a matching OR branch contributes zero, and exclusions are not scored. Highlighting uses the complete expression.
+
+The recovered historical IDF carries floating-point error, so identical bodies from the two indexes can differ in score at the 1e-12 scale. Their relative order therefore does not always follow event time.
 
 ## Alternatives considered
 

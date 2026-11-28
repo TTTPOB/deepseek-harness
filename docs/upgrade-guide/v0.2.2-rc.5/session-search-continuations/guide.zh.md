@@ -20,4 +20,4 @@ SQLite 的 `searchSessions` 和 `searchEvents` 发出 v3 游标，并以 `SESSIO
 1. 若要保留原来的连续短语匹配方式，把全文查询用双引号包起来，如 `"academic-source CLI"`。如果需要字面匹配以 `-` 开头的词或多个词，也用双引号包起来，如 `"-timeout retry"`。用已知事件确认命中。
 2. 将 `searchEvents({ sessionId: id, query })` 替换为 `searchEvents({ query, sessionFilters: [{ kind: 'id', values: [id] }] })`。事件过滤条件仍放在 `filters`；从 `page.items[i].session` 读取每条命中的会话头信息。确认每条命中都属于请求指定的会话。
 3. 丢弃尚未消费的全文搜索游标，不传 `cursor` 重新开始搜索。续页时保持规范化后的请求不变，包括过滤器和 `limit`。
-4. 若汇总多页结果用于展示，按会话 ID 去重；事件结果按会话 ID 和事件序号的组合去重。确认无关会话有新活动后仍可继续翻页。无需迁移索引或会话数据。
+4. 合并多页结果时，会话结果按会话 ID 去重，事件结果按会话 ID 加事件序号去重，因为翻页期间语料变化可能让命中重复出现。无需迁移索引或会话数据。
